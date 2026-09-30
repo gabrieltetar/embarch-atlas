@@ -38,6 +38,39 @@ def norm(s: str | None) -> str:
     return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 
 
+def pin_norm(s: str | None) -> str:
+    """`norm` for pin names, keeping polarity: `IN+` and `IN-` (or `IN–`) must stay distinct."""
+    s = (s or "").strip()
+    s = re.sub(r"\+$", "plus", s)
+    s = re.sub(r"[-\u2013\u2212]$", "minus", s)
+    return norm(s)
+
+
+AKA_PART_RE = re.compile(r"^[A-Za-z]{2,}[A-Za-z0-9]*\d[A-Za-z0-9+#/-]*$")
+
+
+def card_aka_parts(card: Path) -> list[str]:
+    """Part-number-shaped entries of a card's `aka:` line (family forms like `ABC120x` included).
+
+    The doc's own `part` names one family member; a datasheet usually covers several, and
+    the board carries an orderable MPN. The aka line is where the translation lists them."""
+    try:
+        text = card.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    m = re.search(r"^aka:\s*(.+)$", text, re.M)
+    if not m:
+        return []
+    out = []
+    for tok in (t.strip() for t in m.group(1).split(",")):
+        if " " in tok or len(tok) < 5 or not AKA_PART_RE.match(tok):
+            continue
+        if re.fullmatch(r"0x[0-9a-fA-F]+", tok):
+            continue
+        out.append(tok)
+    return out
+
+
 def pin_sort_key(num: str):
     m = re.fullmatch(r"([A-Za-z]*)(\d+)", str(num))
     return (m[1], int(m[2])) if m else (str(num), 0)
@@ -151,6 +184,7 @@ class Docs:
                     recs[r.get("kind") or rf.stem].append(r)
             parts = doc.get("parts") or doc.get("part") or []
             parts = [parts] if isinstance(parts, str) else list(parts)
+            parts += [p for p in card_aka_parts(dj.parent / "card.md") if p not in parts]
             self.docs[did] = {"id": did, "doc": doc, "dir": dj.parent, "records": dict(recs), "files": files,
                               "patterns": [_part_pattern(p) for p in parts if p]}
 
@@ -380,8 +414,8 @@ class Join:
         return None
 
     def pins_named(self, board: str, ref: str, name: str) -> list[str]:
-        want = norm(name)
-        return [k for k in self.boards[board].pins(ref) if norm(self.part_pin_name(board, k)) == want]
+        want = pin_norm(name)
+        return [k for k in self.boards[board].pins(ref) if pin_norm(self.part_pin_name(board, k)) == want]
 
     # -- tracing
     def trace(self, board: str, net: str | None, came_from, depth: int = 0, via=None, seen=None) -> list[dict]:
@@ -450,7 +484,7 @@ class Join:
             if depth < 1:
                 for d in self.part_docs.get((board, ref), []):
                     for r in self.docs.records(d, "passthrough"):
-                        if norm(r.get("from_pin")) == norm(it["pin_name"]) or str(r.get("from_pin")) == pin:
+                        if pin_norm(r.get("from_pin")) == pin_norm(it["pin_name"]) or str(r.get("from_pin")) == pin:
                             for q in self.pins_named(board, ref, str(r.get("to_pin"))) or \
                                     ([f"{ref}-{r['to_pin']}"] if f"{ref}-{r.get('to_pin')}" in B.pin_net else []):
                                 onet = B.net(q)

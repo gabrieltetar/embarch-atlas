@@ -742,6 +742,24 @@ class RegMap:
                     out.append(Fld(f.get("id") or "?", f.get("name") or "?", hi, lo, parse_int(f.get("reset")), f))
             self.fields_at[a] = out
         self.orphan_fields = sum(len(v) for k, v in by_reg.items() if k not in placed)
+        self._inherit_mirrors()
+
+    def _inherit_mirrors(self) -> None:
+        """A non-volatile backup register shares its RAM register's field layout (`mirror_of` /
+        `nv_backup` on the register records). Give a field-less side the other side's fields,
+        so a driver defining fields under either name is checked against the same bits."""
+        addr_of = {r.get("id"): a for a, rs in self.regs_at.items() for r in rs}
+        pairs = set()
+        for a, rs in self.regs_at.items():
+            for r in rs:
+                other = r.get("mirror_of") or r.get("nv_backup")
+                if other in addr_of and addr_of[other] != a:
+                    pairs.add(tuple(sorted((a, addr_of[other]))))
+        for x, y in sorted(pairs):
+            for dst, src in ((x, y), (y, x)):
+                if not self.fields_at.get(dst) and self.fields_at.get(src):
+                    self.fields_at[dst] = [Fld(f.id, f.name, f.hi, f.lo, f.reset, dict(f.rec, via_mirror=True))
+                                           for f in self.fields_at[src]]
 
     def reg(self, a: int) -> dict | None:
         rs = self.regs_at.get(a)

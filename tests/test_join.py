@@ -376,3 +376,20 @@ def test_mcu_port_from_datasheet_pin_records(tmp_path):
                                               "src": "table", "prov": "deterministic", "pin": "12", "name": "PF2-NRST", "type": "FT"}])
     rows = {r["num"]: r for r in run_join(ad, atlas)["pins"]}
     assert rows["12"]["port"] == "PF2" and rows["12"]["io"] == "FT" and rows["12"]["ds_cite"] == "mcu0@1 p40"
+
+
+def test_pin_norm_keeps_polarity():
+    from embarch_atlas.join import pin_norm
+    assert pin_norm("IN+") != pin_norm("IN-")
+    assert pin_norm("IN-") == pin_norm("IN–") == pin_norm("in-")
+    assert pin_norm("SDA") == "sda"
+
+
+def test_card_aka_parts_family_forms(tmp_path):
+    from embarch_atlas.join import card_aka_parts, _part_pattern, norm
+    card = tmp_path / "card.md"
+    card.write_text("# X\n\naka: DEMO120x, DEMO121x, fuel gauge, I2C 0x36, SHA-256, DEMO1205ABC+T\n")
+    parts = card_aka_parts(card)
+    assert "DEMO120x" in parts and "DEMO1205ABC+T" in parts
+    assert "fuel gauge" not in parts and "SHA-256" not in parts
+    assert _part_pattern("DEMO120x").match(norm("DEMO1205G+T"))

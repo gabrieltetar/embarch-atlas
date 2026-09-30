@@ -375,3 +375,17 @@ def test_join_reports_the_class(tmp_path):
     assert text.index("### reg-field-in-other-register") < text.index("### reg-comment-vs-datasheet")   # ranked
     assert (atlas / "codecheck.json").is_file()
     assert all(c in mismatch.ORDER for c in cc.ORDER)
+
+
+def test_nv_backup_mirror_shares_fields():
+    from embarch_atlas.codecheck import RegMap
+    regs = [{"id": "demo-fg.reg.PackCfg", "kind": "register", "name": "PackCfg", "addr": "0xbd", "width": 16,
+             "nv_backup": "demo-fg.reg.nPackCfg"},
+            {"id": "demo-fg.reg.nPackCfg", "kind": "register", "name": "nPackCfg", "addr": "0x1b5", "width": 16,
+             "mirror_of": "demo-fg.reg.PackCfg"}]
+    fields = [{"id": "demo-fg.reg.PackCfg.NCELLS", "kind": "field", "reg": "demo-fg.reg.PackCfg", "name": "NCELLS",
+               "bits": [3, 0]}]
+    rm = RegMap("demo-fg@1", regs, fields)
+    assert [f.name for f in rm.fields(0x1b5)] == ["NCELLS"]
+    assert rm.fields(0x1b5)[0].rec.get("via_mirror") is True
+    assert [f.name for f in rm.fields(0xbd)] == ["NCELLS"]
