@@ -1,0 +1,1053 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gabrieltetar/embarch-atlas/schemas/record.schema.json",
+  "title": "embarch-atlas record",
+  "description": "One fact from one document, one line of records/*.jsonl. Common fields on every record, then the fields of its kind (DESIGN.md, Records). propertyNames per kind rejects unknown fields, which catches typos and YAML-style coercions.",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "doc",
+    "p",
+    "src"
+  ],
+  "properties": {
+    "id": {
+      "description": "<part>.<group>.<native name>[.<cond-slug>]; native names, never ordinals",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_+-]*(\\.[^\\s.]+)+$"
+    },
+    "kind": {
+      "enum": [
+        "limit",
+        "timing",
+        "pin",
+        "rule",
+        "register",
+        "field",
+        "quirk",
+        "figure",
+        "strap",
+        "passthrough",
+        "requirement",
+        "conflict",
+        "check"
+      ]
+    },
+    "doc": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._+-]*(@[A-Za-z0-9._-]+)?$",
+      "description": "doc_id: slug@rev for documents; a non-PDF source (an SVD) may omit @rev"
+    },
+    "p": {
+      "description": "1-based physical PDF page, or several; null only for non-PDF sources (src svd/header)",
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "q": {
+      "description": "verbatim quote from the cited page's text layer; a list when the fact rests on several; null only for src figure or equation",
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "src": {
+      "enum": [
+        "text",
+        "table",
+        "figure",
+        "equation",
+        "svd",
+        "header"
+      ]
+    },
+    "prov": {
+      "enum": [
+        "deterministic",
+        "deterministic+crosschecked",
+        "llm-verified",
+        "llm-unverified",
+        "engineer-declared",
+        "engineer-confirmed",
+        "measured"
+      ]
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "limit"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/limit"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "timing"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/timing"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "pin"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/pin"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "rule"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/rule"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "register"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/register"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "field"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/field"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "quirk"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/quirk"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "figure"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/figure"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "strap"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/strap"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "passthrough"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/passthrough"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "requirement"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/requirement"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "conflict"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/conflict"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "check"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/check"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "src": {
+            "enum": [
+              "text",
+              "table",
+              "figure",
+              "equation"
+            ]
+          }
+        },
+        "required": [
+          "src"
+        ]
+      },
+      "then": {
+        "properties": {
+          "p": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "minItems": 1
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "value": {
+      "description": "a number, or an expression string exactly as printed (\"VBUS\", \"SW1+6\")",
+      "type": [
+        "number",
+        "string",
+        "null"
+      ]
+    },
+    "ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reset": {
+      "description": "binary 0b... with the field or register width, or hex 0x...; null when undefined",
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^(0b[01]+|0x[0-9A-Fa-f]+)$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "access": {
+      "enum": [
+        "rw",
+        "ro",
+        "wo",
+        "rclr",
+        "woclr",
+        "w1s",
+        "rsvd"
+      ]
+    },
+    "limit_fields": {
+      "properties": {
+        "group": {
+          "enum": [
+            "abs",
+            "esd",
+            "thermal",
+            "recommended",
+            "ec",
+            "i2c",
+            "register",
+            "application",
+            "other"
+          ]
+        },
+        "sym": {
+          "type": "string",
+          "minLength": 1
+        },
+        "param": {
+          "$ref": "#/$defs/text"
+        },
+        "cond": {
+          "$ref": "#/$defs/text"
+        },
+        "min": {
+          "$ref": "#/$defs/value"
+        },
+        "nom": {
+          "$ref": "#/$defs/value"
+        },
+        "typ": {
+          "$ref": "#/$defs/value"
+        },
+        "max": {
+          "$ref": "#/$defs/value"
+        },
+        "unit": {
+          "$ref": "#/$defs/text"
+        },
+        "fn": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "integer"
+            ]
+          }
+        },
+        "guar": {
+          "enum": [
+            "production-tested",
+            "design"
+          ]
+        }
+      }
+    },
+    "limit": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/limit_fields"
+        }
+      ],
+      "required": [
+        "group",
+        "sym"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "group",
+          "sym",
+          "param",
+          "cond",
+          "min",
+          "nom",
+          "typ",
+          "max",
+          "unit",
+          "fn",
+          "guar"
+        ]
+      }
+    },
+    "timing": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/limit_fields"
+        }
+      ],
+      "properties": {
+        "edge": {
+          "description": "\"<from> -> <to>\": the edges the time is measured between",
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "group",
+        "sym"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "group",
+          "sym",
+          "param",
+          "cond",
+          "min",
+          "nom",
+          "typ",
+          "max",
+          "unit",
+          "fn",
+          "guar",
+          "edge"
+        ]
+      }
+    },
+    "pin": {
+      "properties": {
+        "pin": {
+          "description": "pin number or ball, or several (one name on several pins)",
+          "oneOf": [
+            {
+              "type": [
+                "string",
+                "integer"
+              ]
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": [
+                  "string",
+                  "integer"
+                ]
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dir": {
+          "enum": [
+            "in",
+            "out",
+            "io",
+            "power",
+            "nc",
+            null
+          ]
+        },
+        "type": {
+          "enum": [
+            "od",
+            "pp",
+            "analog",
+            "supply",
+            "logic",
+            "ground",
+            null
+          ]
+        },
+        "active": {
+          "enum": [
+            "high",
+            "low",
+            null
+          ]
+        },
+        "pull": {
+          "$ref": "#/$defs/text"
+        },
+        "desc": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "pin",
+        "name"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "pin",
+          "name",
+          "dir",
+          "type",
+          "active",
+          "pull",
+          "desc"
+        ]
+      }
+    },
+    "rule": {
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cond": {
+          "$ref": "#/$defs/text"
+        },
+        "recover": {
+          "$ref": "#/$defs/text"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "text",
+          "cond",
+          "recover",
+          "steps"
+        ]
+      }
+    },
+    "register": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "addr": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "pattern": "^0x[0-9A-Fa-f]+$"
+            }
+          ]
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reset": {
+          "$ref": "#/$defs/reset"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "desc": {
+          "$ref": "#/$defs/text"
+        },
+        "summary": {
+          "description": "the register's row in the document's register summary table, when it has one",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "access": {
+              "$ref": "#/$defs/access"
+            },
+            "reset": {
+              "$ref": "#/$defs/reset"
+            }
+          }
+        }
+      },
+      "required": [
+        "name",
+        "addr",
+        "width"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "name",
+          "addr",
+          "width",
+          "reset",
+          "access",
+          "desc",
+          "summary"
+        ]
+      }
+    },
+    "field": {
+      "properties": {
+        "reg": {
+          "description": "the register's record id",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bits": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "reset": {
+          "$ref": "#/$defs/reset"
+        },
+        "access": {
+          "$ref": "#/$defs/access"
+        },
+        "enum": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "desc": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "reg",
+        "name",
+        "bits"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "reg",
+          "name",
+          "bits",
+          "reset",
+          "access",
+          "enum",
+          "desc"
+        ]
+      }
+    },
+    "quirk": {
+      "properties": {
+        "class": {
+          "enum": [
+            "table-vs-table",
+            "text-vs-table",
+            "text-vs-figure",
+            "figure-only",
+            "footnote-condition",
+            "silent-default",
+            "must",
+            "do-not",
+            "absence",
+            "variant",
+            "doc-artefact",
+            "not-prod-tested",
+            "narrow-condition",
+            "provenance"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "why": {
+          "$ref": "#/$defs/text"
+        },
+        "refs": {
+          "$ref": "#/$defs/ids"
+        }
+      },
+      "required": [
+        "class",
+        "text"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "class",
+          "text",
+          "why",
+          "refs"
+        ]
+      }
+    },
+    "figure": {
+      "properties": {
+        "fig": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caption": {
+          "$ref": "#/$defs/text"
+        },
+        "what": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "fig"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "fig",
+          "caption",
+          "what"
+        ]
+      }
+    },
+    "strap": {
+      "properties": {
+        "pin": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "pin",
+        "condition",
+        "value"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "pin",
+          "condition",
+          "value"
+        ]
+      }
+    },
+    "passthrough": {
+      "properties": {
+        "from_pin": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "to_pin": {
+          "type": [
+            "string",
+            "integer"
+          ]
+        },
+        "when": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "from_pin",
+        "to_pin"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "from_pin",
+          "to_pin",
+          "when"
+        ]
+      }
+    },
+    "requirement": {
+      "properties": {
+        "rid": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fw_relevant": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rid",
+        "text",
+        "fw_relevant"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "rid",
+          "text",
+          "fw_relevant"
+        ]
+      }
+    },
+    "conflict": {
+      "properties": {
+        "refs": {
+          "$ref": "#/$defs/ids"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "refs",
+        "text"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "refs",
+          "sources",
+          "text"
+        ]
+      }
+    },
+    "check": {
+      "description": "an invariant the LLM proposes; doc check evaluates expr with R['<id>'].min/nom/typ/max",
+      "properties": {
+        "expr": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expect": {
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "why": {
+          "$ref": "#/$defs/text"
+        }
+      },
+      "required": [
+        "expr",
+        "expect"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "expr",
+          "expect",
+          "why"
+        ]
+      }
+    }
+  }
+}
