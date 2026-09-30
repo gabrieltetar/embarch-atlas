@@ -293,11 +293,16 @@ These settle cases the rules above leave open. They were each hit on a real data
 
 **Names**
 - Keep native names verbatim in `name`, spaces, commas and slashes included; the `id` uses the
-  name with runs of non-alphanumerics turned into `_`.
+  name with runs of non-alphanumerics turned into `_`. A register or field with a deterministic twin
+  takes the twin's id (`doc regparse` upper-cases: `INPUT_CURRENT_IN_DPM`).
+- A value field printed as per-bit rows (`Input Current in DPM, bit 6` ... `, bit 0`) is one field:
+  `name` is the printed words without `, bit N`, `bits` the union, the per-bit weights in `desc`.
 - An unnamed field (an ADC result byte) is named after the table caption.
-- An overlined (active-low) name that differs from another name only by the overline (EN vs
-  EN-bar): `name: "EN-bar"`, id suffix `_bar`, and `active: low` on the pin. `doc prep` flags pages
-  with overlines (`overline`): read those rows from an image, because the text layer drops the bar.
+- An overlined name: `name: "<NAME>-bar"` (`FLT-bar`, `FB/INT-bar` when only INT carries the bar:
+  say so in `note`). The id takes a `_bar` suffix only when another record already has the plain id
+  (EN vs EN-bar). `active` follows the pin's printed wording ("active-low"), not the bar alone: an
+  overlined gate drive that states no polarity gets no `active`. `doc prep` flags pages with
+  overlines (`overline`): read those rows from an image, because the text layer drops the bar.
 - A pin table with two packages: `pin: [<number>, <ball>]` in one record per name.
 - An MCU pin's I/O structure (`FT`, `FT_fa`, `TT_a`, `RST, FT`) goes in `io`, exactly as printed;
   `type` stays for od/pp/analog/supply/ground. The join reads `io` for 5 V tolerance.
