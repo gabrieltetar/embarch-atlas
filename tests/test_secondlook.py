@@ -167,3 +167,22 @@ def test_compare_mode_strap_by_printed_value():
     s = {"kind": "strap", "value": "2S (2 cells)"}
     assert compare_one(s, {"found": True, "values": {"value": "2S"}})[0] == "confirmed"
     assert compare_one(s, {"found": True, "values": {"value": "3S"}})[0] == "conflict"
+
+
+def test_addresses_binary_and_8bit_forms():
+    from embarch_atlas.secondlook import compare_one
+    s = {"kind": "strap", "value": "0x44"}
+    assert compare_one(s, {"found": True, "values": {"value": "1000100"}})[0] == "confirmed"
+    s = {"kind": "strap", "value": "0x36 (7-bit)"}
+    assert compare_one(s, {"found": True, "values": {"value": "6Ch"}})[0] == "confirmed"
+    assert compare_one(s, {"found": True, "values": {"value": "6Dh"}})[0] == "confirmed"
+    assert compare_one(s, {"found": True, "values": {"value": "0x37"}})[0] == "conflict"
+
+
+def test_text_value_verdict_compares_meaning():
+    from embarch_atlas.secondlook import text_value_verdict as tv
+    assert tv("2.2 µH inductor (recommended for 800 kHz)", "2.2 uH (recommended for 800 kHz)")[0] == "confirmed"
+    assert tv("4.7 µH inductor", "3.3 µH")[0] == "conflict"
+    assert tv("1-Wire standard speed (variant B)", "standard speed 1-wire communication")[0] == "confirmed"
+    assert tv("removal: charge voltage 4.2 V", "Battery removal")[0] == "unresolved"
+    assert tv("2S", "2S")[0] == "confirmed"

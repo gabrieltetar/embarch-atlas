@@ -399,8 +399,55 @@ def _unit(u) -> str:
 
 
 def _addr(v):
-    m = re.search(r"0x([0-9a-f]+)|\b([0-9a-f]+)h\b", str(v or ""), re.I)
+    s = str(v or "").strip()
+    m = re.search(r"0b([01]+)|\b([01]{7,8})b?\b", s)
+    if m:  # binary as printed in address tables (7 or 8 bits)
+        return int(m[1] or m[2], 2)
+    m = re.search(r"0x([0-9a-f]+)|\b([0-9a-f]+)h\b", s, re.I)
     return int(m[1] or m[2], 16) if m else _num(v)
+
+
+def _same_address(a: int, b: int) -> bool:
+    """Equal, or one is the 8-bit (shifted) form of the other's 7-bit address."""
+    return a == b or a == b << 1 or b == a << 1 or (a | 1) == (b << 1 | 1) or (b | 1) == (a << 1 | 1)
+
+
+STOP = {"the", "and", "for", "with", "when", "to", "of", "a", "an", "is", "in", "on", "or", "by", "as"}
+
+
+def _quantities(s: str) -> set[tuple[float, str]]:
+    out = set()
+    for m in re.finditer(r"(?<![A-Za-z0-9])(-?\d+(?:\.\d+)?)\s*([a-zA-Zµμ%Ω]{0,3})", str(s or "")):
+        out.add((float(m[1]), _unit(m[2]).lower()))
+    return out
+
+
+def _words(s: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{3,}", re.sub(r"[-_]", " ", str(s or "").lower())) if w not in STOP}
+
+
+def text_value_verdict(first: str, second: str) -> tuple[str, str]:
+    """A printed mode or setting read twice. Quantities (number + unit) decide when both have
+    them; otherwise the second reader's words must mostly appear in the first reading.
+    Ambiguous overlap is `unresolved`, never `conflict`: two readers answering different
+    aspects of one row is not a disagreement."""
+    if not second:
+        return "unresolved", "no second value"
+    qf, qs = _quantities(first), _quantities(second)
+    if qf and qs:
+        if qs <= qf or qf <= qs:
+            return "confirmed", "same quantities"
+        return "conflict", "quantities differ"
+    ws, wf = _words(second), _words(first)
+    if not ws:
+        return ("confirmed", "same text") if re.sub(r"\W", "", str(first).lower()) == re.sub(r"\W", "", str(second).lower()) \
+            else ("unresolved", "nothing comparable")
+    r = len(ws & wf) / len(ws)
+    if r >= 2 / 3:
+        return "confirmed", f"{r:.0%} word overlap"
+    if r <= 1 / 3 and not (qf & qs):
+        return "conflict", f"{r:.0%} word overlap"
+    return "unresolved", f"{r:.0%} word overlap"
 
 
 def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
@@ -432,12 +479,12 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
         fv, sv = first.get("value"), vals.get("value")
         a, b = _addr(fv), _addr(sv)
         if a is not None and b is not None:
-            if a != b:
+            if not _same_address(a, b):
                 diffs.append(f"value: first {fv!r} vs second {sv!r}")
-        else:  # a mode strap ("2S", "3.2 A"): the printed value, whitespace and case aside
-            squash = lambda x: re.sub(r"\s+", "", str(x or "")).lower()
-            if not sv or squash(sv) not in squash(fv) and squash(fv) not in squash(sv):
-                diffs.append(f"value: first {fv!r} vs second {sv!r}")
+        else:  # a mode strap ("2S", "2.2 µH ..."): compare meaning, not wording
+            v, why = text_value_verdict(fv, sv)
+            if v != "confirmed":
+                return v, [f"value: first {fv!r} vs second {sv!r} ({why})"]
     elif k == "pin":
         from embarch_atlas.join import pin_norm
         for f in ("name", "dir", "type", "active"):
