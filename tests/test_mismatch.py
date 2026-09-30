@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from test_join import make_project, run_join  # noqa: E402
 
 from embarch_atlas import mismatch  # noqa: E402
-from embarch_atlas.common import read_json, write_jsonl  # noqa: E402
+from embarch_atlas.common import read_json, write_json, write_jsonl  # noqa: E402
 
 
 def _report(tmp_path, **kw):
@@ -111,3 +111,25 @@ def test_rail_volts_and_pin_tolerance():
     assert rail_volts("VBUS") is None and rail_volts("NET_12") is None and rail_volts("3V3_SW") == 3.3
     assert pin_tolerance("FT_fa") == 5.5 and pin_tolerance("TT_a") == 3.6 and pin_tolerance("RST, FT") == 3.6
     assert pin_tolerance(None) is None
+
+
+def test_declared_dt_intent_folds_the_no_driver_candidate(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    write_json(ad / "boards" / "bindings.json", {"dt_intent": {"/soc/adc@40012400": "placeholder for a driver to come"}})
+    run_join(ad, atlas)
+    rep = read_json(atlas / "mismatches.json")
+    assert "dt-no-driver" not in _classes(rep)
+    folded = rep["folded"][mismatch.FOLD_INTENT]
+    assert folded and all("/soc/adc@40012400" in x and "placeholder" in x for x in folded)
+    chk = {c["check"]: c for c in rep["checks"]}["DT node has a driver in the build"]
+    assert chk["ran"] == chk["passed"]
+    assert "DT okay, no driver in this build: ADC (on purpose)" in (atlas / "MAP.md").read_text()
+
+
+def test_dt_intent_keys_and_forms():
+    class J:
+        bindings = {"dt_intent": {"adc1": {"why": "later"}, "USB": "bring-up", "/soc/x": ""}}
+    assert mismatch.dt_intent(J, "/soc/adc@0", "adc1") == "later"
+    assert mismatch.dt_intent(J, None, "USB") == "bring-up"
+    assert mismatch.dt_intent(J, "/soc/x") == ""            # an empty reason declares nothing
+    assert mismatch.dt_intent(object(), "USB") == ""

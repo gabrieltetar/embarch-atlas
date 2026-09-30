@@ -68,6 +68,20 @@ NOT_RUN = [
 ]
 
 
+FOLD_INTENT = "DT node okay with no driver: on purpose (engineer-declared)"
+
+
+def dt_intent(J, *keys: str | None) -> str:
+    """The engineer's reason a DT node is okay without a driver (`boards/bindings.json` `dt_intent`,
+    keyed by node path, label or peripheral name), or "" when none is declared."""
+    decl = (getattr(J, "bindings", None) or {}).get("dt_intent") or {}
+    for k in keys:
+        v = decl.get(k) if k else None
+        if v:
+            return v if isinstance(v, str) else str(v.get("why") or v.get("intent") or "declared")
+    return ""
+
+
 def active_low_name(net: str | None) -> bool:
     return bool(net) and bool(re.search(r"^n[A-Z0-9]|^~|^/|_N$", net))
 
@@ -346,8 +360,11 @@ def run(J, stamp: dict, pins: dict) -> dict:
             seen_owner.add(own)
             drv = u.get("driver") or {}
             ok = bool(u.get("instantiated") or (drv.get("compiled") and drv.get("consumer")))
-            R.check("DT node has a driver in the build", "", 1, int(ok))
-            if not ok:
+            meant = not ok and dt_intent(J, own, u.get("label"))
+            R.check("DT node has a driver in the build", "", 1, int(ok or bool(meant)))
+            if meant:
+                R.folded[FOLD_INTENT].append(f"{r['port']} {own} ({meant})")
+            elif not ok:
                 if drv.get("compiled"):
                     why = f" (a compiled TU, {drv['files'][0]}, defines its DT_DRV_COMPAT but instantiates no device for it)"
                 elif drv.get("files"):
@@ -362,8 +379,11 @@ def run(J, stamp: dict, pins: dict) -> dict:
         if not p.get("dt_okay") or p.get("node") in seen_owner:
             continue
         ok = bool(p.get("instantiated") or p.get("touched_by_code"))
-        R.check("DT node has a driver in the build", "", 1, int(ok))
-        if not ok:
+        meant = not ok and dt_intent(J, p.get("node"), name)
+        R.check("DT node has a driver in the build", "", 1, int(ok or bool(meant)))
+        if meant:
+            R.folded[FOLD_INTENT].append(f"{name} {p.get('node')} ({meant})")
+        elif not ok:
             R.cand("dt-no-driver", name, f"{name} ({p['node']}, {p['compatible']}) is okay in DT but not instantiated and not touched by code",
                    [f"in_use.json {name}", "ELF: no __device_dts_ord for the node"], "DT node has a driver in the build")
 

@@ -15,7 +15,8 @@ Optional engineer-supplied tables, used only when present:
   or `{"part", "fixed": "0x6B"}`) for parts whose datasheet is not translated yet.
 - `boards/bindings.json`: `{"compat_parts": {"<compatible>": "<MPN prefix>"},
   "prop_pins": {"<compatible>": {"<prop>": "<part pin name>"}}, "rails": ["<regex>"],
-  "grounds": ["<regex>"]}`.
+  "grounds": ["<regex>"], "dt_intent": {"<node path | label | peripheral>": "<why it has no driver>"}}`.
+  A `dt_intent` entry folds that node's `dt-no-driver` candidate into the expected counts.
 """
 from __future__ import annotations
 

@@ -64,3 +64,12 @@ def test_current_follows_head(tmp_path):
 def test_compress_runs():
     assert mapgen._compress(["GPIOA", "GPIOB", "GPIOC", "I2C1", "I2C2", "RCC"]) == "GPIOA-C, I2C1, I2C2, RCC"
     assert mapgen._compress(["GPIOA", "GPIOC"]) == "GPIOA, GPIOC"
+
+
+def test_map_lists_declared_power_feeds(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    sj = ad / "boards" / "system.json"
+    write_json(sj, {"interfaces": [], "power_feeds": [
+        {"net": "S:3V3", "from": "M", "via": ["M:J1-8", "S:J1-1"], "only": True, "prov": "engineer-declared"}]})
+    run_join(ad, atlas)
+    assert "- S:3V3: fed only from M via M:J1-8 / S:J1-1 (engineer-declared)" in (atlas / "MAP.md").read_text()

@@ -80,10 +80,12 @@ boards/<label>/                 schematic analysis, one per board PDF
   netlist.json, bom.json        from the embedded Smart-PDF netlist (below)
   nets.md, parts.md             compact line formats for the LLM
   geometry.json                 the geometric cross-check of the netlist (rung 3), per sheet and pin
-boards/system.json              board instances + interfaces (engineer-declared, with machine scores)
+boards/system.json              board instances + interfaces (engineer-declared, with machine scores);
+                                power_feeds (engineer-declared: net, from, via, only), shown in MAP.md
 boards/straps.jsonl             optional: address/mode straps when no datasheet record exists yet
 boards/bindings.json            optional: compatible -> MPN, prop -> pin, extra rails, prop_limits
-                                (DT property -> limit record ids, with `times`/`per` for scaled props)
+                                (DT property -> limit record ids, with `times`/`per` for scaled props),
+                                dt_intent (node -> why it is okay without a driver: folds dt-no-driver)
 cache/llm/<key>.json            frozen LLM outputs; second-look verdicts as sl-<key>.json
 .work/<commit12>/<fw basename>  the build worktree
 atlases/<target>@<commit12>/

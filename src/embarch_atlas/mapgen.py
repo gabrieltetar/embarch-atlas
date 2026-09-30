@@ -18,6 +18,7 @@ import subprocess
 from pathlib import Path
 
 from embarch_atlas.common import count_tokens, read_json, write_json, write_text
+from embarch_atlas.mismatch import dt_intent
 
 BUDGET = 5000          # real (Claude) tokens
 FACTOR = 1.4           # Claude tokens per o200k token (median measured)
@@ -83,7 +84,9 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
         L.append(f"- {kind}: `{d}`" + (f", card `{card}`" if card else ""))
     L.append(f"- In use (instantiated or touched by code): {_compress(used) or 'none'}")
     if dt_only:
-        L.append(f"- DT okay, no driver in this build: {', '.join(dt_only)} (see checks.md)")
+        meant = {n for n in dt_only if dt_intent(J, per[n].get("node"), n)}
+        L.append(f"- DT okay, no driver in this build: {', '.join(n + (' (on purpose)' if n in meant else '') for n in dt_only)}"
+                 f" (see checks.md)")
     wl = worklist(J)
     if wl:
         chs = [f"{ch['chapter']} {ch['title']} (pp {ch['pages'][0]}-{ch['pages'][1]})" for ch in wl.get("chapters", [])]
@@ -99,6 +102,10 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
     for i in pins.get("interfaces", []):
         agree = f", {i['agree']}/{i['named']} names agree" if i.get("named") else ""
         L.append(f"- {i['a']} <-> {i['b']}: {i.get('rule') or 'pin map'} ({i['status']}{agree})")
+    for f in (read_json(ad / "boards" / "system.json") if (ad / "boards" / "system.json").is_file() else {}).get("power_feeds") or []:
+        via = f" via {' / '.join(f['via'])}" if f.get("via") else ""
+        L.append(f"- {f['net']}: fed {'only ' if f.get('only') else ''}from {f.get('from', '?')}{via} "
+                 f"({f.get('prov', 'engineer-declared')})")
     if J and not J.boards:
         L.append("- no netlist yet: `embarch-atlas schematic <pdf> --board <label>`")
     L.append("")
