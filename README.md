@@ -60,8 +60,8 @@ into the sources dir (`embarch/hardware/` by default), then in Claude Code:
 
 ## Status
 
-First cut, exercised on one real two-board product (an STM32 MCU, seven datasheets, a
-1,384-page reference manual, a PRD). What is not built yet is listed at the end of
+First cut, exercised on one real two-board product: seven datasheets, an MCU reference
+manual of over a thousand pages, and a PRD. What is not built yet is listed at the end of
 [DESIGN.md](DESIGN.md).
 
 MIT licensed.

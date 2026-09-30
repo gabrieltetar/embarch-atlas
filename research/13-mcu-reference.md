@@ -10,7 +10,7 @@ also [16-landscape-update.md](16-landscape-update.md) and [17-ingestion-procedur
 
 ## Headline findings
 
-1. The reference-manual (`<MCU RM>`) chapters the build actually uses total 388 of 1,384 pages (235K of
+1. The reference-manual (`<MCU RM>`) chapters the build actually uses total 388 of ~1,400 pages (235K of
    891K tokens, 26.4%), and 113K tokens (12.7%) once the register sections are left to the SVD (an XML
    register-map file the vendor ships).
 2. The vendor SVD is not clean: a bit-level diff against RM register sections for three peripherals
@@ -48,7 +48,7 @@ also [16-landscape-update.md](16-landscape-update.md) and [17-ingestion-procedur
 
 ## 2. Reference-manual outline and cost
 
-A table-of-contents extractor on `<MCU RM>` found: 1,384 pages, 1,965 outline entries (43 chapters; 688
+A table-of-contents extractor on `<MCU RM>` found: ~1,400 pages, 1,965 outline entries (43 chapters; 688
 are table/figure entries, which must be filtered out or they break section splitting, as they did once
 here). The PDF page number equals the printed page. Text extraction of all pages takes about 1-3 s.
 Totals: 890,530 tokens, 643 per page on average; the front matter (contents, list of tables/figures) is
@@ -307,7 +307,7 @@ public sources fetched. Load average about 7.5, so timings are noisy.
 
 | Claim | Verdict | Evidence |
 |---|---|---|
-| RM: 1,384 pp, 1,965 entries, 890,530 tok; core set 388 pp/235,352/26.4%/112,673 prose | confirmed | outline/chapter-usage scripts re-run identical; extraction took 3.0 s, not 1.2 s |
+| RM: ~1,400 pp, 1,965 entries, 890,530 tok; core set 388 pp/235,352/26.4%/112,673 prose | confirmed | outline/chapter-usage scripts re-run identical; extraction took 3.0 s, not 1.2 s |
 | SVD vs RM 0/9/15; 14 defects, 8 omissions; 1 missing peripheral/debug bit; 56 periph, 510 regs, 3,344 fields, 31 IRQs | confirmed | diff re-run byte-identical |
 | Constraint phrases RM/SVD | unverifiable | phrase set not scripted; independent regex counts landed in a similar range |
 | Checker: 6 defects/135 lines, "all caught", < 1 s; tiers 1,522/10.2K | corrected | re-run: 158 cites, 149 names, 7 flags on 6 lines; after fixes 0/131; 2.8 s CPU; "all caught" is circular; tiers total 10,247 tok |

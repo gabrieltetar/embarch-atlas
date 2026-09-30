@@ -81,7 +81,7 @@ Intake facts the manifest surfaced:
   older revisions `superseded_by`, and diffs sha256 per file/page on request; a re-run with no changes
   reported 14/14 unchanged.
 - **Cost of reading documents whole.** The vendor's PDF support costs 1,500-3,000 text tokens per page
-  plus the image; the RM's 1,384 pages would be ~2-4M text tokens, so the scope's tiering is not optional.
+  plus the image; the RM's ~1,400 pages would be ~2-4M text tokens, so the scope's tiering is not optional.
   For the 24-page PRD the whole text is 33 KB (~8K tokens) while a candidate-extraction JSON is *larger*
   (36 KB) — the deterministic pre-pass buys structure, not compression.
 

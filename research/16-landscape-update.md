@@ -20,7 +20,7 @@ below adds to or corrects those notes.
    documentation MCP allows **40 requests/hour** behind a login; another needs a community-site login),
    and one major MCU vendor still ships **no MCP server**.
 5. **Nobody selects reference-manual chapters from the build**: on a real project the enabled SoC nodes
-   pick **5** chapters beyond a fixed core set (**534 of 1,384 pages, 39%**).
+   pick **5** chapters beyond a fixed core set (**534 of ~1,400 pages, 39%**).
 6. **One commercial product remains the only one claiming the full datasheet + schematic + code join**,
    with **zero** published accuracy numbers, while a competing datasheet-to-code mapping approach now has
    a funded commercial owner (a $2M-seed, on-premise startup).
@@ -192,7 +192,7 @@ None uses firmware, C with Kconfig/devicetree, or a PRD as its source.
 | File class | Pages | Outline entries (depth) | Characters/page | Notes |
 |---|---|---|---|---|
 | board A / board B schematic export | 7 / 10 | **2,541 (7)** / **5,001 (7)** | 4,701 / 6,530 | Altium, thousands of line segments and JS objects each |
-| MCU reference manual | 1,384 | 1,965 (4) | 2,027 | 43 numbered chapters |
+| MCU reference manual | ~1,400 | 1,965 (4) | 2,027 | 43 numbered chapters |
 | three power-management IC datasheets | 111 / 55 / 49 | 128 / 85 / 62 | ~1.9K | one vendor's typesetting toolchain |
 | one fuel-gauge datasheet | 115 | 236 | 2,814 | a desktop-publishing toolchain |
 | two load-switch datasheets | 19 / 27 | 45 / 58 | ~1.6K | a word-processor export |
