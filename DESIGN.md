@@ -77,6 +77,7 @@ docs/<svd_doc>/                 the SVD adds: peripherals.json, s/<PERIPH>.md
 boards/<label>/                 schematic analysis, one per board PDF
   netlist.json, bom.json        from the embedded Smart-PDF netlist (below)
   nets.md, parts.md             compact line formats for the LLM
+  geometry.json                 the geometric cross-check of the netlist (rung 3), per sheet and pin
 boards/system.json              board instances + interfaces (engineer-declared, with machine scores)
 boards/straps.jsonl             optional: address/mode straps when no datasheet record exists yet
 boards/bindings.json            optional: compatible -> MPN, prop -> pin, extra rails
@@ -224,7 +225,13 @@ First match wins; each rung cross-checks the one above.
    written as `0`) give positions. A PDF without net bookmarks makes `schematic`
    exit with a request to re-export with "net information" and "component
    parameters" on.
-3. Geometric tracing on the vector PDF (wires, junctions, pins, labels, ports).
+3. **Geometric tracing on the vector PDF** (`geom.py`: union-find over wires, T-junctions
+   connect, crossings never do unless dotted; labels, port edges, power-port groups; the
+   house style is a detected parameter set). Today it runs as the cross-check of rung 2:
+   each net and pin is marked `crosscheck: agree | disagree | geometry-missing`, `method`
+   gains `+geometry` when nets agree and none disagree, and disagreements go to `issues`.
+   It is not yet a fallback for a PDF without an embedded netlist: pin identity still comes
+   from the anchor words.
 4. Vision on crops (Claude Code `Read` of a rendered crop), facts `llm-unverified`
    until matched.
 
@@ -240,7 +247,7 @@ candidate mating rule) and **confirmed** by the engineer.
  "components": {"U3": {"mpn": "...", "value": "...", "dni": false, "dni_evidence": [], "parts": ["U3"],
                        "sheets": ["..."], "pins": {"1": {"name": "PA0", "net": "NET_A"}}, "pages": [7]}},
  "nets": {"3V3": {"pins": ["U3-19", "R5-1"], "sheets": ["..."], "labels": 4, "ports": 2, "auto": false}},
- "counts": {}, "issues": []}
+ "counts": {"geometry": {}}, "issues": []}
 ```
 
 `issues` holds oddities worth an engineer's look (e.g. a printed comment naming a
@@ -321,5 +328,6 @@ reused by every later atlas whose fact has the same content hash.
 
 ## Not yet built (deliberately)
 
-The embarch-ui view, a native EDA adapter, the geometry and vision rungs of the
-schematic ladder, `inventory/answers.toml`, PRD → code trace links.
+The embarch-ui view, a native EDA adapter, geometry as a fallback (without anchor
+words) and the vision rung of the schematic ladder, `inventory/answers.toml`, PRD → code
+trace links.

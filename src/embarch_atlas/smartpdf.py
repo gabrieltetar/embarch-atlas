@@ -30,8 +30,16 @@ Derived here, with the rule stated where it is applied:
 - a 1-pin part (test point, spring-contact pad) never takes a popup whose rectangle holds
   another part's pins: that was the one assignment error class the spikes found.
 
-A PDF without net bookmarks is refused: the geometric and vision rungs are not
-built yet, and a re-export with net information on turns the problem into a parse.
+Rung 3 (`geom.py`, geometry traced from the drawing) runs after this one as its
+independent cross-check: every net and pin gets `crosscheck`, disagreements go
+to `issues`, and `method` gains `+geometry` when a net agrees and none
+disagrees. The embedded netlist stays the source of truth; geometry never
+changes it.
+
+A PDF without net bookmarks is refused: the geometric rung does not yet run on
+its own (it names pins from the anchors and the outline's pin list), the vision
+rung is not built yet, and a re-export with net information on turns the
+problem into a parse.
 """
 from __future__ import annotations
 
@@ -68,7 +76,7 @@ class NoNetInfo(RuntimeError):
 
 NO_NET_INFO_MSG = (
     "{pdf}: no net bookmarks in the PDF outline, so the embedded-netlist rung cannot read it. "
-    "The geometric and vision rungs of the schematic ladder are not built yet. "
+    "The geometric rung runs only as a cross-check of an embedded netlist, and the vision rung is not built yet. "
     "Ask the EE to re-export the schematic PDF with \"net information\" and \"component parameters\" "
     "turned on (Altium Smart PDF wizard; OrCAD: \"Create Net and Part Bookmarks\")."
 )
@@ -192,12 +200,13 @@ def read_outline(toc: list) -> dict[str, dict[str, Any]]:
 # ---------------------------------------------------------------- page layer
 
 def page_text_layer(page) -> tuple[dict[str, list[tuple]], list[tuple]]:
-    """(invisible anchor words -> boxes, visible words as (x0, y0, x1, y1, text, rgb)).
+    """(invisible anchor words -> boxes, visible words as (x0, y0, x1, y1, text, rgb, dir)).
 
     Boxes come from `rawdict`, whose character boxes follow the full glyph
     matrix: a squashed anchor on a vertical pin gets a tall thin box that spans
     the pin line (`texttrace` boxes do not). Invisibility (render mode 3) comes
-    from `texttrace`, matched to `rawdict` characters by glyph origin.
+    from `texttrace`, matched to `rawdict` characters by glyph origin. `dir` is
+    the line's writing direction, (1, 0) for normal text, (0, -1) rotated 90° CCW.
     """
     hidden = set()
     for sp in page.get_texttrace():
@@ -208,6 +217,7 @@ def page_text_layer(page) -> tuple[dict[str, list[tuple]], list[tuple]]:
     words = []
     for blk in page.get_text("rawdict")["blocks"]:
         for line in blk.get("lines", []):
+            wdir = (round(line["dir"][0], 2) + 0.0, round(line["dir"][1], 2) + 0.0)
             for sp in line["spans"]:
                 col = sp.get("color", 0)
                 rgb = (round(((col >> 16) & 255) / 255, 3), round(((col >> 8) & 255) / 255, 3), round((col & 255) / 255, 3))
@@ -221,7 +231,7 @@ def page_text_layer(page) -> tuple[dict[str, list[tuple]], list[tuple]]:
                                 if b not in anchors[cur]:
                                     anchors[cur].append(b)
                             else:
-                                words.append((*b, cur, rgb))
+                                words.append((*b, cur, rgb, wdir))
                         cur, box, inv = "", None, 0
                         continue
                     r = ch["bbox"]
@@ -584,8 +594,16 @@ def summarize_props(props: dict[str, str]) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- the parse
 
-def parse(pdf: Path, board: str, source_file: str | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def parse(pdf: Path, board: str, source_file: str | None = None,
+          geometry: bool = True) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """-> (netlist.json, bom.json) in DESIGN.md's shape. Raises NoNetInfo when the outline has no nets."""
+    nl, bom, _geo = parse_all(pdf, board, source_file, geometry)
+    return nl, bom
+
+
+def parse_all(pdf: Path, board: str, source_file: str | None = None, geometry: bool = True
+              ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any] | None]:
+    """-> (netlist.json, bom.json, geometry.json or None). With `geometry`, rung 3 cross-checks the netlist."""
     import pymupdf
 
     pdf = Path(pdf)
@@ -767,8 +785,16 @@ def parse(pdf: Path, board: str, source_file: str | None = None) -> tuple[dict[s
         "counts": counts,
         "issues": sorted(set(issues), key=natural_key),
     }
+    geo = None
+    if geometry:
+        from . import geom
+
+        tr = geom.trace(doc, sheets)
+        xc = geom.crosscheck(sheets, tr)
+        geom.apply(netlist, xc, tr)
+        geo = geom.report(tr, xc, board, netlist["source"])
     doc.close()
-    return netlist, bom
+    return netlist, bom, geo
 
 
 def _norm(s: str) -> str:
@@ -853,7 +879,7 @@ def render_parts_md(nl: dict[str, Any], bom: list[dict[str, Any]]) -> str:
 
 # ---------------------------------------------------------------- CLI
 
-def run(atlas_dir: Path, pdf: Path, board: str) -> dict[str, Any]:
+def run(atlas_dir: Path, pdf: Path, board: str, geometry: bool = True) -> dict[str, Any]:
     atlas_dir = Path(atlas_dir)
     cfg = project.load_config(atlas_dir) if (atlas_dir / project.CONFIG_NAME).is_file() else {}
     src = project.sources_dir(atlas_dir, cfg) if cfg else None
@@ -861,10 +887,14 @@ def run(atlas_dir: Path, pdf: Path, board: str) -> dict[str, Any]:
         rel = Path(pdf).resolve().relative_to(src.resolve()).as_posix() if src else None
     except ValueError:
         rel = None
-    nl, bom = parse(pdf, board, rel or str(Path(pdf).resolve()))
+    nl, bom, geo = parse_all(pdf, board, rel or str(Path(pdf).resolve()), geometry)
     out = atlas_dir / "boards" / board
     common.write_json(out / "netlist.json", nl)
     common.write_json(out / "bom.json", bom)
+    if geo is not None:
+        common.write_json(out / "geometry.json", geo)
+    else:
+        (out / "geometry.json").unlink(missing_ok=True)  # never leave a trace of an older run beside this netlist
     common.write_text(out / "nets.md", render_nets_md(nl))
     common.write_text(out / "parts.md", render_parts_md(nl, bom))
     return nl
@@ -892,21 +922,28 @@ def _cmd(args) -> int:
     t0 = time.time()
     try:
         pdf = _resolve_pdf(adir, args.pdf, args.board)
-        nl = run(adir, pdf, args.board)
+        nl = run(adir, pdf, args.board, geometry=not args.no_geometry)
     except (FileNotFoundError, NoNetInfo) as e:
         print(f"schematic: {e}", file=sys.stderr)
         return 2
     c = nl["counts"]
+    g = c.get("geometry")
+    xc = (f"geometry cross-check: sheet nets {g['sheet_nets_agree']} agree / {g['sheet_nets_disagree']} disagree / "
+          f"{g['sheet_nets_geometry_missing']} geometry-missing of {g['sheet_nets']}, board nets {g['nets_agree']}/"
+          f"{g['nets_disagree']}/{g['nets_geometry_missing']}, false pin pairs {g['false_pairs']}, missed "
+          f"{g['missed_pairs']}, method {nl['method']}; ") if g else ""
     print(f"{args.board}: {c['parts']} parts ({c['symbol_parts']} symbol parts), {c['pins']} pins "
           f"({c['pins_on_net']} on a net), {c['nets']} nets ({c['nets_auto_named']} auto-named), "
           f"{c['parts_with_mpn']} with MPN, {c['parts_dni']} DNI, popups {c['popups_matched']}/{c['popups_on_pages']}, "
-          f"{c['pins_named']}/{c['pins_on_3plus_pin_parts']} pin names, {len(nl['issues'])} issues "
+          f"{c['pins_named']}/{c['pins_on_3plus_pin_parts']} pin names; {xc}{len(nl['issues'])} issues "
           f"-> {adir / 'boards' / args.board} in {time.time() - t0:.1f} s")
     return 0
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("schematic", help="netlist.json, bom.json, nets.md, parts.md from an Altium Smart PDF")
+    p = sub.add_parser("schematic", help="netlist.json, bom.json, nets.md, parts.md (+ geometry.json) from an Altium Smart PDF")
     p.add_argument("pdf", nargs="?", help="the board's schematic PDF (default: its [[boards]] entry in atlas.toml)")
     p.add_argument("--board", required=True, help="board label, as in atlas.toml [[boards]]")
+    p.add_argument("--no-geometry", action="store_true",
+                   help="skip the geometric cross-check (rung 3) and write no geometry.json")
     p.set_defaults(func=_cmd)
