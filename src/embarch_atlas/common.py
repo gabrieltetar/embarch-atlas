@@ -82,3 +82,21 @@ def verb_group(sub, groups: dict, name: str, help: str):
         p = sub.add_parser(name, help=help)
         groups[name] = p.add_subparsers(dest=f"{name}_verb", required=True)
     return groups[name]
+
+
+def sources_fingerprint(manifest_path: Path) -> str | None:
+    """What an atlas depends on in the manifest: each document's name and content hash.
+
+    Not the manifest file's bytes: a newer inventory tool that adds a field must not make
+    every atlas stale when no document changed."""
+    if not manifest_path.is_file():
+        return None
+    try:
+        data = read_json(manifest_path)
+    except (OSError, ValueError):
+        return None
+    docs = data.get("documents") if isinstance(data, dict) else None
+    if not isinstance(docs, list):
+        return sha256_file(manifest_path)
+    pairs = sorted((str(d.get("file") or d.get("path") or ""), str(d.get("sha256") or "")) for d in docs)
+    return sha256_text("\n".join(f"{f}\t{h}" for f, h in pairs))

@@ -313,7 +313,7 @@ def status(atlas_dir: Path) -> dict[str, Any]:
     fw = fw_dir(atlas_dir, cfg)
     head, dirty = git_head(fw)
     man = atlas_dir / "inventory" / "manifest.json"
-    manifest_sha = common.sha256_file(man) if man.is_file() else None
+    manifest_sha = common.sources_fingerprint(man)
     sch = _current_schematic_shas(atlas_dir, cfg) if cfg else {}
     rows = []
     for stamp_path in sorted((atlas_dir / "atlases").glob("*/atlas.json")):

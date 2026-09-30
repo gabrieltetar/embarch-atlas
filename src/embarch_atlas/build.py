@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from embarch_atlas import __version__
-from embarch_atlas.common import atlas_dir as _default_atlas_dir
+from embarch_atlas.common import sources_fingerprint, atlas_dir as _default_atlas_dir
 from embarch_atlas.common import read_json, sha256_file, write_json
 
 ARTIFACTS = {
@@ -384,7 +384,7 @@ def stamp(cfg: dict, ad: Path, commit: str, projects: list[dict], fw: Path, extr
         "commit": commit,
         "dirty": False,
         "west": west,
-        "sources": sha256_file(manifest) if manifest.is_file() else None,
+        "sources": sources_fingerprint(manifest),
         "schematics": schematics,
         "mcu": cfg.get("mcu", {}),
         "tool": {"name": "embarch-atlas", "version": __version__, "git": _tool_git_sha()},

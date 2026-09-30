@@ -99,7 +99,7 @@ def test_status_current_and_stale(tmp_path, capsys):
     head = git(fw, "rev-parse", "HEAD")
     man = adir / "inventory" / "manifest.json"
     common.write_json(man, {"documents": []})
-    msha = common.sha256_file(man)
+    msha = common.sources_fingerprint(man)
     pdf_sha = common.sha256_file(fw / "embarch" / "hardware" / "main-board.pdf")
     stamp(adir, f"core@{head[:12]}", commit=head, sources=msha, schematics={"M": pdf_sha})
     stamp(adir, "core@000000000000", commit="0" * 40, sources=msha, schematics={"M": pdf_sha})
@@ -162,3 +162,16 @@ def test_wire_mcp_merges_and_excludes(tmp_path):
     assert any(".git/info/exclude" in c for c in changed)
     assert project.wire_mcp(fw) == []
     assert subprocess.run(["git", "-C", str(fw), "status", "--porcelain"], capture_output=True, text=True).stdout == ""
+
+
+def test_sources_fingerprint_ignores_manifest_format(tmp_path):
+    import json
+    from embarch_atlas.common import sources_fingerprint
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    docs = [{"file": "x.pdf", "sha256": "11"}, {"file": "y.pdf", "sha256": "22"}]
+    a.write_text(json.dumps({"documents": docs}))
+    b.write_text(json.dumps({"documents": [dict(d, new_field=1) for d in reversed(docs)], "tool": "v2"}))
+    assert sources_fingerprint(a) == sources_fingerprint(b)
+    b.write_text(json.dumps({"documents": [{"file": "x.pdf", "sha256": "33"}, docs[1]]}))
+    assert sources_fingerprint(a) != sources_fingerprint(b)
