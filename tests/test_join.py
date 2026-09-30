@@ -393,3 +393,15 @@ def test_card_aka_parts_family_forms(tmp_path):
     assert "DEMO120x" in parts and "DEMO1205ABC+T" in parts
     assert "fuel gauge" not in parts and "SHA-256" not in parts
     assert _part_pattern("DEMO120x").match(norm("DEMO1205G+T"))
+
+
+def test_prop_to_pin_ignores_the_active_low_marker():
+    nl = _netlist("X", {"U9": _comp("PWR100", pins={4: ("FB/INT-bar", "N1"), 5: ("FAULT-bar", "N2"), 6: ("~RDY", "N3"),
+                                                        7: ("EN", "N4"), 8: ("EN-bar", "N5")})})
+    J = join.Join(Path("."), Path("."), {"X": join.Board("X", nl)}, {"uses": [], "nodes": {}}, {}, join.Docs(Path("/nonexistent")),
+                  [], {}, [], None, None)
+    assert join.prop_to_pin(J, "acme,x", "int-gpios", "X", "U9")[0] == "U9-4"
+    assert join.prop_to_pin(J, "acme,x", "fault-gpios", "X", "U9")[0] == "U9-5"
+    assert join.prop_to_pin(J, "acme,x", "rdy-gpios", "X", "U9")[0] == "U9-6"
+    assert join.prop_to_pin(J, "acme,x", "en-gpios", "X", "U9")[0] is None      # EN and EN-bar: ambiguous, not guessed
+    assert join.plain_name("FB/INT-bar") == "FB/INT" and join.plain_name("CS#") == "CS"

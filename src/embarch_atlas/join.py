@@ -632,10 +632,22 @@ def compat_matches(J: Join, compat: str | None, mpn: str | None) -> bool:
     return bool(pat and pat.match(norm(mpn)))
 
 
+OVERLINE_MARK = re.compile(r"\u0305|[-_]bar$|#$|^[~/]", re.I)
+
+
+def plain_name(name: str | None) -> str | None:
+    """A pin name without its active-low marker (`FLT-bar`, `INT-bar` of `FB/INT-bar`, `~RST`, `CS#`):
+    a DT property names the signal, and its polarity is in the GPIO flags. Two pins that differ only by
+    the marker (EN, EN-bar) then match both, and prop_to_pin, which needs one hit, resolves neither."""
+    if name is None:
+        return None
+    return "/".join(OVERLINE_MARK.sub("", part) for part in name.split("/"))
+
+
 def prop_to_pin(J: Join, compat: str, prop: str, board: str, ref: str) -> tuple[str | None, str]:
     """A DT GPIO property -> the part pin it drives or reads. Engineer table first, then name heuristics."""
     decl = J.bindings.get("prop_pins", {}).get(compat, {}).get(prop)
-    names = {k: J.part_pin_name(board, k) for k in J.boards[board].pins(ref)}
+    names = {k: plain_name(J.part_pin_name(board, k)) for k in J.boards[board].pins(ref)}
     if decl:
         hit = [k for k, n in names.items() if norm(n) == norm(decl)]
         return (hit[0] if hit else None), "declared"
