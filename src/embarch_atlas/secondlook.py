@@ -507,6 +507,26 @@ def is_od(s):
     return s in ("od", "open-drain", "open drain", "opendrain")
 
 
+PM = re.compile(r"^\s*[±\u00b1]\s*([0-9]+(?:\.[0-9]+)?)\s*$")
+
+
+def expand_pm(vals: dict, first: dict) -> dict:
+    """A reader's `±X` in a single Value column (put under nom, typ, min or max) is `min: -X, max: X`,
+    the procedure's form, unless the first pass kept that column's `±X` as printed text (a TYP ±X)."""
+    out = dict(vals)
+    for f in ("nom", "typ", "min", "max"):
+        m = PM.match(str(vals.get(f) or ""))
+        if not m or (isinstance(first.get(f), str) and PM.match(first[f])):
+            continue
+        x = float(m.group(1))
+        out[f] = None
+        if out.get("min") in (None, "") or out.get("min") == vals.get(f):
+            out["min"] = -x
+        if out.get("max") in (None, "") or out.get("max") == vals.get(f):
+            out["max"] = x
+    return out
+
+
 def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
     """confirmed / conflict / unresolved, and why. Deterministic: no judgment here."""
     if not reading.get("found", True):
@@ -522,6 +542,7 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
             return "conflict", ["the page contradicts the statement"]
         return "unresolved", ["no supports/contradicts claim"]
     if k in ("limit", "timing"):
+        vals = expand_pm(vals, first)
         for f in ("min", "nom", "typ", "max"):
             a, b = _num(first.get(f)), _num(vals.get(f))
             if a is None and b is None:

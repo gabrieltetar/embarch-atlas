@@ -216,3 +216,14 @@ def test_select_targets_reasons_and_docs_keeping_rank():
     assert [x["id"] for x in secondlook.select(q, "llm-unverified,unit")] == ["b", "c"]
     assert [x["id"] for x in secondlook.select(q, "llm-unverified,unit", "d1@A")] == ["c"]
     assert secondlook.select(q) == q
+
+
+def test_compare_reads_a_plus_minus_value_cell_as_min_and_max():
+    from embarch_atlas.secondlook import compare_one
+    first = {"kind": "limit", "min": -2, "max": 2, "unit": "kV"}
+    seen = {"found": True, "values": {"nom": "±2", "unit": "kV"}}
+    assert compare_one(first, seen)[0] == "confirmed"
+    assert compare_one(first, {"found": True, "values": {"max": "±3", "unit": "kV"}})[0] == "conflict"
+    # a TYP printed ±X is kept as text by the first pass: compared as the printed string, not expanded
+    t = {"kind": "limit", "typ": "±0.48", "unit": "%"}
+    assert compare_one(t, {"found": True, "values": {"typ": "±0.48", "unit": "%"}})[0] == "confirmed"
