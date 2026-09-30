@@ -461,3 +461,42 @@ def test_cell_number_with_glued_footnote_marker():
     assert m and m.group(2) == "3000"
     assert _CELL_NUM.match("1.7(1)").group(2) == "1.7"
     assert _CELL_NUM.match("±2%").group(3) == "%"
+
+
+# ---------------------------------------------------------------- R across documents, M on RM-style prose
+
+def test_refs_resolve_against_every_doc_under_docs(doc):
+    atlas, docdir = doc
+    other = atlas / "docs" / "demo-svd" / "records"
+    other.mkdir(parents=True)
+    common.write_jsonl(other / "register.jsonl", [{"id": "demo.reg.OTHER.CTRL", "kind": "register", "doc": "demo-svd",
+                                                  "p": None, "q": None, "src": "svd", "prov": "deterministic",
+                                                  "name": "CTRL", "addr": "0x0", "width": 32}])
+    common.write_jsonl(docdir / "records" / "conflict.jsonl", [{
+        "id": "syn1234.conflict.reg.CTRL.name", "kind": "conflict", "doc": ds.DOC_ID, "p": 5, "q": None,
+        "src": "text", "prov": "deterministic", "refs": ["demo.reg.OTHER.CTRL", "demo.reg.OTHER.NOPE"],
+        "sources": ["demo-svd OTHER.CTRL: x", f"{ds.DOC_ID} p5: y"], "text": "CTRL: name differs"}])
+    rep = check.run_check(docdir)
+    r = [i for i in result(rep, "syn1234.conflict.reg.CTRL.name")["issues"] if i.startswith("R:")]
+    assert r == ["R: ref demo.reg.OTHER.NOPE resolves to no record in docs/"]     # the sibling doc's id resolves
+
+
+def test_md_rm_prose_list_markers_tiers_tokens_identifiers_and_svd_cites():
+    c = check.md_claims
+    assert c("3. The pending bit is set only when the mask is open (p.3)") == []
+    assert c("Tier 1. Every step cites the page.") == []
+    assert c("- see `s/9.4.16-9.8.md`, `LINE4_15`, §6.3-§6.5 and 9.4.16-9.8 (p.3)") == []
+    assert c("- the index holds 2,048 tokens and 2 raw tokens (p.3)") == []
+    # an [SVD] cite covers the numbers before it in its clause, as a tag does; not the next clause
+    assert c("- lines 55 and 66 [SVD]; restarts below 142 C (p.3)") == [(55, "svd"), (66, "svd"), (142, None)]
+    cols = ["section", "pages", "raw tokens", "distilled"]
+    assert c("| 4.1 main features | 81 | 947 | `s/4.1-4.4.md` |", cols) == [(81, None)]
+
+
+def test_md_svd_numbers_are_counted_not_flagged(doc):
+    _, docdir = doc
+    f = docdir / "card.md"
+    f.write_text("# card (p.3)\n\n4. Restarts below 142 C (p.3).\n- the SVD puts it at IRQ line 57 [SVD]\n"
+                 "- a claim with no source 5151 (p.3)\n")
+    m = check.check_markdown_file(check.DocText(docdir), f, {})
+    assert m["stats"]["svd"] == 1 and [b["number"] for b in m["unanchored"]] == [5151]

@@ -5,9 +5,12 @@ skill's, see `skills/atlas-translate-docs/reference/rm-procedure.md`):
 
   mcu rm-outline <rm_doc>            outline -> sections with page ranges and token costs (outline.json)
   mcu rm-sections <atlas|in_use.json> RM sections to distil for the peripherals in use -> worklist.json
-  mcu rm-text <rm_doc> <item|sec>    one work item's text, cut at its headings, with [p.N] markers
+  mcu rm-text <rm_doc> <item|sec>    one work item's text, cut at its headings, with [p.N] markers;
+                                     it fails rather than print a text missing a page of the item's range
   mcu rm-check <rm_doc> [files]      SVD names exist, fields and numbers on the cited page, section holds page
-  mcu rm-freeze <rm_doc> --item ID   record a distillation as frozen LLM output, keyed by page content
+  mcu rm-freeze <rm_doc> --item ID   record a distillation as frozen LLM output, keyed by page content;
+                                     an entry it replaces (same files and sections) is marked superseded
+  mcu rm-freeze <rm_doc> --retire E  mark a frozen entry superseded (kept, never deleted)
 
 Selection rule (owner, 2026-09-29): prose is distilled per peripheral **in use**
 (instantiated in the build's ELF, or touched by SoC code) plus a fixed
@@ -162,12 +165,34 @@ def _heading_re(e: dict) -> re.Pattern:
     return re.compile(r"^\s*" + r"\s+".join(re.escape(w) for w in words[:4]))
 
 
+ROTATED_FRAC = 0.45  # a page whose characters run vertically at least this much is a rotated (landscape) page
+
+
+def vertical_fraction(page) -> float:
+    """Share of a PyMuPDF page's characters on lines whose text direction is vertical. A landscape
+    table printed on a portrait page runs about 0.5-0.7 (its running header and footer stay
+    horizontal); a flowchart or a figure with a rotated axis label stays well under 0.45."""
+    h = v = 0
+    for b in page.get_text("dict")["blocks"]:
+        for ln in b.get("lines", []):
+            n = sum(len(s["text"].strip()) for s in ln["spans"])
+            dx, dy = ln["dir"]
+            if abs(dy) > abs(dx):
+                v += n
+            else:
+                h += n
+    return round(v / (h + v), 3) if h + v else 0.0
+
+
 def build_outline(toc: list, plain_tokens: list[int], layout: TextLayer | None, doc_id: str,
-                  n_pages: int, meta: dict | None = None, doc_no: str | None = None) -> dict:
+                  n_pages: int, meta: dict | None = None, doc_no: str | None = None,
+                  vertical: list[float] | None = None) -> dict:
     """PDF outline -> entries with page ranges, token costs and register-section flags.
 
     `toc` is PyMuPDF's `get_toc()` ([level, title, page], 1-based pages). Table and
     Figure entries are split off (`tables`); left in, they break section splitting.
+    `vertical` is each page's vertical_fraction(), kept so a later cut can tell a rotated
+    page from its text direction.
     """
     doc_no = doc_no or doc_number(doc_id)
     entries: list[dict] = []
@@ -240,6 +265,7 @@ def build_outline(toc: list, plain_tokens: list[int], layout: TextLayer | None, 
         "doc": doc_id, "pages": n_pages, "toc_entries": len(toc), "entries": entries, "tables": tables,
         "doc_no": doc_no, "total_tokens": sum(plain_tokens), "page_tokens": plain_tokens,
         "token_method": "o200k over PyMuPDF plain text" if count_tokens("x") is not None else "chars/4 estimate",
+        **({"vertical": list(vertical)} if vertical is not None else {}),
         **(meta or {}),
     }
 
@@ -250,9 +276,10 @@ def outline_from_pdf(pdf: Path, doc_id: str, pages_dir: Path | None = None, doc_
     doc = pymupdf.open(pdf)
     n = doc.page_count
     plain = [tokens(doc[i].get_text("text")) for i in range(n)]
+    vertical = [vertical_fraction(doc[i]) for i in range(n)]
     layout = TextLayer(pages_dir if pages_dir and pages_dir.exists() else None, pdf, n)
     out = build_outline(doc.get_toc(simple=True), plain, layout, doc_id, n,
-                        {"source": {"file": str(pdf.resolve()), "sha256": sha256_file(pdf)}}, doc_no)
+                        {"source": {"file": str(pdf.resolve()), "sha256": sha256_file(pdf)}}, doc_no, vertical)
     out["page_sha"] = [page_sha(layout(p)) for p in range(1, n + 1)]
     return out
 
@@ -272,6 +299,8 @@ class RmDoc:
         self.index = {e["id"]: i for i, e in enumerate(self.entries)}
         self._body: dict[int, list[str]] = {}
         self._sha: list[str] | None = outline.get("page_sha")
+        self._vertical: dict[int, float] = {}
+        self._pdf = None
 
     @classmethod
     def load(cls, root: Path, doc_id: str) -> "RmDoc":
@@ -326,23 +355,62 @@ class RmDoc:
         e = self.by_id.get(sid)
         return (e["start"], e["end"]) if e else None
 
-    def cut(self, start: dict, stop: dict | None, first: int, last: int) -> list[tuple[int, str]]:
-        """(page, line) from `start`'s heading to `stop`'s heading, within pages first..last."""
+    def vertical(self, p: int) -> float | None:
+        """Share of page p's characters that run vertically: outline.json `vertical` (rm-outline
+        writes it), else PyMuPDF on the source PDF; None when neither is there."""
+        vs = self.o.get("vertical")
+        if vs is not None and 0 < p <= len(vs):
+            return vs[p - 1]
+        if p in self._vertical:
+            return self._vertical[p]
+        pdf = self.layer.pdf
+        if pdf is None or not Path(pdf).exists() or not 0 < p <= self.n_pages:
+            return None
+        if self._pdf is None:
+            import pymupdf
+
+            self._pdf = pymupdf.open(pdf)
+        self._vertical[p] = vertical_fraction(self._pdf[p - 1])
+        return self._vertical[p]
+
+    def rotated(self, p: int) -> bool:
+        """A landscape page printed rotated, decided from the text direction of its words (a
+        flowchart's one-word-per-line layout text is not a rotated table). False when unknown."""
+        v = self.vertical(p)
+        return v is not None and v >= ROTATED_FRAC
+
+    def cut(self, start: dict, stop: dict | None, first: int, last: int,
+            keep_pages: bool = False) -> list[tuple[int, str]]:
+        """(page, line) from `start`'s heading to `stop`'s heading, within pages first..last.
+
+        The stop heading counts only on or after the page the outline starts it on. When it is not
+        found there (it lies past `last`, or the layout text does not show it), the cut runs to
+        `last`: a missing heading never shortens the range. One exception, for the register parser
+        (`keep_pages=False`): when the stop starts inside the range on a rotated page, whose heading
+        the layout text splits, the cut ends where that page begins. `keep_pages=True` (rm-text)
+        keeps every page of the range: that page is kept whole, and a start heading missing from
+        `first` starts the cut at the top of `first`.
+        """
         lines: list[tuple[int, str]] = []
         for p in range(first, last + 1):
             lines += [(p, ln) for ln in self.body(p)]
         hs = _heading_re(start)
         s = next((k for k, (p, ln) in enumerate(lines) if p == first and hs.match(ln)), None)
         if s is None:
-            s = next((k for k, (p, ln) in enumerate(lines) if hs.match(ln)), 0)
+            s = 0 if keep_pages else next((k for k, (p, ln) in enumerate(lines) if hs.match(ln)), 0)
         e = len(lines)
         if stop is not None:
             he = _heading_re(stop)
-            e = next((k for k, (p, ln) in enumerate(lines) if k > s and he.match(ln)), None)
-            if e is None:  # a rotated (landscape) page: the heading is split, the id stands alone
-                rot = {p for p in range(first + 1, last + 1) if _rotated_page(self.body(p))}
-                e = next((k for k, (p, ln) in enumerate(lines)
-                          if k > s and p > first and (ln.strip() == stop["id"] or p in rot)), len(lines))
+            at = stop.get("start", first)
+            e = next((k for k, (p, ln) in enumerate(lines) if k > s and p >= at and he.match(ln)), None)
+            if e is None and first < at <= last:
+                if not keep_pages and self.rotated(at):
+                    # a rotated (landscape) page: its heading is split and its line order scrambled
+                    e = next((k for k, (p, _) in enumerate(lines) if k > s and p == at), None)
+                else:  # the heading split, the id standing alone on its line
+                    e = next((k for k, (p, ln) in enumerate(lines) if k > s and p >= at and ln.strip() == stop["id"]), None)
+            if e is None:
+                e = len(lines)
         return lines[s:e]
 
     def unit_lines(self, u: dict) -> list[tuple[int, str]]:
@@ -352,16 +420,13 @@ class RmDoc:
             stop = kids[0] if kids else self.next_after(e)
         else:
             stop = self.next_after(e)
-        return self.cut(e, stop, u["pages"][0], u["pages"][1])
+        return self.cut(e, stop, u["pages"][0], u["pages"][1], keep_pages=True)
 
 
-def _rotated_page(lines: list[str]) -> bool:
-    """Layout text of a landscape (rotated) table page: mostly one short token per line, far indented."""
-    ne = [ln for ln in lines if ln.strip()]
-    if len(ne) < 20:
-        return False
-    lone = sum(1 for ln in ne if len(ln.split()) <= 2 and len(ln) - len(ln.lstrip()) >= 40)
-    return lone >= 0.6 * len(ne)
+def missing_pages(u: dict, lines: list[tuple[int, str]]) -> list[int]:
+    """Pages of a unit's range that its cut text does not reach (rm-text's guard: it must be none)."""
+    got = {p for p, _ in lines}
+    return [p for p in range(u["pages"][0], u["pages"][1] + 1) if p not in got]
 
 
 def render_lines(lines: list[tuple[int, str]]) -> str:
@@ -507,24 +572,75 @@ def unit_key(rm: RmDoc, u: dict) -> str:
     return sha256_text(json.dumps(payload, sort_keys=True))
 
 
-def frozen_index(root: Path, doc_id: str) -> dict[str, dict]:
-    """unit key -> frozen cache entry (with `entry` = its file name and `files_ok`)."""
-    out: dict[str, dict] = {}
+def rm_entries(root: Path, doc_id: str) -> list[tuple[Path, dict]]:
+    """This RM's frozen cache entries (`kind: rm-distillation`), in file-name order."""
     cache = root / "cache" / "llm"
-    if not cache.exists():
-        return out
-    for f in sorted(cache.glob("*.json")):
+    out = []
+    for f in sorted(cache.glob("*.json")) if cache.is_dir() else []:
         try:
             e = read_json(f)
         except (json.JSONDecodeError, OSError):
             continue
-        if e.get("kind") != "rm-distillation" or e.get("doc") != doc_id:
+        if isinstance(e, dict) and e.get("kind") == "rm-distillation" and e.get("doc") == doc_id:
+            out.append((f, e))
+    return out
+
+
+def frozen_index(root: Path, doc_id: str) -> dict[str, dict]:
+    """unit key -> the frozen cache entry that decides the unit's status (`entry` = its file name,
+    `files_ok`, `others` = the other entries holding the same key).
+
+    Several entries can hold one unit key: a section file and a must file frozen over the same
+    section, or one card frozen by two models. The one whose recorded file hashes match the files
+    now on disk wins, then the newest (`created`); a superseded entry (`rm-freeze --retire`, or
+    replaced by a later freeze that covers it) is never used. So a stale entry cannot shadow a
+    current one, whatever its file name sorts as.
+    """
+    cands: dict[str, list[dict]] = {}
+    d = root / "docs" / doc_id
+    for f, e in rm_entries(root, doc_id):
+        if e.get("superseded"):
             continue
-        d = root / "docs" / doc_id
         ok = all((d / rel).exists() and sha256_file(d / rel) == h for rel, h in e.get("files", {}).items())
         for sec, key in e.get("sections", {}).items():
-            out[key] = {"entry": f.name, "sec": sec, "files": sorted(e.get("files", {})), "files_ok": ok}
+            cands.setdefault(key, []).append({"entry": f.name, "sec": sec, "files": sorted(e.get("files", {})),
+                                              "files_ok": ok, "created": e.get("created") or "",
+                                              "model": e.get("model")})
+    out: dict[str, dict] = {}
+    for key, cs in cands.items():
+        cs.sort(key=lambda c: (c["files_ok"], c["created"].rstrip("Z"), c["entry"]), reverse=True)
+        out[key] = dict(cs[0], others=[c["entry"] for c in cs[1:]],
+                        stale={c["entry"]: c["files"] for c in cs if not c["files_ok"]})
     return out
+
+
+def _now() -> str:
+    """UTC with microseconds, so two freezes in one second still order (`created` sorts as text)."""
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def supersede(path: Path, by: str | None, why: str) -> dict:
+    """Mark a frozen entry superseded (never deleted): frozen_index() stops using it."""
+    e = read_json(path)
+    e["superseded"] = {"at": _now(), "by": by, "why": why}
+    write_json(path, e)
+    return e
+
+
+def covered_by(old: dict, new: dict) -> bool:
+    """A new entry replaces an old one when it freezes every file and every section the old one did."""
+    return (set(old.get("files", {})) <= set(new.get("files", {}))
+            and set(old.get("sections", {})) <= set(new.get("sections", {})))
+
+
+def find_entry(root: Path, doc_id: str, name: str) -> Path:
+    """A cache entry by file name, key, or a unique key prefix (rm-sections prints 12 characters)."""
+    stem = name.removesuffix(".json")
+    hits = [f for f, _ in rm_entries(root, doc_id) if f.stem == stem] or \
+           [f for f, _ in rm_entries(root, doc_id) if f.stem.startswith(stem)]
+    if len(hits) != 1:
+        raise SystemExit(f"{doc_id}: {'no' if not hits else len(hits)} frozen entries match {name!r} in {root / 'cache' / 'llm'}")
+    return hits[0]
 
 
 def batch(units: list[dict], budget: int = MERGE_TOKENS) -> list[list[dict]]:
@@ -573,8 +689,10 @@ def build_worklist(rm: RmDoc, in_use: dict, svd=None, core: Iterable[str] = CORE
         todo: list[dict] = []
         n_frozen = 0
         run: list[dict] = []
+        stale: dict[str, list[str]] = {}
         for u in units:
             fz = frozen.get(u["key"])
+            stale.update(fz.get("stale", {}) if fz else {})
             if fz:
                 u["status"] = "frozen" if fz["files_ok"] else "frozen-files-changed"
                 u["frozen_by"] = fz["entry"]
@@ -602,6 +720,8 @@ def build_worklist(rm: RmDoc, in_use: dict, svd=None, core: Iterable[str] = CORE
             "unit_tokens": sum(u["tokens"] for u in units),
             "files": {k: f"s/{cid}.{k}.md" for k in ("card", "must", "fields")},
             "files_present": {k: bool(d and (d / "s" / f"{cid}.{k}.md").exists()) for k in ("card", "must", "fields")},
+            # frozen entries over this chapter's units whose files changed since: re-freeze or retire them
+            "stale_entries": dict(sorted(stale.items())),
         })
     not_in_use = []
     for name, p in sorted(periph_out.items()):
@@ -632,22 +752,100 @@ def build_worklist(rm: RmDoc, in_use: dict, svd=None, core: Iterable[str] = CORE
 
 CITE_RE = re.compile(r"\[§([\d.]+) p\.(\d+)(?:\s*[-–]\s*(\d+))?\]")
 IDENT_RE = re.compile(r"`([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+){1,2})`")
-NUMBER_RE = re.compile(r"(?<![\w.])(0x[0-9A-Fa-f]+|\d+(?:\.\d+)?)(?![\w.])")
-TAG_RE = re.compile(r"\((?:derived|figure|inference)\)", re.I)
+BARE_RE = re.compile(r"`([A-Z][A-Z0-9_]*[A-Z0-9])`")
+OTHER_CITE_RE = re.compile(r"\[(?:DB|[A-Za-z0-9_-]+@[A-Za-z0-9_.-]+)[^\]]*\]")
+# a number: hex, binary or decimal, not glued after letters or digits (EN1, I2C are names); a unit
+# or an ordinal may follow it (10ms, 8th)
+NUMBER_RE = re.compile(r"(?<![\w.])(0x[0-9A-Fa-f]+|0b[01]+|\d+(?:\.\d+)?)(?![0-9A-Fa-f]*\.?\d)")
+TRIVIAL = {"0", "1", "2", "3"}  # too common to test
+
+
+def _spaces(m: re.Match) -> str:
+    return " " * len(m.group())
+
+
+def number_claims(line: str) -> list[tuple[str, str | None]]:
+    """(number as written, tag class or None) for one line of distilled RM prose, by M's rule
+    (check.tagged_pieces): a tag or an `[SVD]` cite covers the numbers before it in its clause and
+    inside itself, never the whole line. Cites, section references, list markers, `Tier N`, token
+    counts and backticked identifiers or file names are not claims."""
+    from .check import SECTION_NUM, SECTION_REF, blank_not_claims, tagged_pieces
+
+    body = CITE_RE.sub(_spaces, line)
+    body = OTHER_CITE_RE.sub(_spaces, body)
+    body = SECTION_NUM.sub(_spaces, SECTION_REF.sub(_spaces, body))   # §6.3, 9.4.16-9.8: references
+    body = blank_not_claims(body)
+    body = re.sub(r"(?<=\d)\.\.(?=\d)", "  ", body)       # 1..15 is 1 and 15
+    out = []
+    for piece, cls in tagged_pieces(body):
+        out += [(n, cls) for n in NUMBER_RE.findall(piece)]
+    return out
+
+
+def on_pages(n: str, text: str) -> bool:
+    """Is the number `n` (as written) on the page text? 0x.. matches any case; 0b.. also matches its
+    bare digits (the RM prints binary field values as `10:`)."""
+    if n.lower().startswith("0x"):
+        return bool(re.search(rf"(?<![\w.]){re.escape(n)}(?![0-9A-Fa-f])", text, re.I))
+    if n.lower().startswith("0b"):
+        return bool(re.search(rf"(?<![\w.])(?:0b)?{n[2:]}(?![01])", text))
+    return bool(re.search(rf"(?<![\w.]){re.escape(n)}(?!\.?\d)", text))
+
+
+def _stem(name: str) -> str:
+    return re.sub(r"\d+$", "", name)
+
+
+def _unprefixed(name: str) -> str:
+    """`BUS_TXDR` -> `TXDR`, `PORTx_MODER` -> `MODER`: without an instance or block prefix."""
+    m = re.match(r"^[A-Z][A-Z0-9]*x?_(.+)$", name)
+    return m.group(1) if m else name
+
+
+def bare_name(svd, name: str, periphs: list[str]) -> bool | None:
+    """A bare backticked name (`TRGR1`, `BUS_TXDR`) on a chapter's page, against the SVD: True when
+    it is a register or field of the chapter's peripherals, or the family stem of registers
+    (`SELCR` for SELCR1..4); False when it has the shape of one of their registers (the same stem)
+    and is none of them (`TRGR3`); None when it is some other name (an interrupt `LINE0_1`, a pin,
+    a peripheral): not checked."""
+    if svd is None or not periphs:
+        return None
+    regs: set[str] = set()
+    fields: set[str] = set()
+    for per in periphs:
+        for r in (svd.regs.get(per) or svd.regs.get(svd.base_of(per)) or {}).values():
+            regs |= {r["name"], _unprefixed(r["name"])}
+            fields |= set(r["fields"])
+    if not regs:
+        return None
+    if name in regs or name in fields or name in svd.peripherals:
+        return True
+    stems = {_stem(r) for r in regs} - {""}
+    if name in stems:
+        return True
+    if _unprefixed(name) in regs:
+        return True
+    if _stem(name) in stems or _stem(_unprefixed(name)) in stems:
+        return False
+    return None
 
 
 def check_files(rm: RmDoc, svd, files: list[Path], periphs: list[str] | None = None,
                 base: Path | None = None) -> dict:
     """The deterministic second pass over distilled RM files (spike 13's verify_cites).
 
-    1. every backticked `REG.FIELD`, `PERIPH.REG` or `PERIPH.REG.FIELD` exists in the SVD;
+    1. every backticked `REG.FIELD`, `PERIPH.REG` or `PERIPH.REG.FIELD` exists in the SVD, and so
+       does every bare backticked name shaped like one of the chapter's registers (bare_name);
     2. every field named on a cited line is on a cited page (fields of other peripherals'
        registers, written `PERIPH.REG.FIELD`, are exempt: they cite another chapter's facts);
     3. every `[§S p.N]` has page N inside section S;
-    4. every number on a cited line is on a cited page, unless the line is tagged
-       (derived), (figure) or (inference). 0-3 are too common to test.
+    4. every number on a cited line is on a cited page (hex, 0b binary, decimals, a number glued
+       to its unit), unless a tag (derived), (inference), (figure), (equation) or an `[SVD]` cite
+       covers it: a tag covers the numbers before it in its clause, as doc check M reads prose
+       (number_claims). 0-3 are too common to test.
     """
-    tot = dict(lines=0, cites=0, names=0, names_bad=0, support=0, support_bad=0, sec_bad=0, numbers=0, numbers_bad=0)
+    tot = dict(lines=0, cites=0, names=0, names_bad=0, support=0, support_bad=0, sec_bad=0, numbers=0, numbers_bad=0,
+               numbers_tagged=0)
     fails: list[str] = []
     local = set(periphs or [])
     for fn in files:
@@ -659,7 +857,8 @@ def check_files(rm: RmDoc, svd, files: list[Path], periphs: list[str] | None = N
                 b = int(m.group(3)) if m.group(3) else a
                 cites.append((m.group(1), list(range(a, b + 1))))
             idents = IDENT_RE.findall(line)
-            if not cites and not idents:
+            bare = BARE_RE.findall(line)
+            if not cites and not idents and not bare:
                 continue
             tot["lines"] += 1
             tot["cites"] += len(cites)
@@ -671,15 +870,17 @@ def check_files(rm: RmDoc, svd, files: list[Path], periphs: list[str] | None = N
                         tot["sec_bad"] += 1
                         fails.append(f"{label}:{ln} §{s} does not contain p.{p} (section pages {list(r) if r else None})")
             text = " ".join(rm.page_plain(p) for p in pages) if pages else ""
-            if cites and not TAG_RE.search(line):
-                body = CITE_RE.sub("", line)
-                body = re.sub(r"\[(?:SVD|DB|[A-Za-z0-9_-]+@[A-Za-z0-9_.-]+)[^\]]*\]", "", body)
-                body = re.sub(r"`[^`]*`", "", body)
-                for n in sorted(set(NUMBER_RE.findall(body))):
-                    if n in ("0", "1", "2", "3"):
+            if cites:
+                seen: set[str] = set()
+                for n, tag in number_claims(line):
+                    if tag is not None:
+                        tot["numbers_tagged"] += 1
                         continue
+                    if n in TRIVIAL or (n.lower().startswith("0b") and len(n) <= 3) or n in seen:
+                        continue
+                    seen.add(n)
                     tot["numbers"] += 1
-                    if not re.search(rf"(?<![\w.]){re.escape(n)}(?![\w])", text):
+                    if not on_pages(n, text):
                         tot["numbers_bad"] += 1
                         fails.append(f"{label}:{ln} number {n} not on cited page(s) {pages}")
             for ident in idents:
@@ -700,6 +901,14 @@ def check_files(rm: RmDoc, svd, files: list[Path], periphs: list[str] | None = N
                     if not re.search(rf"\b{re.escape(f)}\b", text):
                         tot["support_bad"] += 1
                         fails.append(f"{label}:{ln} field {f} not on cited page(s) {pages}")
+            for name in dict.fromkeys(bare):
+                ok = bare_name(svd, name, sorted(local))
+                if ok is None:
+                    continue
+                tot["names"] += 1
+                if not ok:
+                    tot["names_bad"] += 1
+                    fails.append(f"{label}:{ln} `{name}` not in the SVD (no such register of {', '.join(sorted(local))})")
     return {"totals": tot, "fails": fails,
             "ok": tot["names_bad"] == 0 and tot["support_bad"] == 0 and tot["sec_bad"] == 0 and tot["numbers_bad"] == 0}
 
@@ -801,6 +1010,9 @@ def cmd_sections(args) -> int:
     for c in wl["chapters"]:
         print(f"  {c['chapter']:>4} {c['pages'][0]:5}-{c['pages'][1]:<5} {c['n_pages']:4}p "
               f"prose {c['prose_tokens']:7,}  units {c['n_units']:3} (frozen {c['n_frozen']})  {c['title']}  [{'; '.join(c['why'])}]")
+        for entry, files in c.get("stale_entries", {}).items():
+            print(f"       stale frozen entry {entry[:12]} ({', '.join(files)} changed since): re-freeze, "
+                  "or `rm-freeze --retire`")
     if wl["not_in_use"]:
         print("  not in use (DT okay, no driver): " + ", ".join(
             f"{x['peripheral']} (ch.{x['chapter']})" for x in wl["not_in_use"]))
@@ -851,8 +1063,16 @@ def cmd_text(args) -> int:
     root = atlas_dir(args.atlas_dir)
     rm = RmDoc.load(root, args.rm_doc)
     _, units = _resolve_units(rm, args.what, None)
+    out = []
     for u in units:
-        sys.stdout.write(render_lines(rm.unit_lines(u)))
+        lines = rm.unit_lines(u)
+        gap = missing_pages(u, lines)
+        if gap:  # the guard: a cut that loses pages would be distilled without them, silently
+            raise SystemExit(f"rm-text {u['id']}: the text misses p.{', p.'.join(map(str, gap))} of its range "
+                             f"p.{u['pages'][0]}-{u['pages'][1]}; nothing printed (a tool bug: report it, "
+                             "and read those pages with Read meanwhile)")
+        out.append(render_lines(lines))
+    sys.stdout.write("".join(out))
     return 0
 
 
@@ -890,6 +1110,19 @@ def cmd_check(args) -> int:
 
 def cmd_freeze(args) -> int:
     root = atlas_dir(args.atlas_dir)
+    if args.retire:
+        path = find_entry(root, args.rm_doc, args.retire)
+        by = find_entry(root, args.rm_doc, args.by).name if args.by else None
+        if by == path.name:
+            raise SystemExit("--by names the entry being retired")
+        e = supersede(path, by, args.note or "retired by rm-freeze --retire")
+        print(f"retired cache/llm/{path.name} ({', '.join(e.get('sections', {}))}; model {e.get('model')})"
+              + (f", superseded by {by}" if by else "") + ": marked, not deleted")
+        return 0
+    if not (args.item or args.sections):
+        raise SystemExit("rm-freeze: give --item or --sections (or --retire <entry>)")
+    if not args.model:
+        raise SystemExit("rm-freeze: --model is required when freezing")
     rm = RmDoc.load(root, args.rm_doc)
     name, units = _resolve_units(rm, args.item, args.sections)
     files = [f for f in (args.files or "").split(",") if f] or [f"s/{name}.md"]
@@ -907,13 +1140,20 @@ def cmd_freeze(args) -> int:
         "files": hashes,
         "checks": {rel: (len(checks[rel]["fails"]) if rel in checks and checks[rel]["sha256"] == h else None)
                    for rel, h in hashes.items()},
-        "created": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "created": _now(),
         **({"note": args.note} if args.note else {}),
     }
     key = sha256_text(json.dumps({"procedure": PROCEDURE, "model": args.model,
                                   "units": sorted(entry["sections"].values())}, sort_keys=True))
+    # entries this one replaces (the same files and sections, frozen earlier or by another model):
+    # marked superseded so they can never decide a unit's status again
+    old = [(f, e) for f, e in rm_entries(root, rm.doc_id)
+           if f.stem != key and not e.get("superseded") and covered_by(e, entry)]
     write_json(root / "cache" / "llm" / f"{key}.json", entry)
     print(f"frozen {name}: {len(units)} sections, {len(files)} files -> cache/llm/{key}.json")
+    for f, e in old:
+        supersede(f, f"{key}.json", f"replaced by a freeze of the same files and sections (model {args.model})")
+        print(f"  superseded cache/llm/{f.name} (model {e.get('model')}, {e.get('created')}): marked, not deleted")
     return 0
 
 
@@ -945,12 +1185,16 @@ def register(sub, groups) -> None:
     p.add_argument("--chapter", help="only files of this chapter")
     p.set_defaults(func=cmd_check)
 
-    p = mcu.add_parser("rm-freeze", help="record distilled RM files as frozen LLM output, keyed by page content")
+    p = mcu.add_parser("rm-freeze", help="record distilled RM files as frozen LLM output, keyed by page content; "
+                                         "--retire marks an old entry superseded")
     p.add_argument("rm_doc")
-    g = p.add_mutually_exclusive_group(required=True)
+    g = p.add_mutually_exclusive_group()
     g.add_argument("--item", help="a worklist item id")
     g.add_argument("--sections", help="comma list of section ids the files cover")
+    g.add_argument("--retire", metavar="ENTRY",
+                   help="mark a cache/llm/ entry (file name or unique key prefix) superseded; it is kept, never deleted")
+    p.add_argument("--by", metavar="ENTRY", help="with --retire: the entry that replaces it")
     p.add_argument("--files", help="comma list of files under docs/<rm>/ (default s/<item>.md)")
-    p.add_argument("--model", required=True, help="the model that wrote them")
-    p.add_argument("--note", help="free text kept in the cache entry")
+    p.add_argument("--model", help="the model that wrote them (required when freezing)")
+    p.add_argument("--note", help="free text kept in the cache entry (with --retire: the reason)")
     p.set_defaults(func=cmd_freeze)

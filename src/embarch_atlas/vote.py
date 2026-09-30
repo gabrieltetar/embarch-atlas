@@ -9,7 +9,13 @@ adjudicate.py, gen_field_notes.py). Deterministic: no LLM.
    Parametric names expand per bit when the RM gives the range: `IMx (x = 36 to 32)`
    on bits 4:0 is IM36..IM32.
 2. Diff each against the SVD register it maps to, bit by bit: offset, reset
-   (RM `X` digits masked), names, reserved vs defined, access.
+   (RM `X` digits masked), names, reserved vs defined, access. Names compare by bit range
+   first: an SVD field whose bits are exactly an RM field's, or one element's of an RM vector
+   or parametric field (`MODEy[1:0]` with `(y = 15 to 0)` is MODE0..MODE15, two bits each;
+   `SELm+3[7:0]` with `(m = 4 * (x - 1))` in SELCR2 is SEL7), must carry the same name; a
+   different one is a `name differs` finding, marked `family` (MODERy for the RM's MODEy) or
+   `bit-range` (SEL24_31 for the RM's SEL3) when it has that shape. SVD fields that line up
+   with no RM piece keep the looser per-bit comparison.
 3. Adjudicate each difference with the header (`_Pos`/`_Msk`, bases) and a device
    filter: RM Table 1 ("peripherals versus devices") and per-bit "only available
    in <parts>" / "reserved in <parts>" notes. A family-wide RM feature the part
@@ -30,6 +36,7 @@ sides with the SVD), `alternate-view` (the header defines both: two views of one
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -488,6 +495,122 @@ def _equiv(rm_name: str, svd_name: str) -> bool:
     return bool(m and svd_name.startswith(m.group(1)) and re.search(r"[a-z]", a))
 
 
+# ---- field names: by bit range first, then by name
+
+PARAM_RE = re.compile(r"^([A-Za-z0-9_]*?[A-Z0-9_])([a-z])([+-]\d+)?(?:\[(\d+):(\d+)\])?$")  # MODEy[1:0], SELm+3[7:0], IMx
+VEC_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_]*?)\[(\d+):(\d+)\]$")                          # CH[18:0]
+
+
+def _var_defs(text: str) -> dict[str, tuple]:
+    """Index variables a field text defines: `(y = 15 to 0)` -> ("range", 15, 0); `(m = 4 * (x - 1))`
+    -> ("expr", "4 * (x - 1)")."""
+    out: dict[str, tuple] = {}
+    for m in re.finditer(r"\(\s*([a-z])\s*=\s*", text or ""):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            i += 1
+        expr = text[m.end():i - 1].strip() if depth == 0 else ""
+        r = re.fullmatch(r"(\d+)\s*to\s*(\d+)", expr)
+        if r:
+            out.setdefault(m.group(1), ("range", int(r.group(1)), int(r.group(2))))
+        elif expr and re.fullmatch(r"[\dx\s+*()-]+", expr):
+            out.setdefault(m.group(1), ("expr", expr))
+    return out
+
+
+def _eval_index(expr: str, x: int) -> int | None:
+    """`4 * (x - 1)` at x: integer arithmetic over x only."""
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return None
+    ok = (ast.Expression, ast.BinOp, ast.Add, ast.Sub, ast.Mult, ast.UnaryOp, ast.USub, ast.Constant, ast.Name, ast.Load)
+    for n in ast.walk(tree):
+        if not isinstance(n, ok) or (isinstance(n, ast.Name) and n.id != "x") or \
+                (isinstance(n, ast.Constant) and not isinstance(n.value, int)):
+            return None
+    return eval(compile(tree, "<index>", "eval"), {"__builtins__": {}}, {"x": x})
+
+
+def rm_elements(f: dict, defs: dict, x: int | None = None) -> list[tuple[str, int, int, bool]]:
+    """(name, hi, lo, resolved) for the named pieces of one RM field: the field itself, then each
+    element of a vector or parametric field.
+
+    `CH[18:0]` over 18:0 -> CH, then CH0..CH18 one bit each; `MODEy[1:0]` over 31:0 with
+    `(y = 15 to 0)` -> MODE0 at 1:0 .. MODE15 at 31:30; `SELm+3[7:0]` with `(m = 4 * (x - 1))`
+    in register instance x = 2 -> SEL7. A parametric name the text does not resolve stays
+    parametric (resolved False): it compares by its stem only."""
+    name, hi, lo = f["name"], f["hi"], f["lo"]
+    n = hi - lo + 1
+    m = PARAM_RE.match(name)
+    if m:
+        stem, var, off, bh, bl = m.groups()
+        off = int(off or 0)
+        w = int(bh) - int(bl) + 1 if bh is not None else 1
+        d = defs.get(var)
+        if d and d[0] == "range":
+            a, b = sorted(d[1:])
+            if n == w * (b - a + 1):
+                return [(stem + var, hi, lo, False)] + [
+                    (f"{stem}{a + k + off}", lo + k * w + w - 1, lo + k * w, True) for k in range(b - a + 1)]
+        elif d and d[0] == "expr" and x is not None and n == w:
+            v = _eval_index(d[1], x)
+            if v is not None:
+                return [(f"{stem}{v + off}", hi, lo, True)]
+        return [(_strip_idx(name), hi, lo, False)]
+    out = [(_strip_idx(name), hi, lo, True)]
+    v = VEC_RE.match(name)
+    # per-bit elements only for a vector whose base ends in a letter: SQ1[3:0] is one 4-bit field
+    if v and hi > lo and not v.group(1)[-1].isdigit() and abs(int(v.group(2)) - int(v.group(3))) == hi - lo:
+        first = min(int(v.group(2)), int(v.group(3)))
+        out += [(f"{v.group(1)}{first + k}", lo + k, lo + k, True) for k in range(n)]
+    return out
+
+
+def _split_index(name: str) -> tuple[str, str | None]:
+    """`MODER15` -> (MODER, 15); `SEL24_31` -> (SEL, 24_31); `CRCEN` -> (CRCEN, None)."""
+    m = re.fullmatch(r"(.*?[A-Za-z_])(\d+(?:_\d+)?)", name)
+    return (m.group(1), m.group(2)) if m else (name, None)
+
+
+def _param_stem(name: str) -> str | None:
+    m = PARAM_RE.match(name)
+    return m.group(1) if m else None
+
+
+def _same_name(rm_name: str, resolved: bool, svd_name: str) -> bool:
+    if resolved:
+        return rm_name == svd_name
+    stem = _param_stem(rm_name) or rm_name   # a parametric name: its stem against the SVD name's
+    return stem == _split_index(svd_name)[0].rstrip("_")
+
+
+def name_style(rm_name: str, svd_name: str, cores: set[str], hi: int, lo: int) -> str | None:
+    """How a name difference is shaped: `family` (the SVD names each field after its register:
+    MODERy for the RM's MODEy, IDRy for IDy), `bit-range` (an indexed field numbered by its bits
+    in the SVD, SEL24_31, and by its line in the RM, SEL3), else None."""
+    rs, ri = _split_index(rm_name)
+    ss, si = _split_index(svd_name)
+    if rs == ss and ri is not None and si is not None and "_" in si and "_" not in ri:
+        a, b = map(int, si.split("_"))
+        if (min(a, b), max(a, b)) == (lo, hi):
+            return "bit-range"
+    if ri is not None and ri == si and rs != ss and (ss.startswith(rs) or rs.startswith(ss)) and (ss in cores or rs in cores):
+        return "family"
+    return None
+
+
+def _style_note(style: str | None, rm_names: list[str], svd_names: list[str]) -> str:
+    if style == "family":
+        rs, ss = _split_index(rm_names[0])[0], _split_index(svd_names[0])[0]
+        return f" (family naming: the SVD names each field after its register, {ss}y for the RM's {rs}y)"
+    if style == "bit-range":
+        return (f" (indexed-field naming split: the SVD numbers the fields by bit range, {svd_names[0]}, "
+                f"the RM by line, {rm_names[0]})")
+    return ""
+
+
 def _svd_bits(reg: dict) -> tuple[list, list]:
     names: list[str | None] = [None] * 32
     acc: list[str | None] = [None] * 32
@@ -523,6 +646,7 @@ def diff_register(rmr: dict, sreg: dict) -> list[dict]:
     bn, bd, ba = rmr["bitname"], rmr["bitdecl"], rmr["bitacc"]
     al = rmr.get("bitalias") or [None] * 32
     sn, sa = _svd_bits(sreg)
+    strict = _names_by_range(rmr, sreg, bn)
     groups: dict[tuple, list[int]] = {}
     for b in range(w):
         rmn = bn[b]
@@ -531,15 +655,25 @@ def diff_register(rmr: dict, sreg: dict) -> list[dict]:
             groups.setdefault(("SVD defines a bit RM reserves", sn[b]), []).append(b)
         elif not rmres and not sn[b]:
             groups.setdefault(("RM defines a bit SVD omits", _strip_idx(bd[b])), []).append(b)
+        elif not rmres and sn[b] and b in strict:  # an SVD field whose bit range is an RM field's or element's
+            if strict[b] is not None:
+                decl = bd[b] or ""
+                groups.setdefault(("name differs", _param_stem(_strip_idx(decl)) or _strip_idx(decl)), []).append(b)
         elif not rmres and sn[b] and not _equiv(rmn, sn[b]) and al[b] != sn[b] and not _suffix_equiv(rmr, b, sn[b]):
             groups.setdefault(("name differs", _strip_idx(bd[b])), []).append(b)
         if not rmres and sn[b] and ba[b] and RM_COARSE.get(ba[b], ba[b]) != sa[b]:
             groups.setdefault(("access differs", f"{_strip_idx(rmn)} RM {ba[b]} / SVD {sa[b]}"), []).append(b)
     for (kind, key), bits in groups.items():
-        rm_names = sorted({_strip_idx(bn[b]) for b in bits if bn[b]}, key=_natural)
+        # a name difference found by bit range names the RM's element (MODE5), not its declaration (MODEy)
+        rmname = {b: (strict[b][0] if kind == "name differs" and strict.get(b) else _strip_idx(bn[b]))
+                  for b in bits if bn[b]}
+        rm_names = sorted(set(rmname.values()), key=_natural)
         svd_names = sorted({sn[b] for b in bits if sn[b]}, key=_natural)
+        style = None
         if kind == "name differs":
-            detail = f"RM {', '.join(rm_names)} / SVD {', '.join(svd_names)}"
+            styles = {strict[b][1] for b in bits if strict.get(b)}
+            style = styles.pop() if len(styles) == 1 and all(strict.get(b) for b in bits) else None
+            detail = f"RM {', '.join(rm_names)} / SVD {', '.join(svd_names)}" + _style_note(style, rm_names, svd_names)
             extra = (rm_names, svd_names)
         elif kind == "access differs":
             detail, extra = key, (ba[bits[0]], sa[bits[0]])
@@ -547,9 +681,44 @@ def diff_register(rmr: dict, sreg: dict) -> list[dict]:
             detail, extra = key, None
         out.append({"kind": kind, "detail": detail, "bits": _rng(bits), "bitlist": sorted(bits), "extra": extra,
                     "rm_names": rm_names, "rm_aliases": sorted({al[b] for b in bits if al[b]}),
-                    "bit_names": {b: _strip_idx(bn[b]) for b in bits if bn[b]},
+                    "bit_names": rmname,
                     "bit_aliases": {b: al[b] for b in bits if al[b]},
-                    "svd_bit_names": {b: sn[b] for b in bits if sn[b]}, "svd_names": svd_names})
+                    "svd_bit_names": {b: sn[b] for b in bits if sn[b]}, "svd_names": svd_names,
+                    **({"style": style} if style else {})})
+    return out
+
+
+def _names_by_range(rmr: dict, sreg: dict, bn: list) -> dict[int, tuple[str, str | None] | None]:
+    """bit -> None (same name) or (RM name, style) for every bit of an SVD field whose bit range is
+    exactly an RM field's or one element's (rm_elements): those compare by name, strictly, so a
+    MODEy/MODERy or ID/IDR difference is a finding. Bits of SVD fields that line up with no RM
+    piece are left to the per-bit comparison."""
+    x = rmr.get("x")
+    defs_all: dict[str, tuple] = {}
+    for f in rmr["fields"]:
+        for k, v in _var_defs(f.get("text", "")).items():
+            defs_all.setdefault(k, v)
+    pieces: dict[tuple[int, int], tuple[str, bool]] = {}
+    for f in rmr["fields"]:
+        if f["name"] == "Reserved":
+            continue
+        for nm, h, l, ok in rm_elements(f, {**defs_all, **_var_defs(f.get("text", ""))}, x):
+            pieces.setdefault((h, l), (nm, ok))
+    cores = {_core(rmr["name"]), _core(sreg["name"]), sreg["name"]}
+    out: dict[int, tuple[str, str | None] | None] = {}
+    for sf in sreg["fields"].values():
+        h, l = sf["bits"]
+        hit = pieces.get((h, l))
+        if hit is None or any(not 0 <= b < 32 or bn[b] in (None, "Reserved") for b in range(l, h + 1)):
+            continue
+        nm, ok = hit
+        whole = _strip_idx(_field_of_bit(rmr, l)["name"])
+        # the SVD keeping the RM field's own name on part of its bits is a width question (the
+        # per-bit comparison reports the bits it lacks), not a naming one
+        same = _same_name(nm, ok, sf["name"]) or sf["name"] == whole
+        res = None if same else (nm, name_style(nm, sf["name"], cores, h, l))
+        for b in range(l, h + 1):
+            out[b] = res
     return out
 
 
@@ -578,13 +747,15 @@ def _field_of_bit(rmr: dict, bit: int) -> dict | None:
     return next((f for f in rmr["fields"] if f["lo"] <= bit <= f["hi"]), None)
 
 
-def _covers(hdr: "Header", typ: str, reg: str, name: str, bits: list[int]) -> tuple | None:
-    """(define, line) when the header's TYPE_REG_NAME mask (or position) covers every bit."""
+def _covers(hdr: "Header", typ: str, reg: str, name: str, bits: list[int], at_lsb: bool = False) -> tuple | None:
+    """(define, line) when the header's TYPE_REG_NAME mask (or position) covers every bit. `at_lsb`
+    (a naming vote): a define whose position is the lowest bit is enough, even with a narrower mask
+    (a header masking only the valid codes of an 8-bit selector)."""
     mk = hdr.mask(typ, reg, name)
-    if mk:
-        return (f"{typ}_{reg}_{name}_Msk", mk[1]) if all((mk[0] >> b) & 1 for b in bits) else None
     h = hdr.field(typ, reg, name)
-    if h and len(bits) == 1 and h[1] == bits[0]:
+    if mk and all((mk[0] >> b) & 1 for b in bits):
+        return (f"{typ}_{reg}_{name}_Msk", mk[1])
+    if h and h[1] == min(bits) and (at_lsb or (len(bits) == 1 and not mk)):
         return (h[0] + "_Pos", h[2])
     return None
 
@@ -630,11 +801,14 @@ def adjudicate(d: dict, rmr: dict, sreg: dict, typ: str, hdr: Header, part: str,
     if kind == "name differs":
         rm_names, svd_names = d["extra"]
 
+        spans: dict[str, list[int]] = {}
+
         def side(bitmap: dict) -> dict:
             by: dict[str, list[int]] = {}
             for bt, nm in bitmap.items():
                 by.setdefault(nm, []).append(bt)
-            return {nm: _covers(hdr, typ, reg, nm, bs) for nm, bs in by.items()}
+            spans.update(by)
+            return {nm: _covers(hdr, typ, reg, nm, bs, at_lsb=True) for nm, bs in by.items()}
 
         ca = side(d["bit_names"])
         if not all(ca.values()) and d.get("bit_aliases"):
@@ -643,7 +817,8 @@ def adjudicate(d: dict, rmr: dict, sreg: dict, typ: str, hdr: Header, part: str,
         rm_ok, svd_ok = bool(ca) and all(ca.values()), bool(cb) and all(cb.values())
         for nm, c in list(ca.items()) + list(cb.items()):
             if c:
-                hsrc.append({"define": c[0], "says": f"{nm} at bit(s) {d['bits'][0]}:{d['bits'][1]}", "line": c[1]})
+                bs = spans.get(nm) or d["bitlist"]
+                hsrc.append({"define": c[0], "says": f"{nm} at bit(s) {max(bs)}:{min(bs)}", "line": c[1]})
         if rm_ok and not svd_ok:
             return "svd-naming-defect", hsrc, "header uses the RM name"
         if svd_ok and not rm_ok:
@@ -889,9 +1064,11 @@ def run_vote(rm: RmDoc, svd: SvdDoc, hdr: Header, only: list[str] | None = None)
 
 
 def _svd_ref(svd: SvdDoc, per: str, reg: str, names: list[str] | None) -> list[str]:
+    """SVD record ids a vote record refs: only ids that exist (a register the SVD lacks has none;
+    doc check R resolves every ref against docs/)."""
     base = f"{svd.part}.reg.{per}.{reg}"
-    out = [base]
     r = svd.regs.get(per, {}).get(reg)
+    out = [base] if r else []
     for n in names or []:
         if r and n in r["fields"]:
             out.append(f"{base}.{n}")
@@ -959,7 +1136,7 @@ def _quirk(svd, rm, uid, per, reg, d, rmr, reason) -> dict:
         "note": f"§{rmr['section']}", "class": "variant",
         "text": f"{per}.{reg}: the RM (a family superset) defines {', '.join(names) or rmr['name']}; "
                 f"not on {svd.device}, so the SVD correctly omits it ({reason})",
-        "refs": [f"{svd.part}.reg.{per}.{reg}"],
+        "refs": _svd_ref(svd, per, reg, None),
     }
 
 
@@ -985,7 +1162,7 @@ def render_fields_md(rm: RmDoc, chapter: str, rules: list[dict]) -> str | None:
         p = r["p"] if isinstance(r["p"], int) else r["p"][0]
         pr = f"p.{p}" if isinstance(r["p"], int) else f"p.{r['p'][0]}-{r['p'][-1]}"
         lines.append(f"- `{r['reg']}.{r['field']}`{'' if r['svd'] else ' (not in SVD)'} [§{r['sec']} {pr}] {r['text']}")
-    lines += ["", f"{len(rs)} constraint sentences."]
+    lines += ["", f"<!-- {len(rs)} constraint sentences -->"]   # a count, not a claim: doc check M skips comments
     return "\n".join(lines) + "\n"
 
 

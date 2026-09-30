@@ -322,7 +322,7 @@ An atlas id is `<target>@<commit12>`.
 | `doc freeze <doc_id> [--model M]` / `doc thaw-check <doc_id> [--from <old>] [--restore]` | `freeze` | record the LLM-written units in `cache/llm/`; after a new `doc prep`, list which frozen units are still valid and which go back to the LLM |
 | `mcu svd <svd> --doc-id <id>` | `svd` | registers/fields as records under the SVD doc |
 | `mcu vote --svd-doc <id> --rm-doc <id> [--header <h>] [--periph P]` | `vote` | SVD vs header vs RM: `conflict` / `quirk` (correct omission) / `rule` records under the RM doc |
-| `mcu rm-outline` / `rm-sections <atlas>` / `rm-text` / `rm-check` / `rm-freeze` | `rm` | outline; the worklist for peripherals in use; one work item's text with `[p.N]` markers; verify distilled RM files; freeze them in `cache/llm/` |
+| `mcu rm-outline` / `rm-sections <atlas>` / `rm-text` / `rm-check` / `rm-freeze [--retire]` | `rm` | outline; the worklist for peripherals in use; one work item's text with `[p.N]` markers; verify distilled RM files; freeze them in `cache/llm/` |
 | `build <target> [<commit>]` | `build` | worktree, west build, artifacts, stamp |
 | `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md |
 | `second-look queue <atlas>` / `second-look record` | `secondlook` | facts this atlas uses that need a second look; record verdicts |
@@ -344,7 +344,9 @@ An atlas id is `<target>@<commit12>`.
 RM worklist units are keyed by section id + page-text hashes + procedure version;
 the model goes into the cache entry, so regrouping work items never invalidates
 frozen output. Second-look verdicts are frozen as `cache/llm/sl-<key>.json` and
-reused by every later atlas whose fact has the same content hash.
+reused by every later atlas whose fact has the same content hash. When several entries share a
+unit key, the one whose recorded file hashes match the files on disk wins, then the newest; a
+newer freeze of the same files marks the older entry `superseded` (kept, never deleted).
 
 ## Not yet built (deliberately)
 

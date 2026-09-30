@@ -99,6 +99,7 @@ def test_vote_end_to_end(tmp_path, capsys):
     # a whole register the RM and the header have and the SVD lacks
     brr = next(c for c in conf.values() if "UART_BRR" in c["text"])
     assert _verdict(brr) == "svd-defect" and "register missing from SVD" in brr["text"]
+    assert brr["refs"] == []                                     # no SVD record to ref: doc check R stays clean
     # family-wide features the part lacks are omissions, not defects
     qt = " ".join(q["text"] for q in quirks)
     assert "AUXEN" in qt and "CRCEN" in qt and "CRC: in the RM" in qt
@@ -116,7 +117,9 @@ def test_vote_end_to_end(tmp_path, capsys):
     assert all(r["p"] == 4 and r["id"].startswith("demo-rm.rule.reg.UART1.UART_CR.EN.") for r in en)
     assert all(r["note"] == "§2.3.1; SVD demom2.reg.UART1.UART_CR.EN" for r in en)
     assert any(vote.rule_view(r)["field"] == "DATA" and "not allowed" in r["q"] for r in rules)
-    assert "`UART_CR.EN` [§2.3.1 p.4]" in (rd / "s" / "2.fields.md").read_text()
+    fields_md = (rd / "s" / "2.fields.md").read_text()
+    assert "`UART_CR.EN` [§2.3.1 p.4]" in fields_md
+    assert fields_md.rstrip().splitlines()[-1].startswith("<!-- ")   # the count is not a numeric claim for M
     # records the vote writes pass the shared record schema
     from embarch_atlas.records import validate
     for rec in list(conf.values()) + quirks + rules:
@@ -162,3 +165,123 @@ def test_vote_is_idempotent_and_scoped(tmp_path):
     _run(*args, "--periph", "UART1")   # re-voting one peripheral keeps the others' records
     ids = [c["id"] for c in read_jsonl(f)]
     assert any(i.endswith("periph.AUX") for i in ids) and any(".UART1." in i for i in ids)
+
+
+# --------------------------------------------------------------------------- field names: bit range first
+
+from test_rm import _page  # noqa: E402
+
+from embarch_atlas import rm  # noqa: E402
+
+PORT_PAGES = [
+    _page(1, "Port block (PORT)", """
+1        Port block (PORT)
+
+1.1      PORT registers
+1.1.1    PORT mode register (PORTx_MODER)
+         Address offset: 0x00
+         Reset value: 0x0000 0000
+       Bits 31:8 Reserved, must be kept at reset value.
+       Bits 7:0 MODEy[1:0]: Port x mode of pin y (y = 3 to 0)
+                00: input
+                01: output
+
+1.1.2    PORT input data register (PORTx_IDR)
+         Address offset: 0x04
+         Reset value: 0x0000 0000
+       Bits 31:4 Reserved, must be kept at reset value.
+       Bits 3:0 ID[3:0]: Input data of pin y (y = 3 to 0)
+
+1.1.3    PORT output type register (PORTx_OTYPER)
+         Address offset: 0x08
+         Reset value: 0x0000 0000
+       Bits 31:4 Reserved, must be kept at reset value.
+       Bits 3:0 OT[3:0]: Output type of pin y (y = 3 to 0)
+"""),
+    _page(2, "Port block (PORT)", """
+1.1.4    PORT line select register x (PORT_LSELRx)
+         Address offset: 0x10 + 0x4 * (x - 1), (x = 1 to 2)
+         Reset value: 0x0000 0000
+       Bits 31:16 Reserved, must be kept at reset value.
+       Bits 15:8 LSELm+1[7:0]: Line m+1 port selection (m = 2 * (x - 1))
+       Bits 7:0 LSELm[7:0]: Line m port selection (m = 2 * (x - 1))
+
+1.1.5    PORT register map
+"""),
+]
+PORT_TOC = [[1, "1 Port block (PORT)", 1], [2, "1.1 PORT registers", 1],
+            [3, "1.1.1 PORT mode register (PORTx_MODER)", 1], [3, "1.1.2 PORT input data register (PORTx_IDR)", 1],
+            [3, "1.1.3 PORT output type register (PORTx_OTYPER)", 1],
+            [3, "1.1.4 PORT line select register x (PORT_LSELRx)", 2], [3, "1.1.5 PORT register map", 2]]
+PORT_HEADER = "\n".join(
+    [f"#define PORT_MODER_MODE{k}_Pos (%dU)\n#define PORT_MODER_MODE{k}_Msk (0x3UL << PORT_MODER_MODE{k}_Pos)" % (2 * k)
+     for k in range(4)]
+    + [f"#define PORT_IDR_ID{k}_Pos ({k}U)\n#define PORT_IDR_ID{k}_Msk (0x1UL << PORT_IDR_ID{k}_Pos)" for k in range(4)]
+    # the header masks only the valid codes of each 8-bit selector: a narrower mask at the same position
+    + [f"#define PORT_LSELR1_LSEL{k}_Pos (%dU)\n#define PORT_LSELR1_LSEL{k}_Msk (0x3UL << PORT_LSELR1_LSEL{k}_Pos)" % (8 * k)
+       for k in range(2)]) + "\n"
+
+
+def _svd_reg(name: str, off: str, fields: dict[str, list[int]]) -> dict:
+    return {"name": name, "off": off, "reset": "0x00000000", "access": "rw",
+            "fields": {n: {"name": n, "bits": b, "access": "rw"} for n, b in fields.items()}}
+
+
+PORT_SVD = {
+    "PORTx_MODER": _svd_reg("MODER", "0x0", {f"MODER{k}": [2 * k + 1, 2 * k] for k in range(4)}),
+    "PORTx_IDR": _svd_reg("IDR", "0x4", {f"IDR{k}": [k, k] for k in range(4)}),
+    "PORTx_OTYPER": _svd_reg("OTYPER", "0x8", {f"OT{k}": [k, k] for k in range(4)}),
+    "PORT_LSELR1": _svd_reg("LSELR1", "0x10", {"LSEL0_7": [7, 0], "LSEL8_15": [15, 8]}),
+    "PORT_LSELR2": _svd_reg("LSELR2", "0x14", {"LSEL0_7": [7, 0], "LSEL8_15": [15, 8]}),
+}
+
+
+def _port_votes(tmp_path) -> dict[str, list[tuple[dict, str]]]:
+    layer = rm.TextLayer(pages=PORT_PAGES)
+    o = rm.build_outline(PORT_TOC, [10, 10], layer, "demo-rm@1", 2)
+    r = rm.RmDoc("demo-rm@1", o, layer)
+    (tmp_path / "port.h").write_text(PORT_HEADER)
+    hdr = vote.Header(vote.parse_header(tmp_path / "port.h"))
+    out = {}
+    for e in vote.register_sections(r, "1"):
+        rmr, _ = vote.parse_register_section(r, e)
+        assert rmr["parse_ok"] or rmr["coverage"] == rmr["width"], rmr["name"]
+        for inst in vote.expand_parametric(rmr):
+            sreg = PORT_SVD[inst["name"]]
+            out[inst["name"]] = [(d, vote.adjudicate(d, inst, sreg, "PORT", hdr, "DEMOM2", {})[0])
+                                 for d in vote.diff_register(inst, sreg)]
+    return out
+
+
+def test_field_names_compare_by_bit_range_family_and_bit_range_splits(tmp_path):
+    v = _port_votes(tmp_path)
+    # MODEy[1:0] (y = 3 to 0) is MODE0..MODE3, two bits each; the SVD calls them MODER0..MODER3
+    (d, verdict), = v["PORTx_MODER"]
+    assert d["kind"] == "name differs" and d["style"] == "family" and verdict == "svd-naming-defect"
+    assert d["rm_names"] == ["MODE0", "MODE1", "MODE2", "MODE3"] and d["svd_names"] == ["MODER0", "MODER1", "MODER2", "MODER3"]
+    assert "the SVD names each field after its register, MODERy for the RM's MODEy" in d["detail"]
+    (d, verdict), = v["PORTx_IDR"]                                    # ID[3:0] bit by bit vs IDR0..IDR3
+    assert d["style"] == "family" and d["rm_names"][0] == "ID0" and verdict == "svd-naming-defect"
+    assert v["PORTx_OTYPER"] == []                                     # OT[3:0] is OT0..OT3: same names
+    # LSELm (m = 2 * (x - 1)): register 1 holds lines 0 and 1, register 2 lines 2 and 3; the SVD
+    # numbers every register's fields by their bits
+    (d, verdict), = v["PORT_LSELR1"]
+    assert d["style"] == "bit-range" and d["rm_names"] == ["LSEL0", "LSEL1"] and d["svd_names"] == ["LSEL0_7", "LSEL8_15"]
+    assert verdict == "svd-naming-defect"                              # the header's LSEL0/LSEL1, at those positions
+    (d, verdict), = v["PORT_LSELR2"]
+    assert d["rm_names"] == ["LSEL2", "LSEL3"] and d["style"] == "bit-range" and verdict == "unresolved"
+
+
+def test_rm_elements_and_index_variables():
+    f = lambda name, hi, lo: {"name": name, "hi": hi, "lo": lo}  # noqa: E731
+    assert vote._var_defs("pin y (y = 15 to 0)") == {"y": ("range", 15, 0)}
+    assert vote._var_defs("line m (m = 4 * (x - 1))") == {"m": ("expr", "4 * (x - 1)")}
+    assert vote._eval_index("4 * (x - 1)", 3) == 8 and vote._eval_index("__import__('os')", 1) is None
+    assert vote.rm_elements(f("CH[2:0]", 2, 0), {}) == [("CH", 2, 0, True), ("CH0", 0, 0, True), ("CH1", 1, 1, True),
+                                                        ("CH2", 2, 2, True)]
+    assert vote.rm_elements(f("SQ1[3:0]", 3, 0), {}) == [("SQ1", 3, 0, True)]      # one 4-bit field, not SQ10..SQ13
+    assert vote.rm_elements(f("SELm+3[7:0]", 31, 24), {"m": ("expr", "4 * (x - 1)")}, x=2) == [("SEL7", 31, 24, True)]
+    assert vote.rm_elements(f("SELm+3[7:0]", 31, 24), {}, x=2) == [("SELm+3", 31, 24, False)]   # unresolved: stem only
+    assert vote.name_style("MODE5", "MODER5", {"MODER"}, 11, 10) == "family"
+    assert vote.name_style("SEL3", "SEL24_31", {"SELCR1"}, 31, 24) == "bit-range"
+    assert vote.name_style("RXNE", "RXNEF", {"SR"}, 1, 1) is None

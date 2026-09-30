@@ -418,6 +418,181 @@ def test_rm_check_flags_names_pages_sections_and_numbers(tmp_path, capsys):
     assert len(rep["files"]["s/2.1-2.2.md"]["fails"]) == 5
 
 
+def test_rm_check_tags_per_clause_svd_cites_and_not_claims(tmp_path, capsys):
+    root = demo_atlas(tmp_path)
+    s = root / "docs" / "demo-rm@1" / "s"
+    s.mkdir(exist_ok=True)
+    (s / "2.2.md").write_text("\n".join([
+        "- margin 44 (derived); samples at 99 times [§2.2.2 p.4]",       # the tag covers 44 only: 99 fails
+        "- samples at 16 times [§2.2.2 p.4]; the UART1 IRQ is 55 [SVD]",  # 55 is in the [SVD] clause
+        "7. Set `UART_CR.EN` first [§2.1 p.3]",                           # a list marker is not a claim
+        "- `UART_CR.MODE` = 0b001 is loopback, 0b111 is not [§2.3.1 p.4]",  # 0b001 is printed as 001:
+        "- 77x oversampling, 16x in the RM [§2.2.2 p.4]",                 # digits glued to a letter count
+        "- see `s/2.2-2.3.md`, 1,234 tokens, Tier 2, `UART1` [§2.2.2 p.4]",  # file name, tokens, tier label
+        "- `UART_SR` is read, `UART_CR9` is made up, `LINE0_1` is an IRQ name [§2.3.2 p.4]",
+    ]) + "\n")
+    rc = _run("--atlas-dir", root, "mcu", "rm-check", "demo-rm@1", s / "2.2.md")
+    out = capsys.readouterr().out
+    assert rc == 1
+    fails = [ln.strip() for ln in out.splitlines() if ln.startswith("  ")]
+    assert fails == ["s/2.2.md:1 number 99 not on cited page(s) [4]",
+                     "s/2.2.md:4 number 0b111 not on cited page(s) [4]",
+                     "s/2.2.md:5 number 77 not on cited page(s) [4]",
+                     "s/2.2.md:7 `UART_CR9` not in the SVD (no such register of UART1, UART2)"], out
+    tot = json.loads(out.splitlines()[0].split(": ", 1)[1])
+    assert tot["numbers_tagged"] == 2                                   # 44 and 55
+
+
+def test_number_claims_follow_the_m_clause_rule():
+    c = rm.number_claims
+    assert c("- 38 margin (derived) [§1 p.2]; 777 uA") == [("38", "derived"), ("777", None)]
+    assert c("- 24 V [SVD]; 25 V [§1 p.2]") == [("24", "svd"), ("25", None)]
+    assert c("4. Write 0x1F, 10ms, 8th [§1 p.2]") == [("0x1F", None), ("10", None), ("8", None)]
+    assert c("- `LINE4_15`, `s/1.2-1.3.md`, Tier 1, 2,642 tokens, 1..15") == [("1", None), ("15", None)]
+    assert rm.on_pages("8", "after the 8th pulse") and not rm.on_pages("8", "the 18th, 0x08, 8.5")
+    assert rm.on_pages("0b10", "10: alternate") and rm.on_pages("0x1F", "reset 0x1f")
+
+
+# --------------------------------------------------------------------------- cut: never drop pages
+
+# A chapter whose second section spans a flowchart page (one lone word per line, far indented: what
+# the old layout heuristic took for a rotated table) and ends where the next section heads a page;
+# its register section ends on a rotated register-map page.
+FLOW = "\n".join(" " * 46 + w for w in ["Start", "Init", "No", "FLAG", "=1?", "Yes", "Read", "DATA", "Clear",
+                                        "FLAG", "No", "Last?", "Yes", "Stop", "End", "Wait", "Poll", "Again",
+                                        "Done", "Exit", "FIG-0001"])
+CUT_PAGES = [
+    _page(1, "Widget (WDG)", "1        Widget (WDG)\n\n1.1      WDG overview\n         The widget counts ticks."),
+    _page(2, "Widget (WDG)", "1.2      WDG start sequence\n         Start the widget as Figure 1 shows.\n"
+                             "              Figure 1. Start sequence"),
+    _page(3, "Widget (WDG)", FLOW),
+    _page(4, "Widget (WDG)", "         Then poll FLAG until it reads 1; the count starts 12 ticks later."),
+    _page(5, "Widget (WDG)", "1.3      WDG registers\n1.3.1    WDG control register (WDG_CR)\n"
+                             "         Address offset: 0x00\n         Reset value: 0x0000 0000\n"
+                             "       Bits 31:1 Reserved, must be kept at reset value.\n"
+                             "          Bit 0 EN: Widget enable\n"
+                             "                Note: EN is cleared by hardware on a fault."),
+    _page(6, "Widget (WDG)", "\n".join(" " * 50 + w for w in ["Offset", "Register", "0x00", "WDG_CR", "Res.",
+                                                                 "EN", "Reset", "value", "0", "1.3.2", "WDG",
+                                                                 "register", "map", "Res.", "Res.", "Res.",
+                                                                 "Res.", "Res.", "Res.", "Res.", "Res."])),
+    _page(7, "Other (OTH)", "2        Other (OTH)\n\n2.1      OTH overview\n         Nothing."),
+]
+CUT_TOC = [[1, "1 Widget (WDG)", 1], [2, "1.1 WDG overview", 1], [2, "1.2 WDG start sequence", 2],
+           [2, "1.3 WDG registers", 5], [3, "1.3.1 WDG control register (WDG_CR)", 5],
+           [3, "1.3.2 WDG register map", 6], [1, "2 Other (OTH)", 7], [2, "2.1 OTH overview", 7]]
+
+
+def _cut_rmdoc(vertical=None) -> rm.RmDoc:
+    layer = rm.TextLayer(pages=CUT_PAGES)
+    plain = [rm.tokens(" ".join(p.split())) for p in CUT_PAGES]
+    o = rm.build_outline(CUT_TOC, plain, layer, "demo-rm@1", len(CUT_PAGES), vertical=vertical)
+    return rm.RmDoc("demo-rm@1", o, layer)
+
+
+def _pages(lines) -> list[int]:
+    return sorted({p for p, _ in lines})
+
+
+def test_cut_keeps_the_range_when_the_stop_heading_is_past_it():
+    r = _cut_rmdoc(vertical=[0.0] * 7)
+    e = r.by_id["1.2"]
+    assert (e["start"], e["end"]) == (2, 4)                   # 1.3 heads page 5
+    u = {"id": "1.2", "pages": [2, 4]}
+    lines = r.unit_lines(u)
+    assert _pages(lines) == [2, 3, 4] and rm.missing_pages(u, lines) == []
+    assert "12 ticks later" in rm.render_lines(lines)          # the page after the flowchart is kept
+    # the register parser's cut too: a flowchart is not a rotated table
+    assert _pages(r.cut(e, r.next_after(e), 2, 4)) == [2, 3, 4]
+
+
+def test_cut_at_a_rotated_stop_page_by_text_direction():
+    r = _cut_rmdoc(vertical=[0.0, 0.0, 0.0, 0.0, 0.0, 0.62, 0.0])   # page 6 runs vertically
+    cr = r.by_id["1.3.1"]
+    assert (cr["start"], cr["end"]) == (5, 6)                 # the map's heading is not at the top of page 6
+    assert r.rotated(6) and not r.rotated(3)
+    assert _pages(r.cut(cr, r.next_after(cr), 5, 6)) == [5]    # the register parser stops before the map
+    assert _pages(r.unit_lines({"id": "1.3.1", "pages": [5, 6]})) == [5, 6]   # rm-text keeps every page
+    unknown = _cut_rmdoc(vertical=None)                        # no text direction known: never guess a cut
+    assert unknown.rotated(6) is False
+    assert _pages(unknown.cut(unknown.by_id["1.3.1"], unknown.by_id["1.3.2"], 5, 6)) == [5, 6]
+
+
+def test_rm_text_fails_loudly_when_a_page_would_be_lost(tmp_path, capsys, monkeypatch):
+    root = demo_atlas(tmp_path)
+    real = rm.RmDoc.unit_lines
+    monkeypatch.setattr(rm.RmDoc, "unit_lines", lambda self, u: [x for x in real(self, u) if x[0] != 4])
+    with pytest.raises(SystemExit) as ex:
+        _run("--atlas-dir", root, "mcu", "rm-text", "demo-rm@1", "2.2")
+    assert "misses p.4 of its range p.3-4" in str(ex.value)
+    assert capsys.readouterr().out == ""                        # nothing half-printed
+
+
+# --------------------------------------------------------------------------- frozen entries sharing a unit key
+
+def _entry(root: Path, name: str, sections: dict, files: dict, created: str, **kw) -> Path:
+    f = root / "cache" / "llm" / name
+    write_json(f, {"kind": "rm-distillation", "doc": "demo-rm@1", "procedure": rm.PROCEDURE, "model": "m",
+                   "sections": sections, "pages": {}, "files": files, "created": created, **kw})
+    return f
+
+
+def test_frozen_index_prefers_current_files_then_newest_never_superseded(tmp_path):
+    from embarch_atlas.common import sha256_file
+
+    root = demo_atlas(tmp_path)
+    s = root / "docs" / "demo-rm@1" / "s"
+    s.mkdir(exist_ok=True)
+    (s / "2.1.md").write_text("- `UART_CR.EN` must be set first [§2.1 p.3]\n")
+    (s / "2.must.md").write_text("1. Set `UART_CR.EN` [§2.1 p.3]\n")
+    r = rm.RmDoc.load(root, "demo-rm@1")
+    key = rm.unit_key(r, {"id": "2.1", "pages": [3, 3]})
+    good = {"s/2.1.md": sha256_file(s / "2.1.md")}
+    # the must file changed after its freeze; its entry sorts last by name, as the stale one did
+    _entry(root, "0000.json", {"2.1": key}, good, "2026-01-01T00:00:00Z")
+    _entry(root, "ffff.json", {"2.1": key}, {"s/2.must.md": "0" * 64}, "2026-01-02T00:00:00Z")
+    fz = rm.frozen_index(root, "demo-rm@1")[key]
+    assert fz["entry"] == "0000.json" and fz["files_ok"] and fz["stale"] == {"ffff.json": ["s/2.must.md"]}
+    # two current entries: the newest wins, whatever the names sort as
+    _entry(root, "0001.json", {"2.1": key}, good, "2026-01-03T00:00:00.5Z")
+    assert rm.frozen_index(root, "demo-rm@1")[key]["entry"] == "0001.json"
+    # a superseded entry is never used
+    rm.supersede(root / "cache" / "llm" / "0001.json", "0000.json", "test")
+    assert rm.frozen_index(root, "demo-rm@1")[key]["entry"] == "0000.json"
+    wl = rm.build_worklist(r, IN_USE, svd.SvdDoc.load(root, "demo-svd"), core=["RCC"], frozen=rm.frozen_index(root, "demo-rm@1"))
+    ch2 = next(c for c in wl["chapters"] if c["chapter"] == "2")
+    assert ch2["units"][0]["status"] == "frozen" and ch2["stale_entries"] == {"ffff.json": ["s/2.must.md"]}
+
+
+def test_rm_freeze_supersedes_a_replaced_entry_and_retires_on_request(tmp_path, capsys):
+    root = demo_atlas(tmp_path)
+    s = root / "docs" / "demo-rm@1" / "s"
+    s.mkdir(exist_ok=True)
+    (s / "2.card.md").write_text("# UART card\n")
+    args = ["--atlas-dir", root, "mcu", "rm-freeze", "demo-rm@1", "--sections", "2.1,2.2", "--files", "s/2.card.md"]
+    assert _run(*args, "--model", "model-a") == 0
+    first = list((root / "cache" / "llm").glob("*.json"))
+    assert len(first) == 1
+    (s / "2.card.md").write_text("# UART card, updated by another model\n")
+    assert _run(*args, "--model", "model-b") == 0
+    entries = {f.name: read_json(f) for f in (root / "cache" / "llm").glob("*.json")}
+    assert len(entries) == 2                                     # the old entry is kept ...
+    old = entries[first[0].name]
+    new_name = next(n for n in entries if n != first[0].name)
+    assert old["superseded"]["by"] == new_name                   # ... and marked
+    assert not entries[new_name].get("superseded")
+    idx = rm.frozen_index(root, "demo-rm@1")
+    assert {v["entry"] for v in idx.values()} == {new_name}
+    # --retire marks by key prefix; the file stays
+    capsys.readouterr()
+    assert _run("--atlas-dir", root, "mcu", "rm-freeze", "demo-rm@1", "--retire", new_name[:12]) == 0
+    assert "marked, not deleted" in capsys.readouterr().out
+    assert read_json(root / "cache" / "llm" / new_name)["superseded"]["by"] is None
+    assert rm.frozen_index(root, "demo-rm@1") == {}
+    with pytest.raises(SystemExit):
+        _run("--atlas-dir", root, "mcu", "rm-freeze", "demo-rm@1", "--sections", "2.1")   # no --model
+
+
 @pytest.mark.skipif(shutil.which("pdftotext") is None, reason="poppler pdftotext not installed")
 def test_rm_outline_from_a_real_pdf(tmp_path):
     pymupdf = pytest.importorskip("pymupdf")

@@ -18,8 +18,10 @@ Record checks (per record, against the text layer of the pages it cites):
   U  units           the unit's dimension fits the symbol (V, I, t, R, T, f, C, P, L) or the parameter,
                      and the unit string is on the cited page
   O  order           min <= nom/typ <= max
-  R  references      quirk/conflict refs resolve; ids are unique (a deterministic record and an LLM
-                     record may share an id: they are twins, compared by G)
+  R  references      quirk/conflict refs resolve to a record of any document under docs/ (ids are
+                     globally unique, `<part>.<kind>...`: an RM vote conflict refs SVD registers); ids
+                     are unique (a deterministic record and an LLM record may share an id: they are
+                     twins, compared by G)
   X  invariants      `check` records: expr evaluated over R['<id>'].min/nom/typ/max/value/reset/bits/
                      addr/width, result == expect
   G  registers       field widths cover the register, no overlap, field resets compose to the register
@@ -30,9 +32,12 @@ Markdown checks (card.md, s/*.md):
                      verified record on those pages (a record on another page only warns), or is tagged
                      (derived), (inference), (figure) or (equation). A tag covers the numbers before it in
                      its clause (up to `;`, `:` or a sentence end; in a table, its cell), not the whole
-                     line; a Note cell that is only a tag covers its row. Rendered structural cells
-                     (Bits, Width, Order, Priority, enum keys) and the expressions in s/invariants.md are
-                     not numeric claims
+                     line; a Note cell that is only a tag covers its row. An `[SVD]` cite covers its
+                     clause the same way (reference-manual prose citing the SVD). Rendered structural
+                     cells (Bits, Width, Order, Priority, enum keys) and the expressions in
+                     s/invariants.md are not numeric claims, nor are numbered-list markers, `Tier N`
+                     labels, token counts (a `tokens` column, `N tokens`) and backticked identifiers
+                     and file names (`LINE0_1`, `s/7.3.md`)
   S  table structure the ground-truth-free converter checks of spike 10 on value columns: glued numbers,
                      packed cells, fused MIN/TYP/MAX header, orphaned subscript, min <= typ <= max
   T  budgets         card.md <= 1.5K tokens, each s/*.md <= 4K (o200k)
@@ -828,14 +833,36 @@ def check_registers(recs: list[dict]) -> dict:
 
 # ---------------------------------------------------------------- markdown (M, S, T)
 
-_STRIP_BEFORE_NUMBERS = [
+# Prose that carries numbers which are not claims about the document: a numbered-list marker, an
+# atlas tier label, a token count (index lines), a backticked identifier or file name (`LINE0_1`,
+# `s/9.4.16-9.8.md`). rm-check blanks these too (rm.number_claims).
+NOT_CLAIMS = [
+    re.compile(r"^\s*(?:[-*+]\s+)?\d+[.)](?=\s)"),                              # 3. / 3) at line start
+    re.compile(r"\bTier\s+\d+\b"),
+    re.compile(r"\b\d{1,3}(?:,\d{3})+(?:\s+raw)?\s+tokens?\b|\b\d+(?:\s+raw)?\s+tokens?\b", re.I),
+    re.compile(r"`[^`\s]*[A-Za-z][^`\s]*`"),                                  # no whitespace, a letter
+]
+
+
+def blank_not_claims(s: str) -> str:
+    for rx in NOT_CLAIMS:
+        s = rx.sub(lambda m: " " * len(m.group()), s)
+    return s
+
+
+# Section references: `§7.3`, `§6.3-§6.5`; section numbers 7.3.4, and a range of sections with one
+# such end (9.4.16-9.8, 6.2-6.2.1). rm-check blanks these too.
+SECTION_REF = re.compile(r"§\s*[\d.]+(?:\s*[-–]\s*§?\s*\d+(?:\.\d+)*)?")
+SECTION_NUM = re.compile(r"\b\d+(?:\.\d+)+\s*[-–]\s*\d+(?:\.\d+){2,}\b|\b\d+(?:\.\d+){2,}(?:\s*[-–]\s*\d+(?:\.\d+)+)?\b")
+
+_STRIP_BEFORE_NUMBERS = NOT_CLAIMS + [
     re.compile(r"<!--.*?-->"),
     PAGE_CITE,
-    re.compile(r"§\s*[\d.]+"),
+    SECTION_REF,
     re.compile(r"\b[a-z0-9][a-z0-9._+-]*@[A-Za-z0-9._-]+"),                   # doc ids
     re.compile(r"\bfn\s*\d+(?:\s*(?:,|and)\s*(?:fn\s*)?\d+)*", re.I),              # footnote refs: fn 13, 18
     re.compile(r"(?:figure|fig\.|table|eq\.?|equation|footnote|q|note|step|section)\s*\d+(?:[-.]\d+)*", re.I),
-    re.compile(r"\b\d+(?:\.\d+){2,}\b"),                                       # section numbers 7.3.4
+    SECTION_NUM,
     # hex and binary; an `h`/`b` suffix only on a whole token, so the fraction of 102.3984h stays
     re.compile(r"\b0x[0-9a-f]+\b|\b0b[01]+\b|(?<![\w.])[01]+b\b|(?<![\w.])(?=[0-9a-f]*\d)[0-9a-f]+h\b", re.I),
     re.compile(r"\b[A-Za-z_]+[A-Za-z_./]*\d[\w./]*(?:-\d[\w./]*)*"),            # identifiers: EN1, I2C, A5
@@ -846,6 +873,9 @@ _STRIP_BEFORE_NUMBERS = [
 _TAG = re.compile(r"\((derived|inference|figure|equation)(?=\)|[:,;]|\s+[^\d\s])[^()]*\)?", re.I)
 _ROW_TAG = re.compile(r"^\((derived|inference|figure|equation)\)$", re.I)
 TAG_CLASS = {"derived": "derived", "inference": "derived", "figure": "figure", "equation": "figure"}
+# An `[SVD]` cite (reference-manual prose): the numbers of its clause come from the SVD, not a page.
+_SVD_CITE = re.compile(r"\[SVD\b[^\]]*\]")
+_TAG_OR_SVD = re.compile(f"{_TAG.pattern}|{_SVD_CITE.pattern}", re.I)
 # Clause ends, outside parentheses: `;`, a sentence end, a spaced dash, the quirk renderer's `*Why it matters:*`.
 _CLAUSE = re.compile(r";|\.(?=\s|$)|\s[—–]\s|\*why it matters:\*", re.I)
 # Rendered cells that are structure, not numeric claims (DESIGN.md: tables are rendered from records)
@@ -887,22 +917,26 @@ def _split_clauses(s: str) -> list[str]:
     return out
 
 
+def tagged_pieces(body: str, row_tag: str | None = None) -> list[tuple[str, str | None]]:
+    """Prose cut into (piece, tag class). A tag (`(derived)`, `(figure)`, ...) or an `[SVD]` cite
+    (class `svd`) covers the piece before it in its clause and its own text; every other piece
+    carries `row_tag` (a table row's Note tag). Shared by M and rm-check."""
+    out: list[tuple[str, str | None]] = []
+    pos = 0
+    for m in _TAG_OR_SVD.finditer(body):
+        cls = TAG_CLASS[m.group(1).lower()] if m.group(1) else "svd"
+        clauses = _split_clauses(body[pos:m.start()])
+        out += [(c, row_tag) for c in clauses[:-1]]
+        out += [(clauses[-1], cls), (m.group(), cls)]
+        pos = m.end()
+    out.append((body[pos:], row_tag))
+    return out
+
+
 def _clause_claims(raw: str, row_tag: str | None = None) -> list[tuple[float, str | None]]:
     """(number, tag class) for a piece of prose. A tag covers its own parenthetical and the numbers
     before it in its clause; `row_tag` (a table row's Note tag) covers everything else."""
-    out: list[tuple[float, str | None]] = []
-    body = _blank(raw)
-    pos = 0
-    for m in _TAG.finditer(body):
-        cls = TAG_CLASS[m.group(1).lower()]
-        clauses = _split_clauses(body[pos:m.start()])
-        for c in clauses[:-1]:
-            out += [(x, row_tag) for x in numbers(normalize(c))]
-        out += [(x, cls) for x in numbers(normalize(clauses[-1]))]
-        out += [(x, cls) for x in numbers(normalize(m.group()))]
-        pos = m.end()
-    out += [(x, row_tag) for x in numbers(normalize(body[pos:]))]
-    return out
+    return [(x, cls) for piece, cls in tagged_pieces(_blank(raw), row_tag) for x in numbers(normalize(piece))]
 
 
 def _cells(line: str) -> list[str]:
@@ -935,6 +969,8 @@ def md_claims(line: str, cols: list[str] | None = None, rendered: str | None = N
     out: list[tuple[float, str | None]] = []
     for i, c in enumerate(cells):
         name = cols[i] if i < len(cols) else ""
+        if "token" in name or name in ("section", "sections"):   # an index table: budgets and section ids
+            continue
         if rendered is not None:
             if name in STRUCTURAL or (rendered == "check" and name == "expression"):
                 continue
@@ -962,7 +998,7 @@ def check_markdown_file(doc: DocText, path: Path, rec_values: dict[int, list[flo
     by_page = rec_values if isinstance(rec_values, dict) else {}
     everywhere = [x for vs in by_page.values() for x in vs] if by_page else list(rec_values)
     heads: list[tuple[int, set[int]]] = []
-    stats = {"numbers": 0, "anchored_page": 0, "anchored_record": 0, "derived": 0, "figure": 0,
+    stats = {"numbers": 0, "anchored_page": 0, "anchored_record": 0, "derived": 0, "figure": 0, "svd": 0,
              "record_elsewhere": 0, "unanchored": 0}
     bad, warn = [], []
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -1011,6 +1047,8 @@ def check_markdown_file(doc: DocText, path: Path, rec_values: dict[int, list[flo
                 stats["derived"] += 1
             elif tag == "figure":
                 stats["figure"] += 1
+            elif tag == "svd":
+                stats["svd"] += 1
             elif _close(x, everywhere):
                 stats["record_elsewhere"] += 1
                 warn.append({"line": n, "number": x, "pages": sorted(pages), "text": s[:140],
@@ -1096,6 +1134,19 @@ def new_prov(rec: dict, status: str, twin: str | None) -> str | None:
     return prov
 
 
+def atlas_ids(docdir: Path) -> set[str]:
+    """Every record id of the atlas's other documents (the siblings of `docdir` under docs/).
+    Record ids are globally unique by construction (`<part>.<kind>...`), so a ref resolves in
+    whichever document holds it: an RM vote conflict refs SVD registers, an RM quirk an SVD field."""
+    out: set[str] = set()
+    docdir = Path(docdir).resolve()
+    root = docdir.parent
+    for d in sorted(root.iterdir()) if root.is_dir() else []:
+        if d.is_dir() and d.resolve() != docdir:
+            out.update(r.get("id") for _, r in R.load_records(d) if r.get("id"))
+    return out
+
+
 def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bool = True) -> dict:
     docdir = Path(docdir)
     doc = DocText(docdir, use_pdf=use_pdf)
@@ -1109,6 +1160,8 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     dup = {i for i, rs in seen.items() if len(rs) > 1 and not (
         len(rs) == 2 and sum(1 for x in rs if x.get("prov") in R.DETERMINISTIC) == 1)}
     ids = set(seen)
+    if any(ref not in ids for r in recs for ref in r.get("refs") or []):
+        ids |= atlas_ids(docdir)       # only read the other documents when a ref needs them
     greg = check_registers(recs)
     verdict = greg.get("verdict", {})
     struct_issue: dict[tuple[str, str], list[str]] = {}
@@ -1129,7 +1182,7 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
             extra.append(f"R: duplicate id {r.get('id')}")
         for ref in r.get("refs") or []:
             if ref not in ids:
-                extra.append(f"R: ref {ref} resolves to no record")
+                extra.append(f"R: ref {ref} resolves to no record in docs/")
         src = "deterministic" if r.get("prov") in R.DETERMINISTIC else "llm"
         extra += struct_issue.get((r.get("id"), src), [])
         twin = verdict.get(r.get("id")) if r.get("kind") in ("register", "field") else None
@@ -1254,8 +1307,9 @@ def print_summary(rep: dict, out=None, limit: int = 12) -> None:
         flag = "" if not st["unanchored"] else f"  <- {st['unanchored']} unanchored"
         elsewhere = f", {st['record_elsewhere']} only in a record on another page (warning)" \
             if st.get("record_elsewhere") else ""
+        svd = f", {st['svd']} [SVD]" if st.get("svd") else ""
         w(f"M {m['file']}: {st['numbers']} numbers, {st['anchored_page']} on a cited page, "
-          f"{st['anchored_record']} in a record, {st['derived']} derived, {st['figure']} figure{elsewhere}{flag}")
+          f"{st['anchored_record']} in a record, {st['derived']} derived, {st['figure']} figure{svd}{elsewhere}{flag}")
         for b in m["unanchored"][:4]:
             w(f"   line {b['line']}: {b['number']:g} not on p{b['pages']}: {b['text'][:90]}")
         for b in m.get("record_elsewhere", [])[:2]:

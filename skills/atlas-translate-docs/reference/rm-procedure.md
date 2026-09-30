@@ -165,3 +165,19 @@ A frozen file edited by hand shows `frozen-files-changed`: re-check and re-freez
 
 **Do not re-distil a frozen section** unless its status says the pages or files changed. A re-run
 re-checks; it does not re-ask the model.
+
+## Conventions added 2026-09-30
+
+- `rm-text <rm> <item>` prints every page of the item's range and fails loudly if one would be
+  lost; trust it, do not re-read pages around it.
+- Section files are tier 2 (the card is tier 1).
+- Freeze a chapter's card and must file with `--sections <chapter>`; section files with their unit
+  ids. A must file has the same 4K-token cap as a section file.
+- A newer freeze of the same files supersedes the older entry automatically (kept, never deleted);
+  `rm-freeze --retire <entry>` marks one superseded by hand. `rm-sections` lists stale entries.
+- Numbers: a tag covers only its own clause (as in `doc check` M); an `[SVD]` cite covers the
+  numbers in its clause. List markers, `Tier N`, token counts, section references and backticked
+  identifiers are not numeric claims. Write ordinals as the page does ("eighth", not "8th").
+- A quirk written into a must file also gets a `quirk` record, so the mismatch report and
+  `find_fact` see it.
+- After `rm-sections` regroups the worklist, re-freeze frozen work with `--sections`, not `--item`.
