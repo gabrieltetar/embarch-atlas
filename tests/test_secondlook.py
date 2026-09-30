@@ -160,3 +160,10 @@ def test_reader_prompt_never_carries_first_values():
     from embarch_atlas.secondlook import reader_prompt
     text = reader_prompt({"pdf": "x.pdf", "pages": [8], "items": [{"id": "a.ec.V", "ask": "V under cond: min/typ/max", "key": "k"}]})
     assert "a.ec.V" in text and "NOT seen" in text
+
+
+def test_compare_mode_strap_by_printed_value():
+    from embarch_atlas.secondlook import compare_one
+    s = {"kind": "strap", "value": "2S (2 cells)"}
+    assert compare_one(s, {"found": True, "values": {"value": "2S"}})[0] == "confirmed"
+    assert compare_one(s, {"found": True, "values": {"value": "3S"}})[0] == "conflict"

@@ -29,7 +29,7 @@ Current state:
 - [ ] 2 build      embarch-atlas build <target> <commit>        (minutes; fails loudly if the build did not come from the worktree)
 - [ ] 3 join       embarch-atlas join <atlas>                   (dt.json, in_use.json, pins, checks, mismatches, MAP.md)
 - [ ] 4 RM         embarch-atlas mcu rm-sections <atlas>; if the worklist has sections with no frozen distillation, run /atlas-translate-docs rm-worklist <atlas>
-- [ ] 5 2nd look   embarch-atlas second-look queue <atlas>; process the queue (below); embarch-atlas second-look record <atlas> <verdicts.jsonl>
+- [ ] 5 2nd look   queue --top N, one blind subagent per batch (prompt), compare, record (below)
 - [ ] 6 re-join    embarch-atlas join <atlas>                   (so the report reflects the second look)
 - [ ] 7 report     lead with the checks that passed, then candidates by class; the atlas id; stale inputs; open questions
 ```

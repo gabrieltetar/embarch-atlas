@@ -429,9 +429,15 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
         if first.get("unit") and vals.get("unit") and _unit(first["unit"]) != _unit(vals["unit"]):
             diffs.append(f"unit: first {first['unit']!r} vs second {vals['unit']!r}")
     elif k == "strap":
-        a, b = _addr(first.get("value")), _addr(vals.get("value"))
-        if a is None or b is None or a != b:
-            diffs.append(f"value: first {first.get('value')!r} vs second {vals.get('value')!r}")
+        fv, sv = first.get("value"), vals.get("value")
+        a, b = _addr(fv), _addr(sv)
+        if a is not None and b is not None:
+            if a != b:
+                diffs.append(f"value: first {fv!r} vs second {sv!r}")
+        else:  # a mode strap ("2S", "3.2 A"): the printed value, whitespace and case aside
+            squash = lambda x: re.sub(r"\s+", "", str(x or "")).lower()
+            if not sv or squash(sv) not in squash(fv) and squash(fv) not in squash(sv):
+                diffs.append(f"value: first {fv!r} vs second {sv!r}")
     elif k == "pin":
         from embarch_atlas.join import pin_norm
         for f in ("name", "dir", "type", "active"):
