@@ -61,6 +61,8 @@ def reasons(r: dict, join_kinds: set[str]) -> list[str]:
     if kind in ("limit", "timing"):
         why.append(kind)
         unit, q = r.get("unit"), r.get("q") or ""
+        if isinstance(q, list):  # a quote split over several lines (DESIGN.md: q may be a list)
+            q = " ".join(str(x) for x in q)
         if unit and q and not _unit_in(str(unit), q):
             why.append("unit not in the quoted row (unit-prefix risk)")
         if r.get("cond"):
@@ -162,6 +164,36 @@ def mcu_record_used(r: dict, used_periph: set[str], chapter_pages: list[tuple[in
     return bool(toks & used_periph) or bool({_family(t) for t in toks} & {_family(p) for p in used_periph})
 
 
+# How much a wrong reading would hurt, per reason: facts the join reads feed every pin and
+# identity check; figure and unverified facts have no deterministic check at all.
+WEIGHTS = [("strap fact read by the join", 100), ("pin fact read by the join", 80), ("figure-only", 60),
+           ("llm-unverified", 50), ("unit not in the quoted row", 40), ("quirk", 30), ("register semantics", 20),
+           ("condition-bearing", 15), ("limit", 10), ("timing", 10)]
+
+
+def priority(why: list[str]) -> int:
+    """Rank a queue item: the heaviest reason, plus 5 per extra reason."""
+    ws = [w for reason in why for key, w in WEIGHTS if reason.startswith(key)]
+    return (max(ws) if ws else 1) + 5 * max(0, len(why) - 1)
+
+
+def batches(queue: list[dict], top: int, per_batch: int = 8) -> list[dict]:
+    """The `top` highest-priority items, grouped by (document, pages) so one fresh subagent reads
+    each page once. Order: the batch holding the highest priority first."""
+    groups: dict[tuple, list[dict]] = {}
+    for it in queue[:top]:
+        groups.setdefault((it["doc"], tuple(it["p"] or [])), []).append(it)
+    out = []
+    for (doc, pages), items in groups.items():
+        for i in range(0, len(items), per_batch):
+            chunk = items[i:i + per_batch]
+            out.append({"doc": doc, "pages": list(pages), "pdf": chunk[0].get("pdf"),
+                        "priority": max(x["priority"] for x in chunk),
+                        "items": [{"id": x["id"], "ask": x["ask"], "key": x["key"]} for x in chunk]})
+    out.sort(key=lambda b: (-b["priority"], b["doc"], b["pages"]))
+    return out
+
+
 def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
     from embarch_atlas.join import Docs
     stamp = read_json(atlas / "atlas.json")
@@ -207,7 +239,9 @@ def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
                 stats["docs"][d] = stats["docs"].get(d, 0) + 1
                 queue.append({"id": r.get("id"), "doc": r.get("doc") or d, "kind": r.get("kind") or kind,
                               "p": _pages(r), "pdf": pdf, "src": r.get("src"), "why": why, "ask": ask(r), "key": key})
-    queue.sort(key=lambda q: (q["doc"], (q["p"] or [0])[0], str(q["id"])))
+    for q in queue:
+        q["priority"] = priority(q["why"])
+    queue.sort(key=lambda q: (-q["priority"], q["doc"], (q["p"] or [0])[0], str(q["id"])))
     stats["queued"] = len(queue)
     stats["atlas"] = stamp["id"]
     return queue, stats
@@ -219,6 +253,10 @@ def cmd_queue(args) -> int:
     atlas = resolve_atlas(ad, args.atlas)
     q, st = build_queue(ad, atlas)
     write_jsonl(atlas / "second_look_queue.jsonl", q)
+    if getattr(args, "top", None):
+        bs = batches(q, args.top)
+        write_json(atlas / "second_look_batches.json", bs)
+        print(f"top {min(args.top, len(q))} items in {len(bs)} page batches -> {atlas / 'second_look_batches.json'}")
     pages = {}
     for it in q:
         pages.setdefault(it["doc"], set()).update(it["p"])
@@ -315,8 +353,10 @@ def cmd_record(args) -> int:
 def register(sub, groups) -> None:
     from embarch_atlas.common import verb_group
     g = verb_group(sub, groups, "second-look", "facts this atlas uses that need a second look; record verdicts")
-    p = g.add_parser("queue", help="write second_look_queue.jsonl (skips frozen verdicts)")
+    p = g.add_parser("queue", help="write second_look_queue.jsonl, ranked (skips frozen verdicts)")
     p.add_argument("atlas")
+    p.add_argument("--top", type=int, help="also group the N highest-priority items into page batches "
+                                           "(second_look_batches.json), one fresh subagent per batch")
     p.set_defaults(func=cmd_queue)
     p = g.add_parser("record", help="validate verdicts.jsonl, append to second_look.jsonl and freeze in cache/llm/")
     p.add_argument("atlas")

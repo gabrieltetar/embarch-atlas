@@ -116,3 +116,21 @@ def test_cli_queue_and_record(tmp_path, capsys):
 def test_figure_ask_uses_caption_not_description():
     a = sl.ask({"kind": "figure", "fig": "F1", "caption": "Typical application", "what": "R1 47k pull-up"})
     assert "Typical application" in a and "47k" not in a
+
+
+def test_reasons_accepts_a_list_quote():
+    from embarch_atlas.secondlook import reasons
+    r = {"kind": "limit", "unit": "mV", "q": ["Threshold rising", "10 12 14 mV"], "src": "table"}
+    why = reasons(r, set())
+    assert "limit" in why and not any("unit-prefix" in w for w in why)
+
+
+def test_priority_and_page_batches():
+    from embarch_atlas.secondlook import batches, priority
+    assert priority(["strap fact read by the join"]) > priority(["figure-only"]) > priority(["limit"])
+    assert priority(["limit", "condition-bearing"]) == 20
+    q = [{"id": f"x{i}", "doc": "d@1", "p": [3 if i < 10 else 4], "ask": "?", "key": str(i), "pdf": "f.pdf",
+          "priority": 100 - i} for i in range(12)]
+    bs = batches(q, top=12, per_batch=8)
+    assert [len(b["items"]) for b in bs] == [8, 2, 2]
+    assert bs[0]["pages"] == [3] and bs[0]["priority"] == 100
