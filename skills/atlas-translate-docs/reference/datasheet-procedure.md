@@ -25,7 +25,9 @@ The schematic analysis joins the part to the board later, by MPN.
    layer. For a table row, quote the numbers line (the line with the values), not the
    parameter-name line. A quote may skip text with `...` between two verbatim parts.
 3. **A fact that exists only in a picture** gets `src: figure` (or `src: equation`) and `q: null`, or
-   the caption as `q`. It stays `llm-unverified` until a second look confirms it.
+   the caption as `q`. It stays `llm-unverified` until a second look confirms it. A caption or a
+   label that is raster (the page's text layer does not hold it) is a picture too: tag its numbers
+   `(figure)`; citing the page cannot anchor them.
 4. **Keep the datasheet's units and spelling.** Write `0.22 kΩ`, not `220 Ω`. A converted value is a
    derivation, so tag it. Keep footnote markers out of values: in `1.0A17`, the 17 is footnote 17.
 5. **Tag every number the cited page does not literally hold:** `(derived)` for arithmetic,
@@ -162,6 +164,9 @@ Field notes:
   arithmetic, comparisons, `abs/min/max/all/any/round/sum/len`, comprehensions. Nothing else runs.
   `expect: fail` records a known inconsistency of the document; the quirk it backs should say so.
 - **strap**: address or mode straps (a resistor table on a MODE pin): `pin`, `condition`, `value`.
+- **rule** with `steps`: `q` is a list in step order, one verbatim quote per step that has one, and
+  `p` every page a step came from. Numbers in `steps` and `text` are not column-checked, so each must
+  be on a cited page or tagged.
 - **figure**: an index of figures and equations that facts depend on: `fig`, `caption`, `what` (what
   you read in it). Say in `note` how you saw it (`read: pdf page`, `read: png 100 dpi`, `not read`).
 
@@ -285,7 +290,8 @@ These settle cases the rules above leave open. They were each hit on a real data
   parts with non-volatile restore (a RAM register loaded from an NV copy): use the printed initial
   value for RAM registers and the factory default for NV registers, and say which in `note`.
 - A field reset derived from the register reset (the document prints none per field) is allowed,
-  with `note: "reset derived from register reset"`.
+  with `note: "reset derived from register reset"`. When the page also prints the field's own
+  power-up value and it agrees: `note: "reset printed per field (p.N), agrees with the register reset"`.
 - Clear-on-read that depends on a mode bit has no SystemRDL spelling: `access: ro` and `note:
   "clears on read when <condition>"`. Use `rclr` only when it always clears.
 - Register `width` usually comes from the summary table: cite that page and the register's own page
@@ -301,8 +307,13 @@ These settle cases the rules above leave open. They were each hit on a real data
 - An overlined name: `name: "<NAME>-bar"` (`FLT-bar`, `FB/INT-bar` when only INT carries the bar:
   say so in `note`). The id takes a `_bar` suffix only when another record already has the plain id
   (EN vs EN-bar). `active` follows the pin's printed wording ("active-low"), not the bar alone: an
-  overlined gate drive that states no polarity gets no `active`. `doc prep` flags pages with
-  overlines (`overline`): read those rows from an image, because the text layer drops the bar.
+  overlined gate drive that states no polarity gets no `active`, and a dual-function pin gets
+  `active` only when every function is active-low (FB/INT-bar: none; say which in `note`). `doc prep`
+  flags pages with overlines (`overline`): read those rows from an image, because the text layer
+  drops the bar.
+- A bit diagram shared by a non-volatile register and its RAM copy ("nX (1C6h)/X (013h) Format")
+  names the field once: both registers' field records take the name the diagram prints, and a
+  `doc-artefact` quirk says the RAM field carries the NV name.
 - A pin table with two packages: `pin: [<number>, <ball>]` in one record per name.
 - An MCU pin's I/O structure (`FT`, `FT_fa`, `TT_a`, `RST, FT`) goes in `io`, exactly as printed;
   `type` stays for od/pp/analog/supply/ground. The join reads `io` for 5 V tolerance.
@@ -328,7 +339,7 @@ These settle cases the rules above leave open. They were each hit on a real data
 - **Card drop order** when 1.5K tokens cannot hold everything: keep identity, what the part is,
   the variant warning, the quirks to check first and the s/ index; then cut the limits to the
   8 a driver writer budgets with, the pin line to a pointer (`pins: s/pins.md`), and the register
-  summary to a count plus a pointer.
+  summary to a count plus a pointer. Cut in this order until it fits; do not restore an earlier cut.
 - `doc check` M counts numbers in prose. A count you computed (fields per register, requirements
   per section) is `(derived)`. An inline cite on a line (`(p.12)`) **replaces** its heading's
   cite for that line; it does not add to it.
@@ -365,6 +376,7 @@ These settle cases the rules above leave open. They were each hit on a real data
 - Untagged numbers that are not on a cited page.
 - Invented citations, or a page you did not read.
 - Fetching any document, or sending document content anywhere but this session.
-- Board facts (nets, reference designators, the fitted variant, strap values chosen on a board).
+- Board or firmware facts (nets, reference designators, the fitted variant, strap values chosen on a
+  board, a limit the firmware applies).
 - Editing `regparse.jsonl` or any deterministic record; deleting a failing record.
 - Tables written by hand in `s/` where a marker can render them.
