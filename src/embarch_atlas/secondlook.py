@@ -417,11 +417,18 @@ def _same_address(a: int, b: int) -> bool:
 STOP = {"the", "and", "for", "with", "when", "to", "of", "a", "an", "is", "in", "on", "or", "by", "as"}
 
 
+UNITS = ("V", "mV", "µV", "uV", "kV", "A", "mA", "µA", "uA", "nA", "W", "mW", "µW", "Ω", "kΩ", "MΩ", "mΩ",
+         "ohm", "ohms", "kohm", "mohm", "Hz", "kHz", "MHz", "GHz", "s", "ms", "µs", "us", "ns", "°C", "C", "%",
+         "F", "mF", "µF", "uF", "nF", "pF", "H", "mH", "µH", "uH", "nH", "dB", "ppm", "oz", "bit", "bits", "B",
+         "V/µs", "V/us", "A/µs", "mV/°C", "°C/W")
+_UNIT_RE = "|".join(sorted((re.escape(u) for u in UNITS), key=len, reverse=True))
+_QTY = re.compile(r"(?<![A-Za-z0-9.])(-?\d+(?:\.\d+)?)\s*(" + _UNIT_RE + r")(?![A-Za-z0-9])")
+
+
 def _quantities(s: str) -> set[tuple[float, str]]:
-    out = set()
-    for m in re.finditer(r"(?<![A-Za-z0-9])(-?\d+(?:\.\d+)?)\s*([a-zA-Zµμ%Ω]{0,3})", str(s or "")):
-        out.add((float(m[1]), _unit(m[2]).lower()))
-    return out
+    """Number + unit pairs (a known unit, standing alone): `200 Ω`, `35ms`, `-40 °C`."""
+    s = str(s or "").replace("μ", "µ").replace("Ohm", "Ω").replace("ohm", "Ω")
+    return {(float(m[1]), _unit(m[2]).lower()) for m in _QTY.finditer(s)}
 
 
 def _words(s: str) -> set[str]:
@@ -442,8 +449,13 @@ def text_value_verdict(first: str, second: str) -> tuple[str, str]:
         return "conflict", "quantities differ"
     ws, wf = _words(second), _words(first)
     if not ws:
-        return ("confirmed", "same text") if re.sub(r"\W", "", str(first).lower()) == re.sub(r"\W", "", str(second).lower()) \
-            else ("unresolved", "nothing comparable")
+        a, b = re.sub(r"\W", "", str(first).lower()), re.sub(r"\W", "", str(second).lower())
+        if b and (a == b or a.startswith(b)):
+            return "confirmed", "same text"
+        ta, tb = re.findall(r"[a-z0-9]+", str(first).lower()), re.findall(r"[a-z0-9]+", str(second).lower())
+        if ta and tb and ta[0] != tb[0] and re.search(r"\d", ta[0]) and re.search(r"\d", tb[0]):
+            return "conflict", "different codes"  # "2S" vs "3S"
+        return "unresolved", "nothing comparable"
     r = len(ws & wf) / len(ws)
     if r >= 2 / 3:
         return "confirmed", f"{r:.0%} word overlap"
@@ -557,12 +569,23 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
         if first.get("access") and vals.get("access") and acc(first["access"]) != acc(vals["access"]):
             diffs.append(f"access: first {first['access']!r} vs second {vals['access']!r}")
     elif k == "figure":
-        firsts = {_num(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(first.get("what") or ""))} - {None}
-        seconds = {_num(re.match(r"\s*(-?\d+(?:\.\d+)?)", str(x))[1]) for x in (vals.get("numbers") or [])
-                   if re.match(r"\s*-?\d", str(x))}
-        missing = sorted(firsts - seconds)
-        if missing:
-            diffs.append(f"numbers in the first reading not seen by the second: {missing[:10]}")
+        # Only quantities with a unit are figure facts; bare numbers in a description are mostly
+        # figure, table, pin or part numbers. Axis ticks and labels are read exactly, so overlap
+        # decides: most of the first reading's quantities seen again -> confirmed, few -> conflict.
+        firsts = {q for q in _quantities(first.get("what") or "") if q[1]}
+        seconds = set()
+        for x in vals.get("numbers") or []:
+            seconds |= {q for q in _quantities(str(x)) if q[1]}
+        if not firsts:
+            return "unresolved", ["the first reading states no quantity with a unit to compare"]
+        seen = len(firsts & seconds) / len(firsts)
+        missing = sorted(f"{v:g} {u}" for v, u in firsts - seconds)
+        if seen >= 2 / 3:
+            return "confirmed", []
+        if seen == 0:
+            diffs.append(f"{seen:.0%} of the first reading's quantities seen again; missing {missing[:10]}")
+        else:
+            soft.append(f"{seen:.0%} of the first reading's quantities seen again; missing {missing[:10]}")
     else:
         return "unresolved", [f"kind {k} has no deterministic comparison"]
     if diffs:

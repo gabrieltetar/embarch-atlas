@@ -151,9 +151,12 @@ def test_compare_one_is_deterministic():
     assert compare_one(q, {"found": True, "claim": "contradicts"})[0] == "conflict"
     fld = {"kind": "field", "bits": [7, 7], "reset": "0b0", "access": "rw"}
     assert compare_one(fld, {"found": True, "values": {"bits": [7, 7], "reset": "0", "access": "R/W"}})[0] == "confirmed"
-    fig = {"kind": "figure", "what": "discharge through 200 Ohm, 10 mOhm FETs"}
-    assert compare_one(fig, {"found": True, "values": {"numbers": ["200 Ohm"]}})[0] == "conflict"
+    fig = {"kind": "figure", "what": "Figure 5: discharge through 200 Ohm, 10 mOhm FETs, 35 ms"}
+    assert compare_one(fig, {"found": True, "values": {"numbers": ["200 Ohm", "10 mOhm", "35 ms"]}})[0] == "confirmed"
     assert compare_one(fig, {"found": True, "values": {"numbers": ["200 Ohm", "10 mOhm"]}})[0] == "confirmed"
+    assert compare_one(fig, {"found": True, "values": {"numbers": ["470 Ohm"]}})[0] == "conflict"
+    assert compare_one(fig, {"found": True, "values": {"numbers": ["200 Ohm"]}})[0] == "unresolved"
+    assert compare_one({"kind": "figure", "what": "Figure 3 shows pins 1 and 2"}, {"found": True, "values": {"numbers": []}})[0] == "unresolved"
 
 
 def test_reader_prompt_never_carries_first_values():
