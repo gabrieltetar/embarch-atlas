@@ -217,26 +217,54 @@ def _reset(v: Any, width: int | None = None) -> str:
     return s
 
 
+def with_twin(base: dict, twin: dict | None) -> dict:
+    """A twin pair as one row: structure from `base` (the deterministic record), the description, the
+    encodings and the note from the LLM twin, and the pages of both, so the row cites every page its
+    text came from."""
+    if not twin or twin is base:
+        return base
+    pages = R.pages(base) + [x for x in R.pages(twin) if x not in R.pages(base)]
+    notes = list(dict.fromkeys(n for n in (base.get("note"), twin.get("note")) if n))
+    return dict(base, desc=twin.get("desc") or base.get("desc"), enum=twin.get("enum") or base.get("enum"),
+                p=pages or base.get("p"), note="; ".join(notes) or None)
+
+
+def _twins(all_recs: list[dict]) -> Callable[[dict], dict | None]:
+    """The LLM twin of a register or field: the same id, else (a field) the same register and the same
+    name up to case and separators (the pairing `doc check` G uses)."""
+    llm = [r for r in all_recs if r.get("prov") in R.LLM and r.get("kind") in ("register", "field")]
+    by_id = {r["id"]: r for r in llm}
+    by_name = {(r.get("reg"), _name_key(r.get("name"))): r for r in llm if r.get("kind") == "field"}
+
+    def find(r: dict) -> dict | None:
+        tw = by_id.get(r["id"])
+        if tw is None and r.get("kind") == "field":
+            tw = by_name.get((r.get("reg"), _name_key(r.get("name"))))
+        return tw
+    return find
+
+
+def _name_key(name: str | None) -> str:
+    return re.sub(r"[^0-9a-z]", "", (name or "").casefold())
+
+
 def register_view(recs: list[dict], all_recs: list[dict]) -> list[tuple[dict, list[dict]]]:
     """Registers with their fields: structure from the deterministic record when there is one, the
-    description and the field encodings (`enum`) from the LLM twin when there is one."""
+    description, encodings, note and pages of the LLM twin when there is one (`with_twin`)."""
     llm = {r["id"]: r for r in all_recs if r.get("prov") in R.LLM and r.get("kind") in ("register", "field")}
     det = {r["id"]: r for r in all_recs if r.get("prov") in R.DETERMINISTIC and r.get("kind") in ("register", "field")}
+    twin_of = _twins(all_recs)
     out, seen = [], set()
     for r in recs:
         if r.get("kind") != "register" or r["id"] in seen:
             continue
         seen.add(r["id"])
         base = det.get(r["id"]) or r
-        desc = (llm.get(r["id"]) or {}).get("desc") or base.get("desc")
         src = det if r["id"] in det else llm
         fs = [f for f in src.values() if f.get("kind") == "field" and f.get("reg") == r["id"]]
         fs.sort(key=lambda f: -f["bits"][0])
-        fields = []
-        for f in fs:
-            twin = llm.get(f["id"]) or {}
-            fields.append(dict(f, desc=twin.get("desc") or f.get("desc"), enum=twin.get("enum") or f.get("enum")))
-        out.append((dict(base, desc=desc), fields))
+        fields = [with_twin(f, twin_of(f)) for f in fs]
+        out.append((with_twin(base, twin_of(base)), fields))
     return out
 
 
@@ -287,9 +315,8 @@ def t_register(recs, ctx):
 def t_field(recs, ctx):
     """Fields; of a twin pair the deterministic record gives the structure, the LLM record the
     description and the encodings (as in register_view)."""
-    llm = {r["id"]: r for r in ctx.get("all", []) if r.get("prov") in R.LLM and r.get("kind") == "field"}
-    recs = [dict(f, desc=(llm.get(f["id"]) or {}).get("desc") or f.get("desc"),
-                 enum=(llm.get(f["id"]) or {}).get("enum") or f.get("enum")) for f in recs]
+    twin_of = _twins(ctx.get("all", []))
+    recs = [with_twin(f, twin_of(f)) if f.get("prov") in R.DETERMINISTIC else f for f in recs]
     enum = any(f.get("enum") for f in recs)
     rows = []
     for f in recs:

@@ -226,3 +226,19 @@ def test_selector_p0_takes_only_the_first_cited_page():
     assert [r["id"] for r in by_page] == ["a", "b", "c"]          # the shared footnote page pulls in every row
     assert [r["id"] for r in by_row] == ["b"]
     assert [r["id"] for r in render.select(rows, render.parse_selector("kind=limit p0=5-6"))] == ["a", "c"]
+
+
+def test_twin_row_cites_both_twins_and_pairs_by_name():
+    det = {"id": "a.reg.R.FILT_MODE", "kind": "field", "p": 5, "reg": "a.reg.R", "name": "Filt Mode", "bits": [3, 2],
+           "reset": "0b00", "access": "rw", "prov": "deterministic", "note": "bits from the bit diagram"}
+    llm = {"id": "a.reg.R.FiltMode", "kind": "field", "p": [5, 9], "reg": "a.reg.R", "name": "FiltMode",
+           "bits": [3, 2], "reset": "0b00", "prov": "llm-verified", "desc": "filter; about 200 uA on p.9",
+           "note": "reset derived from register reset"}
+    rows = render.t_field([det], {"all": [det, llm]})
+    assert rows[2] == ("| R | 3:2 | Filt Mode | rw | 0b00 | filter; about 200 uA on p.9 | "
+                       "bits from the bit diagram; reset derived from register reset | p.5, p.9 |")
+    reg = {"id": "a.reg.R", "kind": "register", "p": 5, "name": "R", "addr": "0x01", "width": 8, "reset": "0x00",
+           "prov": "deterministic"}
+    view = render.register_view([reg], [reg, dict(reg, prov="llm-verified", p=[5, 2], desc="control"), det, llm])
+    (r, fields), = view
+    assert r["p"] == [5, 2] and r["desc"] == "control" and fields[0]["p"] == [5, 9]
