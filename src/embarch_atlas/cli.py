@@ -27,6 +27,8 @@ MODULES = [
     "join",
     "secondlook",
     "diff",
+    "query",
+    "mcp_server",
 ]
 
 

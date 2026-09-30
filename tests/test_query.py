@@ -1,0 +1,141 @@
+"""The seven atlas lookups over a small synthetic atlas (invented parts and nets)."""
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+
+from embarch_atlas import query
+from embarch_atlas.common import write_json, write_jsonl, write_text
+
+
+@pytest.fixture()
+def atlas_dir(tmp_path: Path) -> Path:
+    a = tmp_path / "atlas"
+    # a datasheet doc
+    d = a / "docs" / "demo-bb@A"
+    write_json(d / "doc.json", {"doc_id": "demo-bb@A", "part": "DEMO-BB", "doc_no": "DEMO001", "kind": "datasheet"})
+    write_text(d / "card.md", "# DEMO-BB card\n\nBuck-boost. VOUT 0.8..20 V (p.1).\n\n## Quirks\n- OCP_MASK resets to 1 (p.9)\n")
+    write_json(d / "toc.json", {"doc_id": "demo-bb@A", "sections": [
+        {"id": "1", "title": "Features", "level": 1, "pages": [1, 1], "tokens": 300},
+        {"id": "7", "title": "Registers", "level": 1, "pages": [8, 10], "tokens": 2000},
+        {"id": "7.1", "title": "MODE Register", "level": 2, "pages": [9, 9], "tokens": 400}]})
+    write_text(d / "s" / "registers.md", "# Registers\n\n| Addr | Name |\n|---|---|\n| 0x06 | MODE |\n")
+    write_text(d / "pages" / "p009.txt", "MODE Register (Address = 06h) [reset = 00100000b]\n")
+    write_text(d / "facts.txt", "\n".join([
+        "demo-bb.ec.VOVP kind=limit; group=ec; sym=VOVP; param=output OVP threshold; min=22.5; typ=23.5; max=24.5; unit=V; cite=demo-bb@A p6; prov=llm-verified",
+        "demo-bb.ec.VREF kind=limit; group=ec; sym=VREF; param=reference voltage; typ=1.2; unit=V; cite=demo-bb@A p5; prov=llm-verified",
+    ]))
+    reg = {"id": "demo-bb.reg.MODE", "kind": "register", "doc": "demo-bb@A", "name": "MODE", "addr": "0x06",
+           "width": 8, "reset": "0b00100000", "access": "rw", "p": 9, "src": "table", "prov": "llm-verified"}
+    f_llm = {"id": "demo-bb.reg.MODE.OE", "kind": "field", "doc": "demo-bb@A", "reg": "demo-bb.reg.MODE", "name": "OE",
+             "bits": [7, 7], "reset": "0b0", "access": "rw", "p": 9, "src": "table", "prov": "llm-verified"}
+    f_det = dict(f_llm, prov="deterministic")
+    rule = {"id": "demo-bb.rule.ocp", "kind": "quirk", "doc": "demo-bb@A", "text": "OCP_MASK must be 0 before OE", "p": 9,
+            "src": "text", "prov": "llm-verified", "refs": ["demo-bb.reg.MODE"]}
+    write_jsonl(d / "records" / "register.jsonl", [reg])
+    write_jsonl(d / "records" / "field.jsonl", [f_llm])
+    write_jsonl(d / "records" / "regparse.jsonl", [f_det])
+    write_jsonl(d / "records" / "quirk.jsonl", [rule])
+    # an MCU SVD doc, records only (no doc.json), like the SVD module writes
+    s = a / "docs" / "demo-mcu-svd"
+    write_jsonl(s / "records" / "register.jsonl", [{"id": "demo-mcu.reg.I2C1.I2C_TIMINGR", "kind": "register",
+                "doc": "demo-mcu-svd", "name": "I2C_TIMINGR", "addr": "0x40005410", "width": 32, "reset": "0x00000000",
+                "src": "svd", "p": None, "prov": "deterministic"}])
+    # board + atlas
+    write_json(a / "boards" / "B" / "netlist.json", {"board": "B", "components": {
+        "U3": {"mpn": "DEMO-BB-QFN", "pins": {"6": {"name": "SDA", "net": "SDA_1"}, "5": {"name": "SCL", "net": "SCL_1"}}}}})
+    at = a / "atlases" / "core@000000000001"
+    write_json(at / "atlas.json", {"commit": "0" * 40})
+    write_json(at / "pins.json", {"atlas": "core@000000000001", "part_docs": {"B:U3": ["demo-bb@A"]}, "pins": [
+        {"num": 1, "port": "PB9", "net": "SDA_1", "far": [{"board": "B", "kind": "part-pin", "pin": "U3-6",
+                                                          "pin_name": "SDA", "mpn": "DEMO-BB-QFN", "net": "SDA_1"}],
+         "dt": [{"label": "i2c1", "prop": "pinctrl-0", "func": "i2c1_sda_pb9", "loc": "fw:board.dts:10",
+                 "driver": {"files": ["drivers/i2c/demo.c"], "compiled": True}}]}]})
+    write_json(at / "mismatches.json", {"summary": "2 checks, 3/3 items passed; 1 candidate", "checks": [
+        {"check": "I2C device identity by address strap", "passed": 1, "ran": 1}],
+        "not_run": [{"check": "DT limits vs datasheet", "why": "no limit records mapped"}],
+        "candidates": [{"class": "connected-no-dt", "key": "B:PA4", "summary": "PA4 is on net BTN_1 with no DT use",
+                        "evidence": ["netlist B"], "settle": "the engineer says whether firmware should use it"}]})
+    write_json(a / "current.json", {"commit": "0" * 40, "matches": [{"atlas": "core@000000000001"}]})
+    return a
+
+
+def test_part_card_by_mpn_and_board_bindings(atlas_dir):
+    out = query.part_card(query.Atlas(atlas_dir), "DEMO-BB-QFN", board="")
+    assert out.startswith("src: demo-bb@A card")
+    assert "OCP_MASK resets to 1" in out
+    assert "B:U3 DEMO-BB-QFN: 5=SCL_1, 6=SDA_1" in out
+
+
+def test_part_card_missing_says_where_to_look(atlas_dir):
+    out = query.part_card(query.Atlas(atlas_dir), "NOPE123")
+    assert out.startswith("src: none") and "missing.md" in out
+
+
+def test_doc_toc_and_under(atlas_dir):
+    a = query.Atlas(atlas_dir)
+    top = query.doc_toc(a, "demo-bb", depth=1)
+    assert "7 | Registers | p8-10 | 2000 tok | s/registers.md" in top
+    sub = query.doc_toc(a, "demo-bb@A", under="7")
+    assert "7.1 | MODE Register | p9" in sub and "Features" not in sub
+
+
+def test_doc_section_distilled_text_and_pagination(atlas_dir):
+    a = query.Atlas(atlas_dir)
+    assert "| 0x06 | MODE |" in query.doc_section(a, "demo-bb@A", section="7")
+    assert "Address = 06h" in query.doc_section(a, "demo-bb@A", page=9, tier="text")
+    big = atlas_dir / "docs" / "demo-bb@A" / "s" / "long.md"
+    big.write_text("row\n" * 20000)
+    first = query.doc_section(a, "demo-bb@A", section="long")
+    assert "next=" in first
+    nxt = int(first.rsplit("next=", 1)[1].split(")")[0])
+    second = query.doc_section(a, "demo-bb@A", section="long", offset=nxt)
+    assert second.startswith("src: demo-bb@A s/long.md") and second.split("\n\n", 1)[1].startswith("row\n")
+
+
+def test_find_fact_ranks_by_symbol(atlas_dir):
+    out = query.find_fact(query.Atlas(atlas_dir), "OVP threshold")
+    lines = out.splitlines()
+    assert lines[0].startswith("src: facts.txt")
+    assert lines[2].startswith("demo-bb.ec.VOVP")
+    assert "VREF" not in out.split("\n", 3)[2]
+
+
+def test_register_merges_twins_and_joins_quirks(atlas_dir):
+    out = query.register_lookup(query.Atlas(atlas_dir), "demo-bb.MODE")
+    assert out.count("- OE[7]") == 1
+    assert "prov=deterministic & llm-verified" in out
+    assert "OCP_MASK must be 0 before OE" in out
+
+
+def test_register_mcu_instance_prefix_stripped(atlas_dir):
+    out = query.register_lookup(query.Atlas(atlas_dir), "I2C1.TIMINGR")
+    assert out.startswith("src: demo-mcu-svd demo-mcu.reg.I2C1.I2C_TIMINGR")
+
+
+def test_pin_trace_by_port_net_and_part_pin(atlas_dir):
+    a = query.Atlas(atlas_dir)
+    for q in ("PB9", "SDA_1", "B:U3-6"):
+        out = query.pin_trace(a, q)
+        assert "pin 1 PB9 net=SDA_1 -> B:U3-6/SDA DEMO-BB-QFN" in out, q
+        assert "driver drivers/i2c/demo.c" in out
+
+
+def test_mismatch_report_leads_with_passed_checks(atlas_dir):
+    out = query.mismatch_report(query.Atlas(atlas_dir))
+    assert out.index("I2C device identity by address strap: 1/1 passed") < out.index("[connected-no-dt]")
+    assert "DT limits vs datasheet: no limit records mapped" in out
+    assert "[connected-no-dt]" not in query.mismatch_report(query.Atlas(atlas_dir), cls="other")
+
+
+def test_mcp_server_lists_seven_tools_and_answers(atlas_dir):
+    pytest.importorskip("mcp")
+    from embarch_atlas.mcp_server import build_server
+
+    server = build_server(atlas_dir)
+    tools = asyncio.run(server.list_tools())
+    assert sorted(t.name for t in tools) == sorted(query.TOOLS)
+    res = asyncio.run(server.call_tool("pin_trace", {"pin_or_net": "PB9"}))
+    text = json.dumps(res.model_dump() if hasattr(res, "model_dump") else res, default=str)
+    assert "SDA_1" in text

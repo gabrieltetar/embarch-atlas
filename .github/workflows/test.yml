@@ -16,6 +16,6 @@ jobs:
       - name: poppler (pdftotext, pdfinfo, pdftoppm)
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - name: install
-        run: pip install -e '.[dev,tokens]'
+        run: pip install -e '.[dev,tokens,mcp]'
       - name: pytest
         run: pytest -q

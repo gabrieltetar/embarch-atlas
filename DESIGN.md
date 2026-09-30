@@ -244,10 +244,21 @@ An atlas id is `<target>@<commit12>`.
 - May not: write a number that is not on the cited page (untagged), invent a
   citation, edit a deterministic record, delete a failing record, fetch anything.
 
+## Query surface
+
+`query.py` holds the seven lookups as plain functions returning markdown: `part_card`,
+`doc_toc`, `doc_section`, `find_fact` (BM25 over every `facts.txt`), `register` (MCU
+`PERIPH.REG` or `<part>.<REG>`, twins merged, rules/quirks/conflicts and firmware
+references joined), `pin_trace`, `mismatch_report`. Each answer starts with a `src:`
+line and is paged at a per-tool token budget with `next=<offset>`. Two doors call the
+same functions: `embarch-atlas q <verb>` and `embarch-atlas mcp` (stdio, `mcp>=2.2`,
+optional extra). Register the server per project with
+`claude mcp add --scope local embarch-atlas -- embarch-atlas --atlas-dir <fw>/embarch/atlas mcp`
+and `alwaysLoad: true`.
+
 ## Not yet built (deliberately)
 
-MCP server (7 tools: `part_card`, `doc_toc`, `doc_section`, `find_fact`, `register`,
-`pin_trace`, `mismatch_report`), the embarch-ui view, a native EDA adapter, geometry
+The embarch-ui view, a native EDA adapter, geometry
 and vision rungs of the schematic ladder, PRD → code trace links.
 
 ## Conventions added by the first port (2026-09-30)

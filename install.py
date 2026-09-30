@@ -74,7 +74,7 @@ def check() -> list[str]:
 def install() -> None:
     if not (VENV_BIN / "python").exists():
         subprocess.run(["uv", "venv", str(REPO / ".venv")], check=True)
-    subprocess.run(["uv", "pip", "install", "-q", "-p", str(VENV_BIN / "python"), "-e", f"{REPO}[tokens]"],
+    subprocess.run(["uv", "pip", "install", "-q", "-p", str(VENV_BIN / "python"), "-e", f"{REPO}[tokens,mcp]"],
                    check=True)
     SHIM.parent.mkdir(parents=True, exist_ok=True)
     SHIM.write_text(SHIM_TEXT)
