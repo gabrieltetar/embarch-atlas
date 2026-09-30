@@ -215,8 +215,9 @@ value anchors only when that record is on a page the line cites. Rendered struct
   (https://code.claude.com/docs/en/memory.md). The MAP is byte-stable, so it stays
   in the cached prefix.
 - When an atlas becomes current (its commit equals HEAD), `embarch/atlas/MAP.md` is
-  replaced by that atlas's MAP. When HEAD moves past it, the MAP's first line says it
-  is stale and names `/atlas-update`.
+  replaced by that atlas's MAP. When HEAD moves past it (or a source changes), `status`,
+  which every atlas skill runs as it loads, puts a `> **Stale:**` line first in that MAP with
+  the reasons and `/atlas-update`; the line goes once the MAP's atlas is fresh again.
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
   (https://code.claude.com/docs/en/mcp.md), so its 7 tools skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.
