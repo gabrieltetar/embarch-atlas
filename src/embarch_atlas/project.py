@@ -16,6 +16,7 @@ no longer hashes to what its stamp recorded.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -335,8 +336,39 @@ def status(atlas_dir: Path) -> dict[str, Any]:
     old = common.read_json(cur_path) if cur_path.is_file() else None
     if head and old != current:
         common.write_json(cur_path, current)
+    if head:
+        mark_map(atlas_dir, head, rows)
     return {"fw": str(fw), "head": head, "dirty": dirty, "manifest_sha256": manifest_sha, "atlases": rows,
             "current": current}
+
+
+STALE_MARK = "> **Stale:**"
+MAP_HEAD = re.compile(r"^# (\S+@[0-9a-f]{12}): hardware atlas")
+
+
+def mark_map(atlas_dir: Path, head: str, rows: list[dict[str, Any]]) -> bool:
+    """Keep the session's `<atlas_dir>/MAP.md` honest: while the atlas it describes is stale (HEAD moved
+    past its commit, or a source changed), its first line says so and names /atlas-update; the line
+    goes again once that atlas is fresh. Only that line changes, so the rest stays byte-stable.
+    Returns whether the file was rewritten."""
+    path = Path(atlas_dir) / "MAP.md"
+    if not path.is_file():
+        return False
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    body = lines[1:] if lines and lines[0].startswith(STALE_MARK) else lines
+    m = MAP_HEAD.match(body[0]) if body else None
+    if not m:
+        return False
+    row = next((r for r in rows if r.get("atlas") == m.group(1)), None)
+    why = (row or {}).get("stale") or ([] if row else ["no stamp for this atlas in atlases/"])
+    new = body
+    if why:
+        new = [f"{STALE_MARK} {'; '.join(why)} (HEAD `{head[:12]}`); this map describes `{m.group(1)}`. "
+               f"Say so when you use it, and run `/atlas-update` for the current commit.\n"] + body
+    if new == lines:
+        return False
+    common.write_text(path, "".join(new))
+    return True
 
 
 # --------------------------------------------------------------------------- CLI

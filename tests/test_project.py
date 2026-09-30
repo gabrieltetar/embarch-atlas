@@ -175,3 +175,29 @@ def test_sources_fingerprint_ignores_manifest_format(tmp_path):
     assert sources_fingerprint(a) == sources_fingerprint(b)
     b.write_text(json.dumps({"documents": [{"file": "x.pdf", "sha256": "33"}, docs[1]]}))
     assert sources_fingerprint(a) != sources_fingerprint(b)
+
+
+def test_status_marks_the_session_map_stale_and_clears_it(tmp_path):
+    fw = make_fw(tmp_path)
+    project.init(fw)
+    adir = fw / "embarch" / "atlas"
+    head = git(fw, "rev-parse", "HEAD")
+    man = adir / "inventory" / "manifest.json"
+    common.write_json(man, {"documents": []})
+    msha = common.sources_fingerprint(man)
+    stamp(adir, "core@000000000000", commit="0" * 40, sources=msha, schematics={})
+    body = "# core@000000000000: hardware atlas for target `core`\n\nbody\n"
+    (adir / "MAP.md").write_text(body)
+    project.status(adir)
+    text = (adir / "MAP.md").read_text()
+    first = text.splitlines()[0]
+    assert first.startswith("> **Stale:** commit differs from HEAD") and head[:12] in first and "/atlas-update" in first
+    assert text.endswith(body)                                      # only the first line is added
+    project.status(adir)
+    assert (adir / "MAP.md").read_text() == text                    # idempotent
+    # the session MAP now describes a fresh atlas: the line goes
+    stamp(adir, f"core@{head[:12]}", commit=head, sources=msha, schematics={})
+    fresh = f"# core@{head[:12]}: hardware atlas for target `core`\n\nbody\n"
+    (adir / "MAP.md").write_text(project.STALE_MARK + " old\n" + fresh)
+    project.status(adir)
+    assert (adir / "MAP.md").read_text() == fresh
