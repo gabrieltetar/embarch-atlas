@@ -194,3 +194,11 @@ def test_pin_compare_uses_what_the_join_reads():
     assert compare_one(first, {"found": True, "values": {"name": "EN-bar", "dir": "supply", "type": "digital"}})[0] == "confirmed"
     assert compare_one({"kind": "pin", "name": "FLT", "type": "od"}, {"found": True, "values": {"name": "FLT", "type": "pp"}})[0] == "conflict"
     assert compare_one({"kind": "pin", "name": "ACOK"}, {"found": True, "values": {"name": "ACOK-bar"}})[0] == "conflict"
+
+
+def test_pin_io_structure_compared():
+    from embarch_atlas.secondlook import ask, compare_one
+    r = {"kind": "pin", "pin": [2], "name": "PC10", "dir": "io", "io": "FT_fa"}
+    assert "I/O structure" in ask(r)
+    assert compare_one(r, {"found": True, "values": {"name": "PC10", "io": "FT_fa"}})[0] == "confirmed"
+    assert compare_one(r, {"found": True, "values": {"name": "PC10", "io": "TT_a"}})[0] == "conflict"

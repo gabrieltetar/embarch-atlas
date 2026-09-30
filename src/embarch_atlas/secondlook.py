@@ -96,7 +96,8 @@ def ask(r: dict) -> str:
     if k == "figure":   # the caption only: `what` is the first reader's description, values included
         return f"figure {r.get('fig') or ''} ({r.get('caption') or 'no caption'}): what it shows, every value and unit on it".replace("  ", " ")
     if k == "pin":
-        return f"pin {r.get('pin')}: name, direction, type (open-drain / push-pull / analog / supply), active level"
+        io = ", I/O structure as printed (FT, FT_fa, TT_a, RST...)" if r.get("io") else ""
+        return f"pin {r.get('pin')}: name, direction, type (open-drain / push-pull / analog / supply), active level{io}"
     if k == "rule":
         return f"the behaviour rule on this page about: {r.get('cond') or (r.get('text') or '')[:80]}"
     return f"re-read record {r.get('id')}"
@@ -352,7 +353,7 @@ Return JSON Lines, one object per item:
 {"id": "<item id>", "reader": "second-look", "found": true|false, "p": <page>,
  "q": "<verbatim text>", "values": {...}, "claim": "supports"|"contradicts"|"not-found"}
 values by kind: limit/timing {"min","typ","max","nom","unit","cond"}; strap {"value","condition"};
-pin {"name","dir","type","active"} (dir: in/out/io/supply/ground/nc; type: od, pp, analog, supply,
+pin {"name","dir","type","active","io"} (dir: in/out/io/supply/ground/nc; type: od, pp, analog, supply,
 or "unstated"; an overlined name gets a -bar suffix); field {"bits":[hi,lo],"reset","access"};
 register {"addr","width","reset","access"}; figure {"numbers":[every number on it with its unit]}.
 "claim" is only for quirk and rule items: does the page support or contradict the statement?"""
@@ -540,6 +541,9 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
         a, b = str(first.get("active") or "").lower(), str(vals.get("active") or "").lower()
         if a and b and a != b:
             diffs.append(f"active: first {first.get('active')!r} vs second {vals.get('active')!r}")
+        squash = lambda x: re.sub(r"[\s,]+", "", str(x or "")).upper()
+        if first.get("io") and vals.get("io") and squash(first["io"]) != squash(vals["io"]):
+            diffs.append(f"io: first {first['io']!r} vs second {vals['io']!r}")
     elif k in ("field", "register"):
         if k == "field" and first.get("bits") and vals.get("bits") and sorted(first["bits"]) != sorted(vals["bits"]):
             diffs.append(f"bits: first {first['bits']} vs second {vals['bits']}")
