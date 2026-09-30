@@ -764,6 +764,9 @@ def _spaces(m: re.Match) -> str:
     return " " * len(m.group())
 
 
+REF_NUM = re.compile(r"\b(?:Tables?|Figures?|Fig\.|Equations?|Eq\.|Notes?)\s+\d+(?:[-.]\d+)*(?:\s*(?:and|,|-|to)\s*\d+(?:[-.]\d+)*)*")
+
+
 def number_claims(line: str) -> list[tuple[str, str | None]]:
     """(number as written, tag class or None) for one line of distilled RM prose, by M's rule
     (check.tagged_pieces): a tag or an `[SVD]` cite covers the numbers before it in its clause and
@@ -776,6 +779,7 @@ def number_claims(line: str) -> list[tuple[str, str | None]]:
     body = SECTION_NUM.sub(_spaces, SECTION_REF.sub(_spaces, body))   # §6.3, 9.4.16-9.8: references
     body = blank_not_claims(body)
     body = re.sub(r"(?<=\d)\.\.(?=\d)", "  ", body)       # 1..15 is 1 and 15
+    body = REF_NUM.sub(_spaces, body)                    # Table 192, Figure 12, Equation 2: references
     out = []
     for piece, cls in tagged_pieces(body):
         out += [(n, cls) for n in NUMBER_RE.findall(piece)]

@@ -634,3 +634,8 @@ def test_rm_check_field_forms_and_svd_clauses(tmp_path, capsys):
     _run("--atlas-dir", root, "mcu", "rm-check", "demo-rm@1", s / "2.1.md")
     fails = [ln.strip() for ln in capsys.readouterr().out.splitlines() if ln.startswith("  ")]
     assert fails == ["s/2.1.md:2 field TXE not on cited page(s) [3]"]
+
+
+def test_number_claims_skip_table_and_figure_references():
+    c = rm.number_claims
+    assert c("- Table 192 lists the clear bits, Figures 7 and 8 the flows, 24 MHz max [§1 p.2]") == [("24", None)]
