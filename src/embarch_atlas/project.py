@@ -217,6 +217,47 @@ def wire_session_map(fw: Path) -> list[str]:
     return changed
 
 
+MCP_FILE = ".mcp.json"
+MCP_NAME = "embarch-atlas"
+
+
+def wire_mcp(fw: Path, command: str = "embarch-atlas") -> list[str]:
+    """Register the atlas MCP server for sessions in `fw` through a git-excluded `.mcp.json`.
+
+    Merges into an existing `.mcp.json` (other servers are kept), sets `alwaysLoad` so the
+    seven tools skip deferred tool search, and excludes the file unless git ignores it or
+    already tracks it (a tracked one is edited in place and reported, never excluded).
+    Claude Code asks the engineer to approve a project server on first use.
+    """
+    fw = fw.resolve()
+    changed: list[str] = []
+    path = fw / MCP_FILE
+    data = {}
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) or {}
+        except ValueError:
+            return [f"{path}: not valid JSON, left untouched"]
+    servers = data.setdefault("mcpServers", {})
+    want = {"type": "stdio", "command": command,
+            "args": ["--atlas-dir", str(fw / "embarch" / "atlas"), "mcp"], "alwaysLoad": True}
+    if servers.get(MCP_NAME) != want:
+        servers[MCP_NAME] = want
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        changed.append(f"{path}: server {MCP_NAME} (alwaysLoad)")
+    tracked = subprocess.run(["git", "-C", str(fw), "ls-files", "--error-unmatch", MCP_FILE],
+                             capture_output=True).returncode == 0
+    if tracked:
+        changed.append(f"{path} is tracked by git: the server entry is a local edit to review")
+    elif _git_ignored(fw, path) is False:
+        exclude = fw / ".git" / "info" / "exclude"
+        if exclude.parent.is_dir():
+            with open(exclude, "a", encoding="utf-8") as f:
+                f.write("# added by embarch-atlas: the atlas MCP server for local sessions\n" + MCP_FILE + "\n")
+            changed.append(f"{exclude}: {MCP_FILE}")
+    return changed
+
+
 # --------------------------------------------------------------------------- status
 
 def git_head(fw: Path) -> tuple[str | None, bool]:
@@ -306,8 +347,8 @@ def _cmd_init(args) -> int:
         print(f"init: {fw} is not a directory", file=sys.stderr)
         return 2
     path, written = init(fw, Path(args.atlas_dir) if args.atlas_dir else None, args.sources)
-    for line in wire_session_map(fw):
-        print(f"wired session map: {line}")
+    for line in wire_session_map(fw) + wire_mcp(fw):
+        print(f"wired: {line}")
     if not written:
         print(f"{path} exists; left untouched")
         return 0

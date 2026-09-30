@@ -145,3 +145,20 @@ def test_wire_session_map_is_idempotent_and_git_excluded(tmp_path):
     assert project.wire_session_map(fw) == []
     out = subprocess.run(["git", "-C", str(fw), "status", "--porcelain"], capture_output=True, text=True).stdout
     assert out == ""
+
+
+def test_wire_mcp_merges_and_excludes(tmp_path):
+    import json
+    import subprocess
+    from embarch_atlas import project
+    fw = tmp_path / "fw"
+    fw.mkdir()
+    subprocess.run(["git", "init", "-q", str(fw)], check=True)
+    (fw / ".mcp.json").write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}))
+    changed = project.wire_mcp(fw)
+    data = json.loads((fw / ".mcp.json").read_text())
+    assert set(data["mcpServers"]) == {"other", "embarch-atlas"}
+    assert data["mcpServers"]["embarch-atlas"]["alwaysLoad"] is True
+    assert any(".git/info/exclude" in c for c in changed)
+    assert project.wire_mcp(fw) == []
+    assert subprocess.run(["git", "-C", str(fw), "status", "--porcelain"], capture_output=True, text=True).stdout == ""
