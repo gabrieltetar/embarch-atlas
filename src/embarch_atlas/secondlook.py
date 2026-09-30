@@ -1,0 +1,324 @@
+"""`second-look queue <atlas>` / `second-look record <atlas> <verdicts.jsonl>`.
+
+The second, independent look happens when an atlas is built, on the facts that
+atlas uses (owner decision). A fact is *used* when it is a record of a document
+whose part is on the target's boards (by MPN), or of an MCU document (reference
+manual, errata, the MCU datasheet) for a peripheral in use. It *needs* a second
+look when an LLM wrote it and it is flagged or high-stakes: figure-only,
+`llm-unverified`, a unit that is not in its quoted row (units printed once per
+row group), a condition-bearing limit, any limit or timing, a quirk, register
+semantics, or a strap, passthrough or pin fact the join reads.
+
+The queue carries what to extract and the pages to view, never the first-pass
+value. A verdict, once recorded, is frozen in `cache/llm/` under a key over the
+record's content and its pages' text, so the next atlas reuses it and only new
+or changed facts are queued.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+from embarch_atlas.common import read_json, read_jsonl, write_json, write_jsonl
+
+VERSION = "second-look/1"
+VERDICTS = ("confirmed", "conflict", "unresolved")
+SKIP_PROV = ("deterministic", "deterministic+crosschecked", "engineer-declared", "engineer-confirmed", "measured")
+CORE = ("RCC", "PWR", "EXTI", "GPIO", "DMA", "DMAMUX", "NVIC", "SYSCFG", "FLASH")
+UNIT_ALIASES = {"µ": ("µ", "u", "μ"), "Ω": ("Ω", "ohm", "Ohm")}
+
+
+def _pages(r: dict) -> list[int]:
+    p = r.get("p")
+    if isinstance(p, list):
+        return [int(x) for x in p if isinstance(x, (int, str)) and str(x).isdigit()]
+    return [int(p)] if isinstance(p, (int, str)) and str(p).isdigit() else []
+
+
+def _unit_in(unit: str, q: str) -> bool:
+    variants = {unit}
+    for k, alts in UNIT_ALIASES.items():
+        if k in unit:
+            variants |= {unit.replace(k, a) for a in alts}
+    qn = q.replace(" ", "")
+    return any(v.replace(" ", "") in qn for v in variants)
+
+
+def reasons(r: dict, join_kinds: set[str]) -> list[str]:
+    """Why this record needs a second look ([] when it does not)."""
+    if r.get("prov") in SKIP_PROV:
+        return []
+    why = []
+    kind = r.get("kind")
+    if r.get("src") == "figure":
+        why.append("figure-only")
+    if r.get("prov") == "llm-unverified":
+        why.append("llm-unverified")
+    if kind in ("limit", "timing"):
+        why.append(kind)
+        unit, q = r.get("unit"), r.get("q") or ""
+        if unit and q and not _unit_in(str(unit), q):
+            why.append("unit not in the quoted row (unit-prefix risk)")
+        if r.get("cond"):
+            why.append("condition-bearing")
+    if kind == "quirk":
+        why.append("quirk")
+    if kind in ("register", "field"):
+        why.append("register semantics")
+    if kind in join_kinds:
+        why.append(f"{kind} fact read by the join")
+    return why
+
+
+def ask(r: dict) -> str:
+    """What the fresh reader extracts: the question, never the first-pass answer."""
+    k = r.get("kind")
+    if k in ("limit", "timing"):
+        what = " ".join(x for x in (r.get("param"), f"({r['sym']})" if r.get("sym") else None) if x) or r.get("id")
+        cond = f" under the condition '{r['cond']}'" if r.get("cond") else ""
+        return f"{what}{cond}: min / typ / max with the unit as printed, and the verbatim row"
+    if k == "field":
+        return f"register {r.get('reg')} field {r.get('name')}: bit positions, reset value, access, and what each value means"
+    if k == "register":
+        return f"register {r.get('name')}: address/offset, width, reset value, access"
+    if k == "quirk":
+        return f"check this claim against the page, quote the text that decides it: {r.get('text')}"
+    if k == "strap":
+        return f"the device address (or mode) when pin {r.get('pin')} is {r.get('condition')}"
+    if k == "passthrough":
+        return f"is {r.get('from_pin')} connected through to {r.get('to_pin')}" + (f" when {r['when']}" if r.get("when") else "")
+    if k == "figure":   # the caption only: `what` is the first reader's description, values included
+        return f"figure {r.get('fig') or ''} ({r.get('caption') or 'no caption'}): what it shows, every value and unit on it".replace("  ", " ")
+    if k == "pin":
+        return f"pin {r.get('pin')}: name, direction, type (open-drain / push-pull / analog / supply), active level"
+    if k == "rule":
+        return f"the behaviour rule on this page about: {r.get('cond') or (r.get('text') or '')[:80]}"
+    return f"re-read record {r.get('id')}"
+
+
+def _page_text(doc_dir: Path, p: int) -> str | None:
+    f = doc_dir / "pages" / f"p{p:03d}.txt"
+    if not f.is_file():
+        f = doc_dir / "pages" / f"p{p}.txt"
+    return f.read_text(encoding="utf-8", errors="replace") if f.is_file() else None
+
+
+def content_key(r: dict, doc_dir: Path) -> str:
+    """sha256 over the record (minus provenance and notes) and the text of its pages."""
+    body = {k: v for k, v in r.items() if k not in ("prov", "note", "verdict", "second_look")}
+    h = hashlib.sha256()
+    h.update(VERSION.encode())
+    h.update(json.dumps(body, sort_keys=True, ensure_ascii=False).encode())
+    for p in _pages(r):
+        t = _page_text(doc_dir, p)
+        h.update(f"|p{p}:".encode())
+        h.update(hashlib.sha256((t or "").encode()).digest())
+    return h.hexdigest()
+
+
+def cache_path(ad: Path, key: str) -> Path:
+    return ad / "cache" / "llm" / f"sl-{key}.json"
+
+
+def _pdf(ad: Path, doc: dict) -> str | None:
+    """The source PDF for `Read(pages=)`: doc.json `path` (relative to the atlas dir), else `file` in sources."""
+    if doc.get("path"):
+        p = Path(doc["path"])
+        p = p if p.is_absolute() else (ad / p).resolve()
+        if p.exists():
+            return str(p)
+    f = doc.get("file")
+    if not f:
+        return None
+    p = Path(f)
+    if p.is_absolute():
+        return str(p)
+    try:
+        from embarch_atlas.project import load_config, sources_dir
+        src = sources_dir(ad, load_config(ad))
+        if (src / p).exists():
+            return str(src / p)
+    except Exception:  # noqa: BLE001  (no atlas.toml: fall back to the manifest-relative guess)
+        pass
+    return str(ad.parent / "hardware" / p) if (ad.parent / "hardware" / p).exists() else f
+
+
+def _family(name: str) -> str:
+    f = re.sub(r"\d+$", "", name)
+    m = re.fullmatch(r"(GPIO)([A-Z])", f)
+    return m[1] if m else f
+
+
+def mcu_record_used(r: dict, used_periph: set[str], chapter_pages: list[tuple[int, int]]) -> bool:
+    ps = _pages(r)
+    if chapter_pages and ps and any(lo <= p <= hi for p in ps for lo, hi in chapter_pages):
+        return True
+    toks = set(re.findall(r"[A-Za-z][A-Za-z0-9]*", " ".join(str(r.get(k) or "") for k in ("id", "name", "reg", "sym"))))
+    toks = {t.upper() for t in toks}
+    return bool(toks & used_periph) or bool({_family(t) for t in toks} & {_family(p) for p in used_periph})
+
+
+def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
+    from embarch_atlas.join import Docs
+    stamp = read_json(atlas / "atlas.json")
+    pins = read_json(atlas / "pins.json") if (atlas / "pins.json").is_file() else {}
+    in_use = read_json(atlas / "in_use.json") if (atlas / "in_use.json").is_file() else {}
+    docs = Docs(ad)
+    part_docs = {d for ds in (pins.get("part_docs") or {}).values() for d in ds}
+    mcu_key = (pins.get("mcu") or {}).get("key")
+    mcu_docs = set((pins.get("part_docs") or {}).get(mcu_key, [])) if mcu_key else set()
+    for d, v in docs.docs.items():
+        if (v["doc"].get("kind") or "") in ("reference-manual", "errata"):
+            mcu_docs.add(d)
+    used_periph = {n.upper() for n, p in (in_use.get("peripherals") or {}).items()
+                   if p.get("instantiated") or p.get("touched_by_code")} | set(CORE)
+    queue, stats = [], {"used_records": 0, "needs_look": 0, "frozen": 0, "by_reason": {}, "docs": {}}
+    for d, v in sorted(docs.docs.items()):
+        is_mcu = d in mcu_docs
+        if d not in part_docs and not is_mcu:
+            continue
+        chapter_pages = []
+        wl = v["dir"] / "worklist.json"
+        if is_mcu and wl.is_file():
+            try:
+                chapter_pages = [tuple(c["pages"]) for c in read_json(wl).get("chapters", [])]
+            except (OSError, ValueError, KeyError, TypeError):
+                chapter_pages = []
+        pdf = _pdf(ad, v["doc"])
+        for kind, recs in sorted(v["records"].items()):
+            for r in recs:
+                if is_mcu and d not in part_docs and not mcu_record_used(r, used_periph, chapter_pages):
+                    continue
+                stats["used_records"] += 1
+                why = reasons(r, {"strap", "passthrough", "pin"} if d in part_docs else set())
+                if not why:
+                    continue
+                stats["needs_look"] += 1
+                key = content_key(r, v["dir"])
+                if cache_path(ad, key).is_file():
+                    stats["frozen"] += 1
+                    continue
+                for w in why:
+                    stats["by_reason"][w] = stats["by_reason"].get(w, 0) + 1
+                stats["docs"][d] = stats["docs"].get(d, 0) + 1
+                queue.append({"id": r.get("id"), "doc": r.get("doc") or d, "kind": r.get("kind") or kind,
+                              "p": _pages(r), "pdf": pdf, "src": r.get("src"), "why": why, "ask": ask(r), "key": key})
+    queue.sort(key=lambda q: (q["doc"], (q["p"] or [0])[0], str(q["id"])))
+    stats["queued"] = len(queue)
+    stats["atlas"] = stamp["id"]
+    return queue, stats
+
+
+def cmd_queue(args) -> int:
+    from embarch_atlas.build import resolve_atlas, resolve_atlas_dir
+    ad = resolve_atlas_dir(args)
+    atlas = resolve_atlas(ad, args.atlas)
+    q, st = build_queue(ad, atlas)
+    write_jsonl(atlas / "second_look_queue.jsonl", q)
+    pages = {}
+    for it in q:
+        pages.setdefault(it["doc"], set()).update(it["p"])
+    print(f"{st['atlas']}: {st['used_records']} records used, {st['needs_look']} need a second look, "
+          f"{st['frozen']} reuse a frozen verdict, {st['queued']} queued -> {atlas / 'second_look_queue.jsonl'}")
+    for w, n in sorted(st["by_reason"].items(), key=lambda x: -x[1]):
+        print(f"  {n:4} {w}")
+    for d, ps in sorted(pages.items()):
+        print(f"  {d}: pages {','.join(str(p) for p in sorted(ps))}")
+    return 0
+
+
+# ---------------------------------------------------------------- record
+
+def _norm_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def validate(v: dict, queued: dict[str, dict]) -> list[str]:
+    errs = []
+    if not v.get("id"):
+        errs.append("missing id")
+    elif str(v["id"]) not in queued:
+        errs.append(f"id {v['id']!r} is not in second_look_queue.jsonl")
+    if v.get("verdict") not in VERDICTS:
+        errs.append(f"verdict {v.get('verdict')!r} not one of {VERDICTS}")
+    if v.get("reader") != "second-look":
+        errs.append("reader must be 'second-look'")
+    p = v.get("p")
+    if p is not None and not (isinstance(p, int) or (isinstance(p, list) and all(isinstance(x, int) for x in p))):
+        errs.append("p must be an int or a list of ints")
+    it = queued.get(str(v.get("id")))
+    if v.get("verdict") in ("confirmed", "conflict") and it and it.get("src") != "figure" and not v.get("q"):
+        errs.append("q (a verbatim quote) is required unless the fact is figure-only or unresolved")
+    return errs
+
+
+def record(ad: Path, atlas: Path, verdicts_path: Path) -> dict:
+    from embarch_atlas.join import Docs
+    qf = atlas / "second_look_queue.jsonl"
+    if not qf.is_file():
+        raise SystemExit(f"{qf} missing: run `second-look queue` first")
+    queued = {str(q["id"]): q for q in read_jsonl(qf)}
+    rows = list(read_jsonl(verdicts_path))
+    errors = []
+    for i, v in enumerate(rows, 1):
+        errors += [f"{verdicts_path}:{i}: {e}" for e in validate(v, queued)]
+    if errors:
+        raise SystemExit("verdicts rejected, nothing recorded:\n  " + "\n  ".join(errors))
+    docs = Docs(ad)
+    out_f = atlas / "second_look.jsonl"
+    have = {(e.get("id"), e.get("key")) for e in read_jsonl(out_f)} if out_f.is_file() else set()
+    added, warnings = [], []
+    now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for v in rows:
+        it = queued[str(v["id"])]
+        if (it["id"], it["key"]) in have:
+            continue
+        ddir = docs.docs.get(it["doc"], {}).get("dir")
+        pages = v["p"] if isinstance(v.get("p"), list) else ([v["p"]] if v.get("p") else it["p"])
+        q_on_page = None
+        if v.get("q") and ddir:
+            texts = [t for t in (_page_text(ddir, p) for p in pages) if t]
+            if texts:
+                q_on_page = _norm_ws(v["q"]) in _norm_ws(" ".join(texts))
+                if not q_on_page and it.get("src") != "figure":
+                    warnings.append(f"{it['id']}: the second-look quote is not on p{pages} (paraphrase?)")
+        first = next((r for r in docs.docs.get(it["doc"], {}).get("records", {}).get(it["kind"], []) if r.get("id") == it["id"]), {})
+        entry = {**{k: v.get(k) for k in ("id", "verdict", "value", "unit", "cond", "q", "p", "reader")},
+                 "doc": it["doc"], "kind": it["kind"], "key": it["key"], "q_on_page": q_on_page, "recorded": now,
+                 "first": {k: first.get(k) for k in ("min", "typ", "max", "nom", "unit", "cond", "reset", "value", "text")
+                           if first.get(k) is not None}}
+        added.append(entry)
+        write_json(cache_path(ad, it["key"]), {"kind": "second-look", "version": VERSION, **entry})
+    if added:
+        with open(out_f, "a", encoding="utf-8") as f:
+            for e in added:
+                f.write(json.dumps(e, sort_keys=True, ensure_ascii=False) + "\n")
+    return {"added": len(added), "skipped": len(rows) - len(added), "warnings": warnings,
+            "by_verdict": {k: sum(1 for e in added if e["verdict"] == k) for k in VERDICTS}}
+
+
+def cmd_record(args) -> int:
+    from embarch_atlas.build import resolve_atlas, resolve_atlas_dir
+    ad = resolve_atlas_dir(args)
+    atlas = resolve_atlas(ad, args.atlas)
+    res = record(ad, atlas, Path(args.verdicts))
+    print(f"recorded {res['added']} verdicts ({res['by_verdict']}), {res['skipped']} already recorded -> {atlas / 'second_look.jsonl'}")
+    for w in res["warnings"]:
+        print(f"  warning: {w}", file=sys.stderr)
+    return 0
+
+
+def register(sub, groups) -> None:
+    from embarch_atlas.common import verb_group
+    g = verb_group(sub, groups, "second-look", "facts this atlas uses that need a second look; record verdicts")
+    p = g.add_parser("queue", help="write second_look_queue.jsonl (skips frozen verdicts)")
+    p.add_argument("atlas")
+    p.set_defaults(func=cmd_queue)
+    p = g.add_parser("record", help="validate verdicts.jsonl, append to second_look.jsonl and freeze in cache/llm/")
+    p.add_argument("atlas")
+    p.add_argument("verdicts")
+    p.set_defaults(func=cmd_record)
