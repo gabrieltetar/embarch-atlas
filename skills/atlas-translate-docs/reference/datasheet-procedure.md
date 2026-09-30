@@ -297,6 +297,8 @@ These settle cases the rules above leave open. They were each hit on a real data
   EN-bar): `name: "EN-bar"`, id suffix `_bar`, and `active: low` on the pin. `doc prep` flags pages
   with overlines (`overline`): read those rows from an image, because the text layer drops the bar.
 - A pin table with two packages: `pin: [<number>, <ball>]` in one record per name.
+- An MCU pin's I/O structure (`FT`, `FT_fa`, `TT_a`, `RST, FT`) goes in `io`, exactly as printed;
+  `type` stays for od/pp/analog/supply/ground. The join reads `io` for 5 V tolerance.
 
 **Straps**
 - An address strap's `value` starts with the 7-bit address in hex (`0x44`), the 8-bit or binary
@@ -321,7 +323,10 @@ These settle cases the rules above leave open. They were each hit on a real data
   8 a driver writer budgets with, the pin line to a pointer (`pins: s/pins.md`), and the register
   summary to a count plus a pointer.
 - `doc check` M counts numbers in prose. A count you computed (fields per register, requirements
-  per section) is `(derived)`.
+  per section) is `(derived)`. An inline cite on a line (`(p.12)`) **replaces** its heading's
+  cite for that line; it does not add to it.
+- `guar`: `production-tested`, `design` ("guaranteed by design, not tested"), or
+  `characterization` ("based on characterization results, not tested in production").
 
 ## Known traps in datasheet text layers
 

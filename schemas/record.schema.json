@@ -437,8 +437,10 @@
         "guar": {
           "enum": [
             "production-tested",
-            "design"
-          ]
+            "design",
+            "characterization"
+          ],
+          "description": "production-tested; design (guaranteed by design, not tested); characterization (by characterization results, not tested in production)"
         }
       }
     },
@@ -577,6 +579,13 @@
         },
         "desc": {
           "$ref": "#/$defs/text"
+        },
+        "io": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "an MCU pin's I/O structure as printed in the datasheet's pin table (FT, FT_fa, TT_a, RST, ...); 5 V tolerance and analog capability come from it"
         }
       },
       "required": [
@@ -599,7 +608,8 @@
           "type",
           "active",
           "pull",
-          "desc"
+          "desc",
+          "io"
         ]
       }
     },

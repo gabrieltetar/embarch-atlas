@@ -408,7 +408,8 @@ K_WARN = {"row-not-found": "row not found", "row-ambiguous": "row ambiguous (two
           "cell-unparsed": "row with an unreadable VALUE cell"}
 UNIT_SPAN = 16.0     # points: a unit cell wrapped over the row's neighbouring lines
 VALUE_HDR = ("VALUE", "VALUES")
-_CELL_NUM = re.compile(r"^([±+-]?)(\d+(?:\.\d+)?)(%?)$")
+# A value cell; a footnote marker glued to it (`3000(4)`, `1.7(1)`) is not part of the number.
+_CELL_NUM = re.compile(r"^([±+-]?)(\d+(?:\.\d+)?)(%?)(?:\(\d{1,2}\))?$")
 _COMPACT = re.compile(r"[\s()\[\],;:'\"]+")
 
 

@@ -151,9 +151,9 @@ Kinds and their own fields:
 
 | kind | fields |
 |---|---|
-| `limit` | `group` (abs, esd, thermal, recommended, ec, i2c, register, application, other), `sym`, `param`, `cond`, `min`, `nom`, `typ`, `max`, `unit`, `fn` (footnote ids), `guar` (production-tested / design). `±X` is `min: -X, max: X` |
+| `limit` | `group` (abs, esd, thermal, recommended, ec, i2c, register, application, other), `sym`, `param`, `cond`, `min`, `nom`, `typ`, `max`, `unit`, `fn` (footnote ids), `guar` (production-tested / design / characterization). `±X` is `min: -X, max: X` |
 | `timing` | as `limit`, plus `edge` |
-| `pin` | `pin` (number/ball), `name`, `dir`, `type` (od, pp, analog, supply, ...), `active`, `pull`, `desc` |
+| `pin` | `pin` (number/ball, or [number, ball]), `name`, `dir`, `type` (od, pp, analog, supply, ...), `io` (an MCU pin's I/O structure as printed: FT, FT_fa, TT_a...), `active`, `pull`, `desc` |
 | `rule` | `text`, `cond`, `recover`, `steps` (behaviour rule, "OK goes low on fault, latches until EN toggles") |
 | `register` | `name`, `addr` (int or `0x..`), `width`, `reset` (`0b…`/`0x…`), `access`, `summary` |
 | `field` | `reg` (the register's record id), `name`, `bits` ([hi, lo]), `reset`, `access` (SystemRDL vocabulary: rw, ro, wo, rclr, woclr, w1s, rsvd), `enum` |

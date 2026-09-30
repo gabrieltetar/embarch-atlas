@@ -453,3 +453,11 @@ def test_md_rendered_figure_quirk_tag_covers_its_text():
             "*Why it matters:* budget 0.8 A")
     assert check.md_claims(line, None, "quirk") == [(0.77, "figure"), (0.2, "figure"), (85, "figure"), (0.8, None)]
     assert check.md_claims(line, None, None)[:2] == [(0.77, None), (0.2, None)]     # outside a rendered block
+
+
+def test_cell_number_with_glued_footnote_marker():
+    from embarch_atlas.check import _CELL_NUM
+    m = _CELL_NUM.match("3000(4)")
+    assert m and m.group(2) == "3000"
+    assert _CELL_NUM.match("1.7(1)").group(2) == "1.7"
+    assert _CELL_NUM.match("±2%").group(3) == "%"
