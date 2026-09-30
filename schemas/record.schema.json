@@ -713,7 +713,10 @@
           "reset",
           "access",
           "desc",
-          "summary"
+          "summary",
+          "reg_type",
+          "nv_backup",
+          "mirror_of"
         ]
       }
     },
