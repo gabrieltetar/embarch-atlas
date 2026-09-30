@@ -67,8 +67,11 @@ three parts:
 - **pages that need an image Read**: `image-heavy` (little or no text layer: raster figures, scans),
   `figure` (a figure caption over graphics), `equation` (a math font, whose text layer is glyph
   soup);
-- **page classes**: also `table-heavy`, `register`, and `pua-glyphs` (Symbol-font characters that
-  `Read` shows as nothing).
+- **page classes**: also `table-heavy`, `register`, `pua-glyphs` (Symbol-font characters that
+  `Read` shows as nothing) and `overline` (overlined names; the "Overlined names" table lists
+  them, and the pages where a name also appears without the bar are in the image-Read list);
+- **synthetic entries**: `front-matter` (contents, lists) and `unlisted` (an index, a notice) for
+  pages no outline entry covers. Do not distil them.
 
 Plan the reading from it: which sections to read in which order, how many image Reads (about 1.5K
 tokens a page), and which s/ files you will write. Datasheets with raster figures need many image

@@ -62,7 +62,8 @@ docs/<doc_id>/                  one per datasheet / RM / PRD / SVD, board-indepe
   doc.json                      identity (file, sha256, kind, part, doc_no, rev, pages)
   toc.md, toc.json              outline: section id | title | pages | tier-2 file | tokens
   pages/p<NNN>.txt              text layer per page (pdftotext -layout), 1-based physical page
-  pages/pages.json              page classes (image-heavy, table-heavy, register) and hashes
+  pages/pages.json              page classes (image-heavy, figure, equation, table-heavy, register, pua-glyphs,
+                                overline) and hashes; running headers/footers/logos ignored
   pages/p<NNN>.bbox.json        word boxes, when a step needs positions
   records/<kind>.jsonl          LLM records, one file per kind (schemas/record.schema.json)
   records/<producer>.jsonl      deterministic records (e.g. regparse.jsonl)
@@ -188,7 +189,12 @@ alternative names (for example "master/controller"). Rendered tables sit between
 a re-render; `<!-- atlas:covers … -->` declares what a section file covers (exact file
 stems first, then explicit covers, most specific id first, then implicit descent from a
 file named after a parent section). Token budgets are counted in o200k (real Claude
-counts run ~1.4×).
+counts run ~1.4×). Pages no outline entry covers become a synthetic `front-matter`
+(contents and lists) or `unlisted` entry, so they never inflate the section before them.
+A page is flagged for an image Read when its text layer cannot carry the fact: little
+text, a figure (captioned, or a content image over ~10% of the page, or a vector graphic
+that is not a text-covered grid like a bit diagram), a math font, or an overlined name
+that also appears without the bar.
 
 The prose check (M) anchors every number in `card.md` and `s/*.md` to a cited page. A
 tag (`(derived)`, `(figure)`, `(equation)`, `(inference)`) covers the numbers before it in

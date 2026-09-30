@@ -1,8 +1,9 @@
 """`inventory`: every engineer-supplied file -> `inventory/manifest.{json,md}`.
 
 Per file: kind, part number(s), document number, revision and date (from the
-vendors' own document-control conventions), pages, text-layer coverage per page,
-sha256 of the file and of each page's text, the doc_id, and a diff block against
+vendors' own document-control conventions), pages, text-layer coverage per page
+(`pdftext.text_layer`, the same classification `doc prep` writes to doc.json, so the two agree
+on which pages are textless), sha256 of the file and of each page's text, the doc_id, and a diff block against
 the previous manifest (added / removed / changed / unchanged, and which pages
 changed). No network: the Windows Mark-of-the-Web sidecar (`<file>:Zone.Identifier`)
 is read when present, because it records where a file came from for free.
@@ -37,10 +38,9 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from . import __version__, common, project
+from .pdftext import text_layer, text_layer_of_pdf
 
 TOOL = f"embarch-atlas/{__version__} inventory"
-MIN_WORDS = 20          # a page with fewer words than this has no usable text layer
-MIN_IMAGE_PX = 64       # images smaller than this are icons, not content
 PART_LIMIT = 6          # part-number tokens kept per document
 
 KINDS = ("schematic", "datasheet", "reference-manual", "errata", "prd", "spreadsheet", "notes", "other")
@@ -119,15 +119,16 @@ def pdf_pages_text(path: Path, npages: int) -> list[str]:
     return pages
 
 
-def pdf_image_pages(path: Path) -> set[int]:
-    """1-based pages carrying an image of at least MIN_IMAGE_PX on both sides."""
-    out = set()
-    for line in _run(["pdfimages", "-list", str(path)]).splitlines()[2:]:
-        f = line.split()
-        if len(f) > 4 and f[0].isdigit() and f[3].isdigit() and f[4].isdigit():
-            if int(f[3]) >= MIN_IMAGE_PX and int(f[4]) >= MIN_IMAGE_PX:
-                out.add(int(f[0]))
-    return out
+def pdf_text_layer(path: Path, pages: list[str]) -> dict[str, Any]:
+    """`pdftext.text_layer`, the one text-layer classification `doc prep` also uses (running
+    header and footer lines and logos ignored). A PDF PyMuPDF cannot open is classified from the
+    poppler text alone: words only, no positions and no images."""
+    try:
+        return text_layer_of_pdf(path)
+    except Exception:  # noqa: BLE001 - fall back to the text poppler could read
+        return text_layer([{"w": 1.0, "h": 1.0, "images": [], "paths": [],
+                            "words": [(0.5, 0.5, 0.5, 0.5, t, 0, k) for k, t in enumerate(p.split())]}
+                           for p in pages])
 
 
 def pdf_has_net_info(path: Path) -> bool:
@@ -289,21 +290,19 @@ def inventory_pdf(path: Path) -> dict[str, Any]:
     info = pdfinfo(path)
     npages = int(info.get("Pages", "0") or 0)
     pages = pdf_pages_text(path, npages)
-    words = [len(p.split()) for p in pages]
-    images = pdf_image_pages(path)
+    layer = pdf_text_layer(path, pages)
     kind = classify(path, info, "\n".join(pages[:3]))
     rec: dict[str, Any] = {
         "kind": kind,
         "pages": npages,
-        "page_words": words,
+        "page_words": [p["words"] for p in layer["pages"]],
         "page_hashes": [page_hash(p) for p in pages],
-        "pages_textless": [i for i, w in enumerate(words, 1) if w < MIN_WORDS and i in images],
-        "pages_near_empty": [i for i, w in enumerate(words, 1) if w < MIN_WORDS and i not in images],
-        "pages_with_images": len(images),
+        "pages_textless": layer["textless"],
+        "pages_near_empty": layer["near_empty"],
+        "pages_with_images": len(layer["with_images"]),
+        "text_layer": layer["text_layer"],
         "meta": {k: info[k] for k in ("Title", "Author", "Creator", "Producer") if info.get(k)},
     }
-    textless = rec["pages_textless"]
-    rec["text_layer"] = "none" if sum(words) == 0 else ("partial" if textless else "full")
     ids = detect_ids(kind, info, pages)
     rec.update(ids)
     if kind == "schematic":

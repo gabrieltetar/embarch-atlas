@@ -14,7 +14,7 @@ import pytest
 
 from embarch_atlas import cli, common, inventory as inv
 
-pytestmark = pytest.mark.skipif(not all(shutil.which(t) for t in ("pdfinfo", "pdftotext", "pdfimages")),
+pytestmark = pytest.mark.skipif(not all(shutil.which(t) for t in ("pdfinfo", "pdftotext")),
                                 reason="poppler CLI tools not installed")
 
 FILLER = ("This device is intended for use in general purpose applications and offers a wide operating range "
@@ -182,3 +182,37 @@ def test_detectors_are_pure():
         == "ds1111@4"
     assert inv.doc_id_for({"kind": "other", "part": None, "doc_no": None, "rev": None, "file": "My Notes.pdf"}) \
         == "my-notes@norev"
+
+
+def test_inventory_and_doc_prep_agree_on_textless_pages(tmp_path):
+    """One classification (pdftext.text_layer) for both: a logo and a header line on every page
+    make no page "has an image" or "text", and the lists of textless pages are the same."""
+    from embarch_atlas import pdftext
+
+    src = tmp_path / "hardware"
+    src.mkdir()
+    doc = pymupdf.open()
+    logo = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 160, 80), False)
+    logo.clear_with(90)
+    pic = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 300, 300), False)
+    pic.clear_with(200)
+    bodies = [f"QQ7 Product Requirements Document\nVersion: 2.0\n{FILLER}\n{FILLER}", FILLER * 2, None,
+              "Packing notes: see above.", FILLER]
+    for i, body in enumerate(bodies, 1):
+        p = doc.new_page(width=612, height=792)
+        p.insert_text((40, 30), "QQ7 Product Requirements Document Version 2.0", fontname="helv", fontsize=9)
+        p.insert_image(pymupdf.Rect(480, 8, 580, 58), pixmap=logo)        # the same logo on every page
+        if body:
+            p.insert_textbox(pymupdf.Rect(40, 90, 570, 740), body, fontsize=10, fontname="helv")
+        else:
+            p.insert_image(pymupdf.Rect(60, 100, 550, 600), pixmap=pic)   # a picture page, header only
+    doc.save(src / "QQ7 PRD.pdf")
+    man = inv.run(tmp_path / "atlas", src)
+    rec = man["documents"][0]
+    assert rec["pages_textless"] == [3] and rec["text_layer"] == "partial"
+    assert rec["pages_with_images"] == 1                      # the logo is not an image of any page
+    assert 4 not in rec["pages_textless"] and rec["pages_near_empty"] == [4]
+    d = pdftext.prep(src / "QQ7 PRD.pdf", tmp_path / "atlas", log=lambda *_: None)
+    meta = common.read_json(d / "doc.json")
+    assert (meta["text_layer"], meta["pages_textless"]) == (rec["text_layer"], rec["pages_textless"])
+    assert d.name == rec["doc_id"]
