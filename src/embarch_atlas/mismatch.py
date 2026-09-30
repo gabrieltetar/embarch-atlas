@@ -12,7 +12,8 @@ annotations vs truth, cross-board names), plus two record-fed hooks: a `conflict
 record whose `sources` include a driver (driver-vs-datasheet), and a second-look
 verdict of `conflict` (document-reading conflict). The `reg-*` classes (register
 constants in the driver sources vs the part's register/field records) come from
-`codecheck.py`, which this report runs.
+`codecheck.py`, and the `dt-limit-*` classes (DT unit properties vs the part's
+limit/timing records) from `limits.py`; this report runs both.
 """
 from __future__ import annotations
 
@@ -25,11 +26,13 @@ from embarch_atlas.common import read_jsonl, write_json, write_text
 # rank order: most actionable first
 ORDER = [
     "cross-board-net-name", "device-signal-mismatch", "i2c-address-strap", "i2c-bus-membership",
-    "dt-value-vs-bom", "dt-comment-vs-net", "driver-vs-datasheet", "reg-field-in-other-register", "reg-address-vs-name",
+    "dt-limit-over-abs-max", "dt-value-vs-bom", "dt-comment-vs-net", "driver-vs-datasheet", "dt-limit-outside-recommended",
+    "dt-limit-declared-unknown", "reg-field-in-other-register", "reg-address-vs-name",
     "reg-mask-vs-field", "reg-reset-vs-datasheet", "reg-address-unknown", "document-reading-conflict",
     "pinctrl-func-vs-net-name", "polarity-vs-net-name", "open-drain-no-pull", "pull-conflict",
     "pull-to-other-rail", "dt-pin-not-connected", "dt-no-binding", "dt-no-driver", "symbol-vs-datasheet",
-    "i2c-identity-unresolved", "reg-comment-vs-datasheet", "exti-line-shared", "pin-shared-in-dt", "connected-no-dt", "dni-on-path",
+    "i2c-identity-unresolved", "reg-comment-vs-datasheet", "dt-limit-needs-formula", "dt-limit-outside-ec",
+    "exti-line-shared", "pin-shared-in-dt", "connected-no-dt", "dni-on-path",
     "polarity-resolved",
 ]
 SETTLE = {
@@ -58,8 +61,8 @@ SETTLE = {
     "polarity-resolved": "the LED's anode/cathode orientation on the symbol",
 }
 NOT_RUN = [
-    ("DT limits vs datasheet", "mapping `*-microamp`/`*-microvolt` properties to limit records is not deterministic yet"),
-    ("enable / sequence timing", "code delays and DT `*-ms` properties vs datasheet timing records need that mapping"),
+    ("enable / sequence timing", "code delays (`k_sleep`, `k_msleep`) vs datasheet timing records; DT `*-ms` properties "
+     "are compared only on nodes that resolve to a part (the DT limits check)"),
     ("power domain of the far-end part", "far-end VCC rail vs MCU I/O level needs pin records with supply pins"),
     ("boot state before firmware runs", "pulls + inverters + part reset values: done by hand so far"),
 ]
@@ -86,6 +89,7 @@ class Report:
         self.checks: dict[str, dict] = {}
         self.folded: dict[str, list[str]] = collections.defaultdict(list)
         self.not_run: list[dict] = []
+        self.sections: list[dict] = []
 
     def check(self, name: str, sources: str, ran: int = 0, passed: int = 0):
         c = self.checks.setdefault(name, {"check": name, "sources": sources, "ran": 0, "passed": 0, "candidates": 0})
@@ -401,6 +405,17 @@ def run(J, stamp: dict, pins: dict) -> dict:
     for f in cc["findings"]:
         R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
     R.not_run += cc["not_run"]
+    # ---- DT unit properties vs the part's limit/timing records
+    from embarch_atlas import limits
+    lm = limits.run_join(J, stamp, pins)
+    for c in lm["checks"]:
+        R.check(c["check"], c["sources"], c["ran"], c["passed"])
+    for f in lm["findings"]:
+        R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
+    for k, v in lm["folded"].items():
+        R.folded[k] += v
+    R.not_run += lm["not_run"]
+    R.sections.append(lm["section"])
     sl = J.atlas / "second_look.jsonl"
     if sl.is_file():
         R.check("second look agrees with the first pass", "second_look.jsonl")
@@ -457,7 +472,8 @@ def finish(R: Report, J, stamp: dict) -> dict:
     summary = (f"{len(checks)} checks, {n_pass}/{n_ran} items passed; "
                f"{sum(by.values())} candidates in {len(by)} classes; {sum(len(v) for v in folded.values())} expected items folded")
     rep = {"atlas": stamp["id"], "summary": summary, "checks": checks, "checks_with_nothing_to_check": idle,
-           "not_run": R.not_run, "folded": folded, "candidates": R.candidates, "by_class": dict(by)}
+           "not_run": R.not_run, "folded": folded, "candidates": R.candidates, "by_class": dict(by),
+           "sections": R.sections}
     write_json(J.atlas / "mismatches.json", rep)
     write_text(J.atlas / "checks.md", render(rep, stamp))
     return rep
@@ -482,6 +498,8 @@ def render(rep: dict, stamp: dict) -> str:
         L += ["", "## Not run", ""]
         for n in rep["not_run"]:
             L.append(f"- {n['check']}: {n['why']}")
+    for sec in rep.get("sections") or []:
+        L += ["", f"## {sec['title']}", ""] + list(sec["lines"])
     L += ["", "## Candidates, ranked by class", ""]
     by = collections.defaultdict(list)
     for c in rep["candidates"]:

@@ -82,7 +82,8 @@ boards/<label>/                 schematic analysis, one per board PDF
   geometry.json                 the geometric cross-check of the netlist (rung 3), per sheet and pin
 boards/system.json              board instances + interfaces (engineer-declared, with machine scores)
 boards/straps.jsonl             optional: address/mode straps when no datasheet record exists yet
-boards/bindings.json            optional: compatible -> MPN, prop -> pin, extra rails
+boards/bindings.json            optional: compatible -> MPN, prop -> pin, extra rails, prop_limits
+                                (DT property -> limit record ids, with `times`/`per` for scaled props)
 cache/llm/<key>.json            frozen LLM outputs; second-look verdicts as sl-<key>.json
 .work/<commit12>/<fw basename>  the build worktree
 atlases/<target>@<commit12>/
@@ -96,6 +97,7 @@ atlases/<target>@<commit12>/
   pin_slice.txt                 always-loadable slice (~1.5K tokens)
   checks.md, mismatches.json    mismatch report: checks run and passed, then candidates by class
   codecheck.json, codecheck.md  driver register constants vs datasheet records
+  limits.json                   DT limit properties (SI) vs the part's datasheet limits
   second_look_queue.jsonl       facts this atlas uses that still need a second look
   second_look.jsonl             second-look verdicts
   MAP.md                        tier 0, <= 5K tokens, byte-stable
@@ -324,6 +326,7 @@ An atlas id is `<target>@<commit12>`.
 | `build <target> [<commit>]` | `build` | worktree, west build, artifacts, stamp |
 | `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md |
 | `second-look queue <atlas>` / `second-look record` | `secondlook` | facts this atlas uses that need a second look; record verdicts |
+| (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name; abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `q <lookup>` | `query` | the seven lookups (same answers as the MCP tools) |

@@ -1028,7 +1028,7 @@ def discover(dt: dict, docs, pins: dict, bindings: dict) -> tuple[list[Unit], li
             if not files:
                 continue
             dids, via = docs_for_node(path, compat, docs, identity, part_docs, bindings)
-            dids = [d for d in dids if docs.kind(d) not in ("svd", "rm", "prd")]
+            dids = [d for d in dids if docs.kind(d) not in ("svd", "rm", "reference-manual", "errata", "prd")]
             with_regs = [d for d in dids if docs.records(d, "register")]
             if not with_regs and any(f.startswith("fw:") for f in files):
                 no_map[compat] = (f"{', '.join(dids)} has no register records yet (`doc regparse`, or translate the "
