@@ -227,3 +227,12 @@ def test_compare_reads_a_plus_minus_value_cell_as_min_and_max():
     # a TYP printed ±X is kept as text by the first pass: compared as the printed string, not expanded
     t = {"kind": "limit", "typ": "±0.48", "unit": "%"}
     assert compare_one(t, {"found": True, "values": {"typ": "±0.48", "unit": "%"}})[0] == "confirmed"
+
+
+def test_compare_reads_a_one_cell_pair_as_min_and_max():
+    from embarch_atlas.secondlook import compare_one
+    both = {"kind": "limit", "min": -5, "max": 0, "unit": "mA"}
+    na = {"kind": "limit", "min": -5, "max": "NA", "unit": "mA"}
+    assert compare_one(both, {"found": True, "values": {"max": "-5 / 0", "unit": "mA"}})[0] == "confirmed"
+    assert compare_one(na, {"found": True, "values": {"max": "-5 / NA(3)", "unit": "mA"}})[0] == "confirmed"
+    assert compare_one(both, {"found": True, "values": {"max": "-4 / 0", "unit": "mA"}})[0] == "conflict"

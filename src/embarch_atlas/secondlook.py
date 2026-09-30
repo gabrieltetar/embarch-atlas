@@ -527,6 +527,27 @@ def expand_pm(vals: dict, first: dict) -> dict:
     return out
 
 
+PAIR = re.compile(r"^\s*([-\u2212]?[0-9]+(?:\.[0-9]+)?)\s*/\s*([-\u2212]?[0-9]+(?:\.[0-9]+)?|[A-Za-z]+)\s*(?:\(\d+\))?\s*$")
+
+
+def expand_pair(vals: dict, first: dict) -> dict:
+    """A reader's one-cell pair `A / B` (a table printing a negative / positive limit in one Max cell,
+    `-5 / NA`) is `min: A, max: B`, the form the first pass stores it in, when the first pass has both."""
+    if first.get("min") is None or first.get("max") is None:
+        return vals
+    out = dict(vals)
+    for f in ("max", "nom", "typ", "min"):
+        m = PAIR.match(str(vals.get(f) or "").replace("\u2212", "-"))
+        if not m:
+            continue
+        lo, hi = m.group(1), m.group(2)
+        out[f] = None
+        out["min"] = float(lo)
+        out["max"] = float(hi) if re.fullmatch(r"-?[0-9.]+", hi) else hi
+        break
+    return out
+
+
 def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
     """confirmed / conflict / unresolved, and why. Deterministic: no judgment here."""
     if not reading.get("found", True):
@@ -542,7 +563,7 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
             return "conflict", ["the page contradicts the statement"]
         return "unresolved", ["no supports/contradicts claim"]
     if k in ("limit", "timing"):
-        vals = expand_pm(vals, first)
+        vals = expand_pair(expand_pm(vals, first), first)
         for f in ("min", "nom", "typ", "max"):
             a, b = _num(first.get(f)), _num(vals.get(f))
             if a is None and b is None:
