@@ -25,6 +25,7 @@ MODULES = [
     "rm",
     "build",
     "join",
+    "codecheck",
     "secondlook",
     "diff",
     "query",

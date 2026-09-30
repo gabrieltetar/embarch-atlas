@@ -92,6 +92,7 @@ atlases/<target>@<commit12>/
   pins.md, pins.json            pin/net map
   pin_slice.txt                 always-loadable slice (~1.5K tokens)
   checks.md, mismatches.json    mismatch report: checks run and passed, then candidates by class
+  codecheck.json, codecheck.md  driver register constants vs datasheet records
   second_look_queue.jsonl       facts this atlas uses that still need a second look
   second_look.jsonl             second-look verdicts
   MAP.md                        tier 0, <= 5K tokens, byte-stable
@@ -299,6 +300,7 @@ An atlas id is `<target>@<commit12>`.
 | `build <target> [<commit>]` | `build` | worktree, west build, artifacts, stamp |
 | `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md |
 | `second-look queue <atlas>` / `second-look record` | `secondlook` | facts this atlas uses that need a second look; record verdicts |
+| `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `q <lookup>` | `query` | the seven lookups (same answers as the MCP tools) |
 | `mcp` | `mcp_server` | the seven lookups as an MCP server over stdio |

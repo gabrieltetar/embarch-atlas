@@ -10,7 +10,9 @@ The classes follow the catalogue of cross-source checks for Zephyr on STM32
 assignment, EXTI sharing, DT values vs BOM, DT-declared vs driver reality, hand
 annotations vs truth, cross-board names), plus two record-fed hooks: a `conflict`
 record whose `sources` include a driver (driver-vs-datasheet), and a second-look
-verdict of `conflict` (document-reading conflict).
+verdict of `conflict` (document-reading conflict). The `reg-*` classes (register
+constants in the driver sources vs the part's register/field records) come from
+`codecheck.py`, which this report runs.
 """
 from __future__ import annotations
 
@@ -23,10 +25,11 @@ from embarch_atlas.common import read_jsonl, write_json, write_text
 # rank order: most actionable first
 ORDER = [
     "cross-board-net-name", "device-signal-mismatch", "i2c-address-strap", "i2c-bus-membership",
-    "dt-value-vs-bom", "dt-comment-vs-net", "driver-vs-datasheet", "document-reading-conflict",
+    "dt-value-vs-bom", "dt-comment-vs-net", "driver-vs-datasheet", "reg-field-in-other-register", "reg-address-vs-name",
+    "reg-mask-vs-field", "reg-reset-vs-datasheet", "reg-address-unknown", "document-reading-conflict",
     "pinctrl-func-vs-net-name", "polarity-vs-net-name", "open-drain-no-pull", "pull-conflict",
     "pull-to-other-rail", "dt-pin-not-connected", "dt-no-binding", "dt-no-driver", "symbol-vs-datasheet",
-    "i2c-identity-unresolved", "exti-line-shared", "pin-shared-in-dt", "connected-no-dt", "dni-on-path",
+    "i2c-identity-unresolved", "reg-comment-vs-datasheet", "exti-line-shared", "pin-shared-in-dt", "connected-no-dt", "dni-on-path",
     "polarity-resolved",
 ]
 SETTLE = {
@@ -55,7 +58,6 @@ SETTLE = {
     "polarity-resolved": "the LED's anode/cathode orientation on the symbol",
 }
 NOT_RUN = [
-    ("register constants vs datasheet", "code site -> (part, register, field) needs a libclang pass over the TUs"),
     ("DT limits vs datasheet", "mapping `*-microamp`/`*-microvolt` properties to limit records is not deterministic yet"),
     ("enable / sequence timing", "code delays and DT `*-ms` properties vs datasheet timing records need that mapping"),
     ("power domain of the far-end part", "far-end VCC rail vs MCU I/O level needs pin records with supply pins"),
@@ -391,6 +393,14 @@ def run(J, stamp: dict, pins: dict) -> dict:
             R.check("driver claims vs datasheet", "", 1, 0)
             R.cand("driver-vs-datasheet", rec.get("id") or d, rec.get("text") or "driver and datasheet disagree",
                    [f"{s}" for s in srcs] + [_cite(rec, d)], "driver claims vs datasheet")
+    # ---- register constants in the driver sources vs the datasheet register map
+    from embarch_atlas import codecheck
+    cc = codecheck.run_join(J, stamp, pins)
+    for c in cc["checks"]:
+        R.check(c["check"], c["sources"], c["ran"], c["passed"])
+    for f in cc["findings"]:
+        R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
+    R.not_run += cc["not_run"]
     sl = J.atlas / "second_look.jsonl"
     if sl.is_file():
         R.check("second look agrees with the first pass", "second_look.jsonl")
