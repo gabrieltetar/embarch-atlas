@@ -426,8 +426,11 @@ def run(J, stamp: dict, pins: dict) -> dict:
                 continue
             R.check("second look agrees with the first pass", "", 1, int(ok))
             if v.get("verdict") == "conflict":
-                R.cand("document-reading-conflict", str(v.get("id")), f"second look read {v.get('value')} {v.get('unit') or ''}"
-                       f"{' (' + v['cond'] + ')' if v.get('cond') else ''} where the first pass has {v.get('first')}".strip(),
+                why = "; ".join(v.get("why") or [])
+                summary = (f"{v.get('id')}: {why}" if why else
+                           f"second look read {v.get('value')} {v.get('unit') or ''}"
+                           f"{' (' + v['cond'] + ')' if v.get('cond') else ''} where the first pass has {v.get('first')}".strip())
+                R.cand("document-reading-conflict", str(v.get("id")), summary,
                        [f"{v.get('doc') or ''} p{v.get('p')}", f"quote: {v.get('q')}"], "second look agrees with the first pass")
     else:
         R.not_run.append({"check": "second look agrees with the first pass",

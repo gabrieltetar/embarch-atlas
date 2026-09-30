@@ -325,7 +325,7 @@ def record(ad: Path, atlas: Path, verdicts_path: Path) -> dict:
                 if not q_on_page and it.get("src") != "figure":
                     warnings.append(f"{it['id']}: the second-look quote is not on p{pages} (paraphrase?)")
         first = next((r for r in docs.docs.get(it["doc"], {}).get("records", {}).get(it["kind"], []) if r.get("id") == it["id"]), {})
-        entry = {**{k: v.get(k) for k in ("id", "verdict", "value", "unit", "cond", "q", "p", "reader")},
+        entry = {**{k: v.get(k) for k in ("id", "verdict", "value", "unit", "cond", "q", "p", "reader", "why")},
                  "doc": it["doc"], "kind": it["kind"], "key": it["key"], "q_on_page": q_on_page, "recorded": now,
                  "first": {k: first.get(k) for k in ("min", "typ", "max", "nom", "unit", "cond", "reset", "value", "text")
                            if first.get(k) is not None}}
