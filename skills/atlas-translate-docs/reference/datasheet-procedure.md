@@ -348,6 +348,10 @@ These settle cases the rules above leave open. They were each hit on a real data
 - **Soft hyphens and hyphenated line breaks**: the checker joins them, so quote the word whole.
 - **Two-column layouts**: `pdftotext -layout` can interleave columns; split a multi-line quote with
   `...` into parts that each sit on one line.
+- **Tables set sideways** (a pinout with one column per package, on a page turned 90°): the text layer
+  scrambles them. `embarch-atlas doc columns <doc_id> <page>` prints the page as rows and cells in
+  reading order, cut at the table's rules. Read the cells from it, then quote the text layer as usual
+  (a cell's words are on the page); check a surprising cell against the page image.
 - **Table-of-contents pages without outline entries** are grouped as `front-matter` in `toc.md`;
   they are not part of the section before them.
 

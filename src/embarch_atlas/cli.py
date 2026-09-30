@@ -21,6 +21,7 @@ MODULES = [
     "render",
     "regparse",
     "freeze",
+    "columns",
     "svd",
     "vote",
     "rm",

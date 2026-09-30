@@ -321,6 +321,7 @@ An atlas id is `<target>@<commit12>`.
 | `doc check <doc_id>` | `check` | checks A–T, writes checks.json, sets `prov` |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
 | `doc regparse <doc_id> --template ti\|maxim` | `regparse` | deterministic register records |
+| `doc columns <doc_id> <page>...` | `columns` | a table page as rows and cells in reading orientation (sideways tables: rules, else gaps); for reading, never a quote source |
 | `doc freeze <doc_id> [--model M]` / `doc thaw-check <doc_id> [--from <old>] [--restore]` | `freeze` | record the LLM-written units in `cache/llm/`; after a new `doc prep`, list which frozen units are still valid and which go back to the LLM |
 | `mcu svd <svd> --doc-id <id>` | `svd` | registers/fields as records under the SVD doc |
 | `mcu vote --svd-doc <id> --rm-doc <id> [--header <h>] [--periph P]` | `vote` | SVD vs header vs RM: `conflict` / `quirk` (correct omission) / `rule` records under the RM doc |
