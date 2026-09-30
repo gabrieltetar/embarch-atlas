@@ -3,23 +3,36 @@
 Record checks (per record, against the text layer of the pages it cites):
   V  schema          the record validates against schemas/record.schema.json
   A  quote anchoring every quote occurs on a cited page, in the pdftotext or the PyMuPDF text layer,
-                     with Symbol-font private-use glyphs mapped or stripped (Read shows them as nothing)
+                     with Symbol-font private-use glyphs mapped or stripped (Read shows them as nothing);
+                     the parts of a quote split with `...` occur in order and near each other (a short
+                     part on the same or the adjacent line), so a trailing number is tied to its line
   N  number in quote every numeric min/nom/typ/max is a number inside the quote (requirements: every
                      number of `text`)
-  K  columns         for a table row under a MIN/TYP/MAX header, word x-positions give an independent
-                     column assignment (and the UNIT column when there is one); it must agree
+  K  columns         for a table row under a MIN/TYP/MAX header (or a single VALUE column), word
+                     x-positions give an independent column assignment (and the UNIT column when there
+                     is one); it must agree. `±X` in MIN or MAX is min -X, max X; `±X` in TYP is a
+                     magnitude (the record keeps the string `"±X"`, or X); `X%` is X with unit %; `a to
+                     b` in a VALUE column is min a, max b. A record value kept as an expression string
+                     is not compared. A row K cannot find is a warning, counted per document
   C  conditions      every number in `cond` is on a cited page
   U  units           the unit's dimension fits the symbol (V, I, t, R, T, f, C, P, L) or the parameter,
                      and the unit string is on the cited page
   O  order           min <= nom/typ <= max
   R  references      quirk/conflict refs resolve; ids are unique (a deterministic record and an LLM
                      record may share an id: they are twins, compared by G)
-  X  invariants      `check` records: expr evaluated over R['<id>'].min/nom/typ/max, result == expect
+  X  invariants      `check` records: expr evaluated over R['<id>'].min/nom/typ/max/value/reset/bits/
+                     addr/width, result == expect
   G  registers       field widths cover the register, no overlap, field resets compose to the register
-                     reset, unique addresses, summary-table coverage, and LLM vs deterministic twins
+                     reset, unique addresses, summary-table coverage, and LLM vs deterministic twins (an
+                     LLM `reset: null` with a `note` is a variant- or strap-dependent reset: not compared)
 Markdown checks (card.md, s/*.md):
   M  numbers         every number is on a page the line cites (or its heading cites), is a value of a
-                     verified record, or the line is tagged (derived), (figure) or (inference)
+                     verified record on those pages (a record on another page only warns), or is tagged
+                     (derived), (inference), (figure) or (equation). A tag covers the numbers before it in
+                     its clause (up to `;`, `:` or a sentence end; in a table, its cell), not the whole
+                     line; a Note cell that is only a tag covers its row. Rendered structural cells
+                     (Bits, Width, Order, Priority, enum keys) and the expressions in s/invariants.md are
+                     not numeric claims
   S  table structure the ground-truth-free converter checks of spike 10 on value columns: glued numbers,
                      packed cells, fused MIN/TYP/MAX header, orphaned subscript, min <= typ <= max
   T  budgets         card.md <= 1.5K tokens, each s/*.md <= 4K (o200k)
@@ -27,7 +40,8 @@ Markdown checks (card.md, s/*.md):
 Then `prov` is set: an LLM record that passes becomes llm-verified, one that fails llm-unverified
 (it is never deleted); a figure or equation fact stays llm-unverified, since only a second look can
 verify it. A deterministic record whose twin agrees becomes deterministic+crosschecked.
-Writes checks.json; exits 1 while anything is failing.
+Writes checks.json; exits 1 while anything is failing. Warnings (K rows not found, M numbers anchored
+only by a record on another page) are listed, never failing.
 """
 from __future__ import annotations
 
@@ -101,6 +115,41 @@ def cited_pages(s: str) -> set[int]:
     return out
 
 
+# ---------------------------------------------------------------- quotes split with `...`
+
+SHORT_PART = 24     # a part this short (chars) must sit on the same or the adjacent line as its neighbour
+LONG_GAP = 6        # longer parts: at most this many lines apart
+
+
+def split_quote(q: str) -> list[str]:
+    return [x for x in re.split(r"\s*(?:\.\.\.|…)\s*", normalize(q, "map")) if x]
+
+
+def _parts_near(f: str, starts: list[int], parts: list[str]) -> bool:
+    """The parts occur in `f` in order, each near the one before: a short part on the same or the
+    adjacent line (so `Title ... 14` ties the 14 to the title's line), a long one within LONG_GAP."""
+    from bisect import bisect_right
+
+    def line(pos: int) -> int:
+        return bisect_right(starts, pos) - 1
+
+    def walk(k: int, pos: int, prev_end_line: int) -> bool:
+        part = parts[k]
+        i = f.find(part, pos)
+        while i >= 0:
+            if k > 0:
+                short = len(part) <= SHORT_PART or len(parts[k - 1]) <= SHORT_PART
+                if line(i) - prev_end_line > (1 if short else LONG_GAP):
+                    return False        # every later occurrence is farther away
+            end = i + len(part)
+            if k == len(parts) - 1 or walk(k + 1, end, line(end - 1)):
+                return True
+            i = f.find(part, i + 1)
+        return False
+
+    return walk(0, 0, 0)
+
+
 # ---------------------------------------------------------------- the text layer
 
 class DocText:
@@ -110,8 +159,11 @@ class DocText:
     def __init__(self, docdir: Path, use_pdf: bool = True):
         self.dir = Path(docdir)
         self.meta = common.read_json(self.dir / "doc.json")
-        self.doc_id = self.meta["doc_id"]
-        self.n = int(self.meta["pages"])
+        self.doc_id = self.meta.get("doc_id") or self.meta.get("id") or self.dir.name
+        # A non-PDF source (an SVD) has no pages: only the record-level checks run on it.
+        self.n = int(self.meta.get("pages") or 0)
+        if not self.n:
+            use_pdf = False
         self.raw = {}
         for p in range(1, self.n + 1):
             f = page_file(self.dir, p)
@@ -131,6 +183,7 @@ class DocText:
         self._forms: dict[int, tuple[str, ...]] = {}
         self._nums: dict[int, list[float]] = {}
         self._words: dict[int, list] = {}
+        self._lines: dict[int, list[tuple[str, list[int]]]] = {}
 
     def forms(self, p: int) -> tuple[str, ...]:
         if p not in self._forms:
@@ -146,23 +199,39 @@ class DocText:
             self._forms[p] = tuple(fs)
         return self._forms[p]
 
+    def line_forms(self, p: int) -> list[tuple[str, list[int]]]:
+        """(normalized page, offset where each non-blank source line starts in it) per text layer and
+        glyph mode. Offsets come from normalizing each prefix of lines, so they follow whatever
+        normalize() does across a line break (a rejoined hyphenation shifts them by a character at most)."""
+        if p not in self._lines:
+            texts = [self.raw.get(p, "")]
+            if self.pdf is not None and 1 <= p <= self.n:
+                texts.append(self.pdf[p - 1].get_text())
+            out: list[tuple[str, list[int]]] = []
+            for t in texts:
+                lines = t.replace("\f", "").split("\n")
+                for mode in ("map", "strip"):
+                    f = normalize(t, mode)
+                    if any(f == x[0] for x in out):
+                        continue
+                    starts = []                 # blank lines are no lines: they do not count as a gap
+                    for i, ln in enumerate(lines):
+                        if ln.strip():
+                            n = len(normalize("\n".join(lines[:i]), mode)) if i else 0
+                            starts.append(n + 1 if n else 0)
+                    out.append((f, starts or [0]))
+            self._lines[p] = out
+        return self._lines[p]
+
     def has(self, q: str, p: int) -> bool:
         if not 1 <= p <= self.n:
             return False
-        parts = [x for x in re.split(r"\s*(?:\.\.\.|…)\s*", normalize(q, "map")) if x]
+        parts = split_quote(q)
         if not parts:
             return False
-        for f in self.forms(p):
-            pos, ok = 0, True
-            for part in parts:
-                i = f.find(part, pos)
-                if i < 0:
-                    ok = False
-                    break
-                pos = i + len(part)
-            if ok:
-                return True
-        return False
+        if len(parts) == 1:
+            return any(parts[0] in f for f in self.forms(p))
+        return any(_parts_near(f, starts, parts) for f, starts in self.line_forms(p))
 
     def page_numbers(self, ps) -> list[float]:
         out: list[float] = []
@@ -201,9 +270,47 @@ class DocText:
             out.append((yc, sorted(cur)))
         return out
 
+    def find_row(self, bands: list, q: str) -> tuple[int, int] | None:
+        """(first band index, band count) of the table row a quote comes from. The row is the band, or
+        up to three stacked bands within ROW_SPAN points (a cell that wraps, a value printed a line
+        above or below its condition), whose text holds the quote's last part whole, else its last
+        three tokens; punctuation and spacing are ignored, since the two text layers split words
+        differently (`1s` vs `1 s`, an overline's `)` on its own line). Whole beats tail, fewer bands
+        beat more."""
+        parts = [x for x in re.split(r"\s*(?:\.\.\.|…)\s*", q) if x] or [q]
+        last = parts[-1]
+        full, toks = _compact(last), last.split()
+        tail = _compact(" ".join(toks[-3:]))
+        qset = {_compact(t) for t in q.split()}
+        best = None
+        for i in range(len(bands)):
+            for n in (1, 2, 3):
+                grp = bands[i:i + n]
+                if len(grp) < n or grp[-1][0] - grp[0][0] > ROW_SPAN:
+                    break
+                words = [w for _, ws in grp for w in ws]
+                texts = {_compact(" ".join(w[4] for w in words))}
+                if n > 1:
+                    texts.add(_compact(" ".join(w[4] for w in sorted(words, key=lambda w: w[0]))))
+                if full and any(full in t for t in texts):
+                    level = 0
+                elif tail and any(tail in t for t in texts):
+                    level = 1
+                else:
+                    continue
+                score = sum(1 for w in words if _compact(w[4]) in qset)
+                cand = (level, n, -score, i)
+                if best is None or cand < best:
+                    best = cand
+        return None if best is None else (best[3], best[1])
+
     def columns(self, rec: dict) -> dict:
         """Independent min/nom/typ/max (and unit) for a record's row, from word x-positions under the
-        nearest MIN/TYP/MAX header above the row that holds the tail of the quote."""
+        nearest MIN/TYP/MAX (or VALUE) header above the row that holds the quote (find_row).
+
+        det values: a float; ("pm", X) for `±X` under TYP/NOM; "expr" for a cell that is not a number
+        (`VIN`, `Vs + 0.3`); {"single": X} is a lone number in a VALUE column, whose key (max, typ)
+        the column does not say."""
         ps, qs = R.pages(rec), R.quotes(rec)
         if not ps or not qs:
             return {"status": "no-quote"}
@@ -215,42 +322,196 @@ class DocText:
         for yc, ws in bands:
             h = {HDR[w[4].upper()]: (w[0] + w[2]) / 2 for w in ws if w[4].upper() in HDR}
             if len(h) >= 2:
-                headers.append((yc, h))
+                headers.append((yc, h, ws))
+                continue
+            up = [w[4].upper() for w in ws]
+            if len(ws) <= 8 and any(u in VALUE_HDR for u in up) and any(u in ("UNIT", "UNITS") for u in up):
+                v = next(w for w in ws if w[4].upper() in VALUE_HDR)
+                headers.append((yc, {"value": (v[0] + v[2]) / 2}, ws))
         if not headers:
             return {"status": "no-header"}
-        qtok = qn.split()
-        tail = " ".join(qtok[-3:]) if len(qtok) >= 3 else qn
-        best = None
-        for yc, ws in bands:
-            txt = " ".join(w[4] for w in ws)
-            if tail in txt or qn in txt:
-                toks = txt.split()
-                score = sum(1 for t in qtok if t in toks)
-                if best is None or score > best[0]:
-                    best = (score, yc, ws)
-        if best is None:
+        row = self.find_row(bands, qn)
+        if row is None:
             return {"status": "row-not-found"}
-        _, yc, ws = best
+        i0, n = row
+        grp = bands[i0:i0 + n]
+        yc = grp[0][0]
+        words = [w for _, ws in grp for w in ws]
         above = [h for h in headers if h[0] < yc]
         if not above:
             return {"status": "no-header-above"}
-        hy, hdr = above[-1]
-        left = min(hdr.values()) - 30
-        det: dict[str, float] = {}
-        for w in ws:
-            xc = (w[0] + w[2]) / 2
-            if xc < left or not NUM_RE.fullmatch(w[4]):
-                continue
-            col = min(hdr, key=lambda k: abs(hdr[k] - xc))
-            if abs(hdr[col] - xc) < 28:
-                det.setdefault(col, float(w[4]))
+        hy, hdr, hws = above[-1]
+        det: dict[str, Any] = {}
+        pct = False
+        if "value" in hdr:
+            vx = hdr["value"]
+            xs = sorted((w[0] + w[2]) / 2 for w in hws)
+            k = xs.index(min(xs, key=lambda x: abs(x - vx)))
+            lo = max(vx - 45, (xs[k - 1] + vx) / 2 if k > 0 else vx - 45)
+            hi = min(vx + 45, (xs[k + 1] + vx) / 2 if k + 1 < len(xs) else vx + 45)
+            cell = [w[4] for w in words if lo <= (w[0] + w[2]) / 2 <= hi]
+            det, pct = _value_cell(cell)
+            if det is None:
+                return {"status": "cell-unparsed"}
+        else:
+            left = min(hdr.values()) - 30
+            seen: dict[str, list] = {}
+            for w in words:
+                xc = (w[0] + w[2]) / 2
+                c = _cell_num(w[4]) if xc >= left else None
+                if c is None:
+                    continue
+                col = min(hdr, key=lambda k: abs(hdr[k] - xc))
+                if abs(hdr[col] - xc) < 28:
+                    seen.setdefault(col, []).append(c[0])
+                    pct |= c[1]
+            for col, vs in seen.items():
+                if n > 1 and len({repr(v) for v in vs}) > 1:
+                    return {"status": "row-ambiguous"}   # two stacked lines put two values in one column
+                v = vs[0]
+                if isinstance(v, tuple) and col in ("min", "max"):
+                    det.setdefault("min", -v[1])
+                    det.setdefault("max", v[1])
+                else:
+                    det[col] = v
         unit = None
-        uh = [w for y2, ws2 in bands if abs(y2 - hy) < 1 for w in ws2 if w[4].upper() in ("UNIT", "UNITS")]
+        uh = [w for w in hws if w[4].upper() in ("UNIT", "UNITS")]
         if uh:
             ux = (uh[0][0] + uh[0][2]) / 2
-            cand = [w[4] for w in ws if abs((w[0] + w[2]) / 2 - ux) < 25 and not NUM_RE.fullmatch(w[4])]
-            unit = cand[0] if cand else None
+
+            def uwords(ws):
+                return [w[4] for w in ws if abs((w[0] + w[2]) / 2 - ux) < 25 and _cell_num(w[4]) is None]
+
+            own = [x for _, ws in grp for x in uwords(ws)]
+            if own:
+                unit = " ".join(own)
+                want = _unit_forms(rec["unit"]) if rec.get("unit") else []
+                if want and unit not in want:
+                    # a unit cell that wraps over the neighbouring lines ('% of' / 'Reading')
+                    near = [(j, uwords(bands[j][1])) for j in range(max(0, i0 - 3), min(len(bands), i0 + n + 3))
+                            if not i0 <= j < i0 + n and abs(bands[j][0] - yc) <= UNIT_SPAN]
+                    before = [x for j, x in near if j < i0 and x][::-1]
+                    after = [x for j, x in near if j >= i0 + n and x]
+                    for kb in range(len(before) + 1):
+                        for ka in range(len(after) + 1):
+                            joined = " ".join(sum(before[:kb][::-1], []) + own + sum(after[:ka], []))
+                            if joined in want:
+                                unit = joined
+        if unit is None and pct:
+            unit = "%"
         return {"status": "ok", "det": det, "unit": unit}
+
+
+ROW_SPAN = 12.0      # points: stacked lines of one table row
+# K statuses where the row is on the page but K could not read it: warnings, counted per document
+K_WARN = {"row-not-found": "row not found", "row-ambiguous": "row ambiguous (two stacked lines, one column)",
+          "cell-unparsed": "row with an unreadable VALUE cell"}
+UNIT_SPAN = 16.0     # points: a unit cell wrapped over the row's neighbouring lines
+VALUE_HDR = ("VALUE", "VALUES")
+_CELL_NUM = re.compile(r"^([±+-]?)(\d+(?:\.\d+)?)(%?)$")
+_COMPACT = re.compile(r"[\s()\[\],;:'\"]+")
+
+
+def _compact(s: str) -> str:
+    return _COMPACT.sub("", s)
+
+
+def _cell_num(w: str) -> tuple[Any, bool] | None:
+    """A value word: (float, has %) or (("pm", X), has %) for `±X`; None when it is not a number."""
+    m = _CELL_NUM.match(w)
+    if not m:
+        return None
+    v = float(m.group(2))
+    if m.group(1) == "±":
+        return ("pm", v), bool(m.group(3))
+    return (-v if m.group(1) == "-" else v), bool(m.group(3))
+
+
+_GLUED_UNIT = re.compile(r"^([±+-]?\d+(?:\.\d+)?)(\D+)$")
+
+
+def _side_num(side: list[str]) -> tuple[Any, bool] | None:
+    """One side of a VALUE cell as a number: unit words dropped (`-0.3 V`), a glued unit cut (`6V`)."""
+    toks = [t for t in side if normalize(t).replace("ohm", "ω") not in UNIT_DIM]
+    if len(toks) != 1:
+        return None
+    c = _cell_num(toks[0])
+    if c is None:
+        m = _GLUED_UNIT.match(toks[0])
+        if m and normalize(m.group(2)).replace("ohm", "ω") in UNIT_DIM:
+            c = _cell_num(m.group(1))
+    return c
+
+
+def _value_cell(toks: list[str]) -> tuple[dict | None, bool]:
+    """A single VALUE column's cell: `a to b` is min/max, `±X` is -X/X, a lone number is {"single"}.
+    A side that is not one number (`VIN`, `Vs + 0.3`) is "expr"."""
+    if not toks:
+        return {}, False
+    pct = False
+    if "to" in toks:
+        i = toks.index("to")
+        out: dict[str, Any] = {}
+        for key, side in (("min", toks[:i]), ("max", toks[i + 1:])):
+            c = _side_num(side)
+            if c is not None and not isinstance(c[0], tuple):
+                out[key] = c[0]
+                pct |= c[1]
+            elif side:
+                out[key] = "expr"
+        return out, pct
+    c = _side_num(toks)
+    if c is None:
+        return ({"single": "expr"}, False) if len(toks) == 1 else (None, False)
+    if isinstance(c[0], tuple):
+        return {"min": -c[0][1], "max": c[0][1]}, c[1]
+    return {"single": c[0]}, c[1]
+
+
+def _pm_string(v: str) -> float | None:
+    """`"±0.48"` (a typical kept as printed) -> 0.48; None for any other string."""
+    c = _cell_num(normalize(v).replace(" ", ""))
+    return c[0][1] if c is not None and isinstance(c[0], tuple) else None
+
+
+def compare_columns(rec: dict, det: dict) -> dict:
+    """{key: {"record", "columns"}} where the record and the independent column reading disagree."""
+    diff: dict[str, Any] = {}
+    if "single" in det:
+        nums = [float(rec[k]) for k in NUMERIC_KEYS if isnum(rec.get(k))]
+        pms = [x for x in (_pm_string(rec[k]) for k in NUMERIC_KEYS if isinstance(rec.get(k), str)) if x is not None]
+        dv = det["single"]
+        if dv == "expr":
+            if nums:
+                diff["value"] = {"record": nums, "columns": "expression"}
+        elif pms or len(nums) != 1 or not math.isclose(nums[0], dv, rel_tol=1e-9):
+            diff["value"] = {"record": nums + pms, "columns": dv}
+        return diff
+    for k in NUMERIC_KEYS:
+        lv, dv = rec.get(k), det.get(k)
+        if isinstance(lv, str):
+            pm = _pm_string(lv)
+            if pm is None:
+                continue                      # an expression kept as printed: nothing to compare
+            if isinstance(dv, tuple) and math.isclose(pm, dv[1], rel_tol=1e-9):
+                continue
+            diff[k] = {"record": lv, "columns": _show(dv)}
+            continue
+        if lv is None and dv is None:
+            continue
+        if isinstance(dv, tuple):             # `±X` under TYP: a magnitude
+            if lv is not None and math.isclose(float(lv), dv[1], rel_tol=1e-9):
+                continue
+        elif dv != "expr" and lv is not None and dv is not None and math.isclose(float(lv), dv, rel_tol=1e-9):
+            continue
+        diff[k] = {"record": lv, "columns": _show(dv)}
+    return diff
+
+
+def _show(dv: Any) -> Any:
+    if isinstance(dv, tuple):
+        return f"±{dv[1]:g}"
+    return "expression" if dv == "expr" else dv
 
 
 # ---------------------------------------------------------------- per-record checks
@@ -307,7 +568,7 @@ def record_checks(doc: DocText, rec: dict) -> dict:
             out["A"] = f"wrong-page: quote found on p{','.join(str(x) for x in adjacent[0])}"
         else:
             out["A"] = f"not-found: {missing[0][:80]!r}"
-    elif kind not in ("figure",) and rec.get("src") not in ("figure", "equation"):
+    elif kind not in ("figure",) and rec.get("src") not in ("figure", "equation", "svd", "header"):
         out["A"] = "no-quote"
     # N
     numv = {k: rec[k] for k in NUMERIC_KEYS if isnum(rec.get(k))}
@@ -328,16 +589,12 @@ def record_checks(doc: DocText, rec: dict) -> dict:
               any((lo is not None and m < lo) or (hi is not None and m > hi) for m in mids)
         out["O"] = "ok" if not bad else f"order violated: {order}"
     # K
-    if kind in ("limit", "timing") and rec.get("group") in K_GROUPS and rec.get("src") == "table" and qs and numv:
+    pm_strings = [k for k in NUMERIC_KEYS if isinstance(rec.get(k), str) and _pm_string(rec[k]) is not None]
+    if kind in ("limit", "timing") and rec.get("group") in K_GROUPS and rec.get("src") == "table" and qs \
+            and (numv or pm_strings):
         c = doc.columns(rec)
         if c["status"] == "ok":
-            det, diff = c["det"], {}
-            for k in NUMERIC_KEYS:
-                lv, dv = numv.get(k), det.get(k)
-                if lv is None and dv is None:
-                    continue
-                if lv is None or dv is None or not math.isclose(float(lv), dv, rel_tol=1e-9):
-                    diff[k] = {"record": lv, "columns": dv}
+            diff = compare_columns(rec, c["det"])
             if c.get("unit") and rec.get("unit") and c["unit"] not in _unit_forms(rec["unit"]):
                 diff["unit"] = {"record": rec["unit"], "columns": c["unit"]}
             out["K"] = "ok" if not diff else {"disagree": diff}
@@ -384,7 +641,7 @@ _SAFE_NODES = (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.BinOp, ast.Add, 
                ast.Name, ast.Load, ast.Store, ast.Constant, ast.Subscript, ast.Attribute, ast.List, ast.Tuple,
                ast.GeneratorExp, ast.ListComp, ast.comprehension, ast.IfExp)
 _SAFE_FUNCS = {"abs": abs, "all": all, "any": any, "min": min, "max": max, "round": round, "sum": sum, "len": len}
-_ATTRS = set(NUMERIC_KEYS) | {"value"}
+_ATTRS = set(NUMERIC_KEYS) | {"value", "reset", "bits", "addr", "width"}
 
 
 def safe_eval(expr: str, env: dict) -> Any:
@@ -397,15 +654,27 @@ def safe_eval(expr: str, env: dict) -> Any:
         if isinstance(node, ast.Name) and node.id.startswith("__"):
             raise ValueError(f"name {node.id} not allowed")
         if isinstance(node, ast.Attribute) and node.attr not in _ATTRS:
-            raise ValueError(f"attribute .{node.attr} not allowed (use .min/.nom/.typ/.max)")
+            raise ValueError(f"attribute .{node.attr} not allowed (use .min/.nom/.typ/.max/.value/.reset/"
+                             ".bits/.addr/.width)")
         if isinstance(node, ast.Call) and not (isinstance(node.func, ast.Name) and node.func.id in _SAFE_FUNCS):
             raise ValueError("only abs/all/any/min/max/round/sum/len may be called")
     # env goes into globals: a generator expression cannot see eval's locals
     return eval(compile(tree, "<invariant>", "eval"), {"__builtins__": {}, **_SAFE_FUNCS, **env})
 
 
+def _attr(rec: dict, a: str) -> Any:
+    """An invariant's view of a record field: register/field `reset` and `addr` as integers."""
+    v = rec.get(a)
+    if a in ("reset", "addr") and isinstance(v, str):
+        try:
+            return R.to_int(v)
+        except ValueError:
+            return v
+    return v
+
+
 def check_invariants(by_id: dict[str, dict], checks: list[dict]) -> list[dict]:
-    ns = {k: SimpleNamespace(**{a: v.get(a) for a in _ATTRS}) for k, v in by_id.items()}
+    ns = {k: SimpleNamespace(**{a: _attr(v, a) for a in _ATTRS}) for k, v in by_id.items()}
     out = []
     for c in checks:
         try:
@@ -463,7 +732,8 @@ def _structure(regs: list[dict], fields_by_reg: dict[str, list[dict]]) -> list[d
                 comp |= R.to_int(f["reset"]) << lo
         if fields_by_reg.get(r["id"]):
             gaps = [i for i, c in enumerate(cover) if c is None]
-            if gaps:
+            # An SVD leaves reserved bits out by convention; a datasheet table lists them.
+            if gaps and r.get("src") not in ("svd", "header"):
                 issues.append({"id": r["id"], "issue": f"bits {gaps} covered by no field"})
             if defined and r.get("reset") is not None and comp != R.to_int(r["reset"]):
                 issues.append({"id": r["id"], "issue": f"field resets compose to {comp:#x}, register reset {r['reset']}"})
@@ -473,6 +743,12 @@ def _structure(regs: list[dict], fields_by_reg: dict[str, list[dict]]) -> list[d
                 issues.append({"id": r["id"], "issue": f"address {a:#x} is also {seen[a]}"})
             seen[a] = r["name"]
     return issues
+
+
+def _variant_reset(rec: dict) -> bool:
+    """`reset: null` with a `note`: the reset depends on a variant or a strap, and the note gives the
+    values (schema, register.reset). A parser that read one of them is not contradicted."""
+    return "reset" in rec and rec["reset"] is None and bool(rec.get("note"))
 
 
 def check_registers(recs: list[dict]) -> dict:
@@ -514,6 +790,8 @@ def check_registers(recs: list[dict]) -> dict:
             continue
         diffs = []
         for k in ("addr", "width", "reset"):
+            if k == "reset" and _variant_reset(l):
+                continue
             dv = R.to_int(d.get(k)) if k != "width" else d.get(k)
             lv = R.to_int(l.get(k)) if k != "width" else l.get(k)
             if dv != lv:
@@ -534,7 +812,7 @@ def check_registers(recs: list[dict]) -> dict:
                 fd.append(f"bits llm {lf['bits']} det {df['bits']}")
             if df.get("access") != lf.get("access"):
                 fd.append(f"access llm {lf.get('access')} det {df.get('access')}")
-            if R.to_int(df.get("reset")) != R.to_int(lf.get("reset")):
+            if R.to_int(df.get("reset")) != R.to_int(lf.get("reset")) and not _variant_reset(lf):
                 fd.append(f"reset llm {lf.get('reset')} det {df.get('reset')}")
             v = "agree" if not fd else "disagree: " + "; ".join(fd)
             diffs += [f"{name}: {x}" for x in fd]
@@ -557,29 +835,148 @@ _STRIP_BEFORE_NUMBERS = [
     re.compile(r"\bfn\s*\d+(?:\s*(?:,|and)\s*(?:fn\s*)?\d+)*", re.I),              # footnote refs: fn 13, 18
     re.compile(r"(?:figure|fig\.|table|eq\.?|equation|footnote|q|note|step|section)\s*\d+(?:[-.]\d+)*", re.I),
     re.compile(r"\b\d+(?:\.\d+){2,}\b"),                                       # section numbers 7.3.4
-    re.compile(r"\b0x[0-9a-f]+\b|\b0b[01]+\b|\b[01]+b\b|\b[0-9a-f]+h\b", re.I),  # hex, binary
+    # hex and binary; an `h`/`b` suffix only on a whole token, so the fraction of 102.3984h stays
+    re.compile(r"\b0x[0-9a-f]+\b|\b0b[01]+\b|(?<![\w.])[01]+b\b|(?<![\w.])(?=[0-9a-f]*\d)[0-9a-f]+h\b", re.I),
     re.compile(r"\b[A-Za-z_]+[A-Za-z_./]*\d[\w./]*(?:-\d[\w./]*)*"),            # identifiers: EN1, I2C, A5
     re.compile(r"\[\s*\d+\s*:\s*\d+\s*\]|\[\s*\d+\s*\]"),                       # bit ranges [7:5], [0]
 ]
-_TAGS = ("(derived", "(inference", "(figure")
+# A tag: `(derived)`, `(inference: ...)`, `(figure, read at 100 dpi)`; never a reference `(Figure 7-1)`.
+# The whole parenthetical is the tag, so the numbers of `(derived: 24 - 0.8)` are covered by it.
+_TAG = re.compile(r"\((derived|inference|figure|equation)(?=\)|[:,;]|\s+[^\d\s])[^()]*\)?", re.I)
+_ROW_TAG = re.compile(r"^\((derived|inference|figure|equation)\)$", re.I)
+TAG_CLASS = {"derived": "derived", "inference": "derived", "figure": "figure", "equation": "figure"}
+# Clause ends, outside parentheses: `;`, a sentence end, a spaced dash, the quirk renderer's `*Why it matters:*`.
+_CLAUSE = re.compile(r";|\.(?=\s|$)|\s[—–]\s|\*why it matters:\*", re.I)
+# Rendered cells that are structure, not numeric claims (DESIGN.md: tables are rendered from records)
+STRUCTURAL = {"bits", "width", "order", "priority"}
+_BLOCK_START = re.compile(r"^<!--\s*atlas:table\s+(.*?)\s*-->\s*$")
+_BLOCK_END = re.compile(r"^<!--\s*atlas:end\s*-->\s*$")
+_ENUM_KEY = re.compile(r"(?:^|;)\s*[^;=]*?=")
+
+
+def _blank(s: str) -> str:
+    """The strip patterns replaced by spaces of the same length, so positions survive."""
+    for rx in _STRIP_BEFORE_NUMBERS:
+        s = rx.sub(lambda m: " " * len(m.group()), s)
+    return s
 
 
 def _md_numbers(line: str) -> list[float]:
-    body = line
-    for rx in _STRIP_BEFORE_NUMBERS:
-        body = rx.sub(" ", body)
-    return numbers(normalize(body))
+    return numbers(normalize(_blank(line)))
 
 
-def check_markdown_file(doc: DocText, path: Path, rec_values: list[float]) -> dict:
+def _split_clauses(s: str) -> list[str]:
+    """Clauses of a piece of prose; a boundary inside parentheses does not split (an aside belongs to
+    the clause around it)."""
+    out, start, depth, i = [], 0, 0, 0
+    while i < len(s):
+        c = s[i]
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            m = _CLAUSE.match(s, i)
+            if m:
+                out.append(s[start:i])
+                start = i = m.end()
+                continue
+        i += 1
+    out.append(s[start:])
+    return out
+
+
+def _clause_claims(raw: str, row_tag: str | None = None) -> list[tuple[float, str | None]]:
+    """(number, tag class) for a piece of prose. A tag covers its own parenthetical and the numbers
+    before it in its clause; `row_tag` (a table row's Note tag) covers everything else."""
+    out: list[tuple[float, str | None]] = []
+    body = _blank(raw)
+    pos = 0
+    for m in _TAG.finditer(body):
+        cls = TAG_CLASS[m.group(1).lower()]
+        clauses = _split_clauses(body[pos:m.start()])
+        for c in clauses[:-1]:
+            out += [(x, row_tag) for x in numbers(normalize(c))]
+        out += [(x, cls) for x in numbers(normalize(clauses[-1]))]
+        out += [(x, cls) for x in numbers(normalize(m.group()))]
+        pos = m.end()
+    out += [(x, row_tag) for x in numbers(normalize(body[pos:]))]
+    return out
+
+
+def _cells(line: str) -> list[str]:
+    return [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
+
+
+def md_claims(line: str, cols: list[str] | None = None, rendered: str | None = None) -> list[tuple[float, str | None]]:
+    """(number, tag class or None) for every numeric claim of one markdown line. A table row (`cols`
+    is its header) is read cell by cell; a Note cell item that is only a tag covers the whole row, as
+    the renderer writes a figure or equation record's `(figure)` there. `rendered` is the selector
+    kind of the atlas:table block the row sits in: its structural cells are skipped."""
+    if rendered == "quirk" and line.startswith("- **"):
+        # render.t_quirk: `- **id** (meta): text (figure) *Why it matters:* why`. The src tag it puts
+        # after the text is the record's own: it covers the text; the why is read as prose.
+        head, sep, why = line.partition(" *Why it matters:* ")
+        m = re.search(r" \((figure|equation)\)$", head)
+        if m:
+            return [(x, "figure") for x, _ in _clause_claims(head)] + (_clause_claims(why) if sep else [])
+        return _clause_claims(line)
+    if cols is None or not line.lstrip().startswith("|"):
+        return _clause_claims(line)
+    cells = _cells(line)
+    row_tag = None
+    for c, name in zip(cells, cols):
+        if name == "note":
+            for item in c.split(";"):
+                m = _ROW_TAG.match(item.strip())
+                if m:
+                    row_tag = TAG_CLASS[m.group(1).lower()]
+    out: list[tuple[float, str | None]] = []
+    for i, c in enumerate(cells):
+        name = cols[i] if i < len(cols) else ""
+        if rendered is not None:
+            if name in STRUCTURAL or (rendered == "check" and name == "expression"):
+                continue
+            if name == "enum":
+                c = _ENUM_KEY.sub(";", c)
+        out += _clause_claims(c, row_tag)
+    return out
+
+
+def _values_by_page(recs: list[dict]) -> dict[int, list[float]]:
+    """page -> numeric values of the records citing it; page 0 holds the records with no page (an
+    SVD's), which a line cannot cite and which anchor on every line."""
+    out: dict[int, list[float]] = {}
+    for r in recs:
+        vals = [float(r[k]) for k in NUMERIC_KEYS if isnum(r.get(k))]
+        for p in R.pages(r) or [0]:
+            out.setdefault(p, []).extend(vals)
+    return out
+
+
+def check_markdown_file(doc: DocText, path: Path, rec_values: dict[int, list[float]] | list[float]) -> dict:
+    """M on one file. `rec_values`: page -> values of the verified records citing it (a plain list
+    anchors on any page, the old behaviour). A number held only by a record on a page the line does
+    not cite is a warning, not an anchor."""
+    by_page = rec_values if isinstance(rec_values, dict) else {}
+    everywhere = [x for vs in by_page.values() for x in vs] if by_page else list(rec_values)
     heads: list[tuple[int, set[int]]] = []
-    stats = {"numbers": 0, "anchored_page": 0, "anchored_record": 0, "derived": 0, "figure": 0, "unanchored": 0}
-    bad = []
-    in_code = False
-    for n, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    stats = {"numbers": 0, "anchored_page": 0, "anchored_record": 0, "derived": 0, "figure": 0,
+             "record_elsewhere": 0, "unanchored": 0}
+    bad, warn = [], []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    cols: list[str] | None = None
+    rendered: str | None = None
+    for n, ln in enumerate(lines, 1):
         s = ln.rstrip()
-        if s.startswith("```"):
-            in_code = not in_code
+        if _BLOCK_START.match(s):
+            sel = _BLOCK_START.match(s).group(1).split()
+            kinds = [t[5:] for t in sel if t.startswith("kind=")] or [t for t in sel[:1] if "=" not in t] or [""]
+            rendered = kinds[0].split(",")[0]
+            continue
+        if _BLOCK_END.match(s):
+            rendered = None
+            continue
         m = re.match(r"^(#+)\s", s)
         if m:
             lvl = len(m.group(1))
@@ -587,28 +984,41 @@ def check_markdown_file(doc: DocText, path: Path, rec_values: list[float]) -> di
             own = cited_pages(s)
             heads.append((lvl, own or (heads[-1][1] if heads else set())))
             continue
+        if s.lstrip().startswith("|"):
+            if n < len(lines) and re.match(r"^\s*\|?\s*:?-{3,}", lines[n]):
+                cols = [c.lower() for c in _cells(s)]        # a header row: its separator follows
+                continue
+            if re.match(r"^\s*\|?\s*:?-{3,}", s):
+                continue
+        else:
+            cols = None
         if s.startswith(("aka:", "Source:")) or s.strip().startswith("<!--"):
             continue
-        ns = _md_numbers(s)
-        if not ns:
+        claims = md_claims(s, cols, rendered)
+        if not claims:
             continue
         pages = cited_pages(s) or (heads[-1][1] if heads else set())
-        tagged = next((t for t in _TAGS if t in s.lower()), None)
         pnums = doc.page_numbers(sorted(pages))
-        for x in ns:
+        cited_vals = [x for p in sorted(pages) + [0] for x in by_page.get(p, [])] if by_page else everywhere
+        for x, tag in claims:
             stats["numbers"] += 1
             if _close(x, pnums):
                 stats["anchored_page"] += 1
-            elif _close(x, rec_values):
+            elif _close(x, cited_vals):
                 stats["anchored_record"] += 1
-            elif tagged in ("(derived", "(inference"):
+            elif tag == "derived":
                 stats["derived"] += 1
-            elif tagged == "(figure":
+            elif tag == "figure":
                 stats["figure"] += 1
+            elif _close(x, everywhere):
+                stats["record_elsewhere"] += 1
+                warn.append({"line": n, "number": x, "pages": sorted(pages), "text": s[:140],
+                             "record_pages": sorted(p for p, vs in by_page.items() if _close(x, vs))[:6]})
             else:
                 stats["unanchored"] += 1
                 bad.append({"line": n, "number": x, "pages": sorted(pages), "text": s[:140]})
-    return {"file": str(path.relative_to(doc.dir)), "stats": stats, "unanchored": bad[:60]}
+    return {"file": str(path.relative_to(doc.dir)), "stats": stats, "unanchored": bad[:60],
+            "record_elsewhere": warn[:60]}
 
 
 def _md_tables(text: str):
@@ -739,8 +1149,14 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
                 r.pop("prov", None)
             else:
                 r["prov"] = np_
+        warns = []
+        kst = res.get("K") if isinstance(res.get("K"), str) else ""
+        if kst.removeprefix("not checkable: ") in K_WARN:
+            warns.append(f"K: {K_WARN[kst.removeprefix('not checkable: ')]} on p{R.pages(r)[0]}: "
+                         "the column check did not run")
         results.append({"id": r.get("id"), "file": fname, "kind": r.get("kind"), "status": status,
-                        "prov": r.get("prov"), "checks": res, "issues": issues})
+                        "prov": r.get("prov"), "checks": res, "issues": issues,
+                        **({"warnings": warns} if warns else {})})
     written = R.save_records(docdir, pairs) if write and prov_changed else []
     rendered = False
     if render and write and prov_changed and ((docdir / "s").is_dir() or (docdir / "facts.txt").exists()):
@@ -749,9 +1165,10 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
         rendered = True
     good = {"llm-verified", "deterministic", "deterministic+crosschecked", "engineer-declared",
             "engineer-confirmed", "measured"}
-    values = [float(r[k]) for r in recs if r.get("prov") in good for k in NUMERIC_KEYS if isnum(r.get(k))]
+    values = _values_by_page([r for r in recs if r.get("prov") in good])
     md_files = ([docdir / "card.md"] if (docdir / "card.md").exists() else []) + sorted((docdir / "s").glob("*.md"))
-    M = [check_markdown_file(doc, f, values) for f in md_files]
+    # A non-PDF source has no pages to anchor prose to: its markdown is generated, not written.
+    M = [check_markdown_file(doc, f, values) for f in md_files] if doc.n else []
     S = [x for f in md_files for x in check_tables(f, str(f.relative_to(docdir)))]
     T: dict[str, Any] = {}
     for f in md_files:
@@ -772,7 +1189,9 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
               "by_twin": sum(1 for x in results if x["checks"].get("A_by"))},
         "N": {"ok": letter("N"), "of": ran("N")},
         "K": {"agree": letter("K"), "disagree": Kd, "not_checkable": ran("K") - letter("K") - Kd,
-              "unit_seen": sum(1 for x in results if x["checks"].get("K_unit_seen"))},
+              "unit_seen": sum(1 for x in results if x["checks"].get("K_unit_seen")),
+              "row_not_found": letter("K", "not checkable: row-not-found"),
+              "unreadable": sum(letter("K", f"not checkable: {st}") for st in K_WARN if st != "row-not-found")},
         "C": {"ok": letter("C"), "of": ran("C")},
         "U": {"ok": letter("U"), "of": ran("U")},
         "O": {"ok": letter("O"), "of": ran("O")},
@@ -780,15 +1199,27 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
         "G": {"diffs": len(greg.get("diff", [])), "structure_issues": len(greg.get("structure", [])),
               **greg.get("summary", {})} if greg else {},
         "M": {"numbers": sum(m["stats"]["numbers"] for m in M),
-              "unanchored": sum(m["stats"]["unanchored"] for m in M)},
+              "unanchored": sum(m["stats"]["unanchored"] for m in M),
+              "record_elsewhere": sum(m["stats"]["record_elsewhere"] for m in M)},
         "S": len(S),
         "T_over": [k for k, v in T.items() if v["over"]],
         "prov_changed": prov_changed, "rendered": rendered,
     }
     failing = summary["failed"] or summary["M"]["unanchored"] or S or summary["T_over"]
     summary["exit"] = 1 if failing else 0
+    warnings = []
+    for st, what in K_WARN.items():
+        ids = [x["id"] for x in results if x["checks"].get("K") == f"not checkable: {st}"]
+        if ids:
+            warnings.append(f"K: {len(ids)} table rows {what.split(' ', 1)[1]} on their page, so their columns were "
+                            f"not checked (they are verified by A/N/C/U/O only): {', '.join(ids[:8])}"
+                            + (" ..." if len(ids) > 8 else ""))
+    if summary["M"]["record_elsewhere"]:
+        warnings.append(f"M: {summary['M']['record_elsewhere']} numbers are on no page their line cites and "
+                        f"match only a verified record on another page: cite that page")
+    summary["warnings"] = len(warnings)
     report = {"doc": doc.doc_id, "tool": f"embarch-atlas {__version__}",
-              "pdf": doc.pdf_note, "summary": summary, "records": results, "X": xs,
+              "pdf": doc.pdf_note, "summary": summary, "warnings": warnings, "records": results, "X": xs,
               "G": {k: v for k, v in greg.items() if k != "verdict"}, "M": M, "S": S, "T": T,
               "files_written": written}
     if write:
@@ -820,15 +1251,22 @@ def print_summary(rep: dict, out=None, limit: int = 12) -> None:
     for m in rep["M"]:
         st = m["stats"]
         flag = "" if not st["unanchored"] else f"  <- {st['unanchored']} unanchored"
+        elsewhere = f", {st['record_elsewhere']} only in a record on another page (warning)" \
+            if st.get("record_elsewhere") else ""
         w(f"M {m['file']}: {st['numbers']} numbers, {st['anchored_page']} on a cited page, "
-          f"{st['anchored_record']} in a record, {st['derived']} derived, {st['figure']} figure{flag}")
+          f"{st['anchored_record']} in a record, {st['derived']} derived, {st['figure']} figure{elsewhere}{flag}")
         for b in m["unanchored"][:4]:
             w(f"   line {b['line']}: {b['number']:g} not on p{b['pages']}: {b['text'][:90]}")
+        for b in m.get("record_elsewhere", [])[:2]:
+            w(f"   line {b['line']}: {b['number']:g} not on p{b['pages']}, in a record on p{b['record_pages']}: "
+              f"{b['text'][:70]}")
     for x in rep["S"][:limit]:
         w(f"S {x['file']}: {x['check']}: {x['cell'][:80]}")
     for k, v in rep["T"].items():
         if v["over"]:
             w(f"T {k}: {v['tokens']} tokens > budget {v['budget']}")
+    for x in rep.get("warnings", []):
+        w(f"warning: {x}")
     w(f"prov changed on {s['prov_changed']} records{'; tables re-rendered' if s['rendered'] else ''}; "
       f"exit {s['exit']}")
 

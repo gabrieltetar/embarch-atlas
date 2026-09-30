@@ -20,6 +20,7 @@ MODULES = [
     "check",
     "render",
     "regparse",
+    "freeze",
     "svd",
     "vote",
     "rm",

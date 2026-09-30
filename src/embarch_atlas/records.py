@@ -40,7 +40,7 @@ FACT_KEYS = {
     "figure": ("fig", "caption", "what"),
     "strap": ("pin", "condition", "value"),
     "passthrough": ("from_pin", "to_pin", "when"),
-    "requirement": ("rid", "text", "fw_relevant"),
+    "requirement": ("rid", "modality", "priority", "order", "text", "fw_relevant"),
     "conflict": ("refs", "sources", "text"),
     "check": ("expr", "expect", "why"),
 }

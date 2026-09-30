@@ -53,6 +53,7 @@ The schematic analysis joins the part to the board later, by MPN.
 - [ ] 8 render    embarch-atlas doc render <doc_id>
 - [ ] 9 check     embarch-atlas doc check <doc_id>; fix; repeat until it exits 0 or only
                   llm-unverified items with a stated reason remain
+- [ ] 10 freeze   embarch-atlas doc freeze <doc_id> --model <model>   (so a later revision re-asks only changed pages)
 ```
 
 ### 1-2. Prep and plan
@@ -87,7 +88,12 @@ turns the deterministic record into `deterministic+crosschecked`. Your records a
 cannot: meaning (`desc`, `enum`), mode dependence, write order, side effects.
 
 With no template, your records are the only extraction; `doc check` still checks widths, overlap,
-reset composition and unique addresses.
+reset composition and unique addresses. Templates: `ti` (register-description headings, bit
+diagrams, `Bit Field Type Reset Description` tables) and `maxim` (`Name Register (NNNh)` headings,
+D15..D0 bit diagrams, grid summary tables). **If `doc regparse` finds 0 registers it exits non-zero
+and prints the patterns it tried**: the template does not fit this document. Continue with your own
+records as the only extraction, expect G to report no twin, and say "template mismatch" in the
+report so the template can be extended.
 
 ### 4. Read
 
@@ -259,6 +265,61 @@ Walk it for every datasheet; a generic "summarise the document" pass finds few o
 11. Figure-only facts: timing diagrams, block diagrams, typical-application values.
 12. Document artefacts: notation traps, name typos, symbols defined nowhere, a section marked "not part of the specification".
 
+## Conventions (from the first real batch, 2026-09-30)
+
+These settle cases the rules above leave open. They were each hit on a real datasheet.
+
+**Values**
+- `±X` printed in a MIN or MAX column is `min: -X, max: X`. `±X` printed in TYP stays the printed
+  string (`"typ": "±0.48"`); the column check skips string values.
+- An accuracy row that prints a setpoint in TYP and a `±%` tolerance on the next line is two
+  records: the setpoint `<id>`, and `<id>.tol` with `unit: "%"`.
+- One value cell merged across two rows (two symbols sharing `0 to 5.5`): both records carry the
+  value, quote across the rows, and `note: "merged cell with <other id>"`.
+- A reset that depends on a variant or a strap is `reset: null` with both values in `note`. On
+  parts with non-volatile restore (a RAM register loaded from an NV copy): use the printed initial
+  value for RAM registers and the factory default for NV registers, and say which in `note`.
+- A field reset derived from the register reset (the document prints none per field) is allowed,
+  with `note: "reset derived from register reset"`.
+- Clear-on-read that depends on a mode bit has no SystemRDL spelling: `access: ro` and `note:
+  "clears on read when <condition>"`. Use `rclr` only when it always clears.
+- Register `width` usually comes from the summary table: cite that page and the register's own page
+  (`p: [summary, own]`).
+
+**Names**
+- Keep native names verbatim in `name`, spaces, commas and slashes included; the `id` uses the
+  name with runs of non-alphanumerics turned into `_`.
+- An unnamed field (an ADC result byte) is named after the table caption.
+- An overlined (active-low) name that differs from another name only by the overline (EN vs
+  EN-bar): `name: "EN-bar"`, id suffix `_bar`, and `active: low` on the pin. `doc prep` flags pages
+  with overlines (`overline`): read those rows from an image, because the text layer drops the bar.
+- A pin table with two packages: `pin: [<number>, <ball>]` in one record per name.
+
+**Straps**
+- An address strap's `value` starts with the 7-bit address in hex (`0x44`), the 8-bit or binary
+  form in `note`. A fixed address (no strap pin) is `pin: ""`, `condition: "fixed"`. A variant
+  without an address (a 1-Wire variant) gets `condition: "none"` and says so in `note`.
+
+**Quirks and checks**
+- Two prose statements that disagree: quirk class `text-vs-text`.
+- `check` records render only in `s/invariants.md` (`<!-- atlas:table kind=check -->`), never in
+  `s/quirks.md`; their expressions are not numeric claims. A check can read `min/nom/typ/max/value`
+  and a register's or field's `reset` and `bits`.
+
+**Files and budgets**
+- A section over 4K tokens with no subsections to split on: `s/<secid>.md`, then
+  `s/<secid>-part2.md`, `-part3`..., each with `<!-- atlas:covers ... -->` for the ids it holds.
+  The same for `s/quirks.md` (`quirks-part2.md`). Do not name a file after a parent section to
+  make it an umbrella; list the ids it covers instead.
+- A field-less register map (a summary only) renders as one compact row per register; do not add
+  empty field tables.
+- **Card drop order** when 1.5K tokens cannot hold everything: keep identity, what the part is,
+  the variant warning, the quirks to check first and the s/ index; then cut the limits to the
+  8 a driver writer budgets with, the pin line to a pointer (`pins: s/pins.md`), and the register
+  summary to a count plus a pointer.
+- `doc check` M counts numbers in prose. A count you computed (fields per register, requirements
+  per section) is `(derived)`.
+
 ## Known traps in datasheet text layers
 
 - **Symbol-font glyphs in private-use codepoints** (common in word-processor exports): Ω, ≤, µ.
@@ -274,6 +335,11 @@ Walk it for every datasheet; a generic "summarise the document" pass finds few o
 - **Bit diagram vs field table disagreements** inside one register description: `doc regparse`
   writes them as `conflict` records.
 - **Footnote numbering that restarts per table**: cite the footnote of the table the row is in.
+- **Soft hyphens and hyphenated line breaks**: the checker joins them, so quote the word whole.
+- **Two-column layouts**: `pdftotext -layout` can interleave columns; split a multi-line quote with
+  `...` into parts that each sit on one line.
+- **Table-of-contents pages without outline entries** are grouped as `front-matter` in `toc.md`;
+  they are not part of the section before them.
 
 ## Forbidden
 

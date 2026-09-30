@@ -40,8 +40,10 @@ produces a question the engineer has to answer first.
 ```
 
 Step 1 diffs against the previous manifest. **Unchanged documents skip steps 3–6.**
-Within a changed PDF, only changed pages go back through the LLM. The frozen
-output of unchanged pages is kept (`cache/llm/`).
+For a changed PDF, run `embarch-atlas doc prep`, then `embarch-atlas doc thaw-check
+<doc_id>`: it lists the frozen units whose pages did not change (kept) and the ones
+that must go back through the LLM. Each procedure ends with `embarch-atlas doc
+freeze <doc_id>`, which records the LLM-written files in `cache/llm/`.
 
 ## Step 6: distil one document
 
@@ -59,7 +61,12 @@ Every procedure ends the same way:
 ```
 embarch-atlas doc render <doc_id>
 embarch-atlas doc check <doc_id>        # repeat: fix the flagged records, re-run, until it exits 0 or only llm-unverified items remain
+embarch-atlas doc freeze <doc_id> --model <model>
 ```
+
+A document whose `doc check` cannot reach exit 0 because of a checker limitation (not a
+wrong record) is reported with the limitation named, so the tool gets fixed; do not
+bend records to satisfy a checker bug.
 
 Report per document: records per kind, anchored %, what is `llm-unverified` and
 why, card and section token sizes, how many image Reads it took.

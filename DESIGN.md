@@ -68,6 +68,7 @@ docs/<doc_id>/                  one per datasheet / RM / PRD / SVD, board-indepe
   records/<producer>.jsonl      deterministic records (e.g. regparse.jsonl)
   card.md                       tier 1, <= 1.5K tokens
   s/<secid>.md                  tier 2, <= 4K tokens per file, page-cited
+  s/invariants.md               the `check` records (expressions, not numeric claims)
   facts.txt                     one fact per line (rendered from records)
   checks.json                   last check report
 docs/<rm_doc>/                  the reference manual adds: outline.json, worklist.json,
@@ -153,12 +154,12 @@ Kinds and their own fields:
 | `rule` | `text`, `cond`, `recover`, `steps` (behaviour rule, "OK goes low on fault, latches until EN toggles") |
 | `register` | `name`, `addr` (int or `0x..`), `width`, `reset` (`0b…`/`0x…`), `access`, `summary` |
 | `field` | `reg` (the register's record id), `name`, `bits` ([hi, lo]), `reset`, `access` (SystemRDL vocabulary: rw, ro, wo, rclr, woclr, w1s, rsvd), `enum` |
-| `quirk` | `class` (table-vs-table, text-vs-table, text-vs-figure, figure-only, footnote-condition, silent-default, must, do-not, absence, variant, doc-artefact, not-prod-tested, narrow-condition, provenance), `text`, `refs` (other fact ids) |
+| `quirk` | `class` (table-vs-table, text-vs-table, text-vs-text, text-vs-figure, figure-only, footnote-condition, silent-default, must, do-not, absence, variant, doc-artefact, not-prod-tested, narrow-condition, provenance), `text`, `refs` (other fact ids) |
 | `figure` | `fig`, `caption`, `what` (equations: `src: equation`) |
 | `strap` | `pin`, `condition`, `value` (address or mode straps; a fixed address has condition `fixed`) |
 | `passthrough` | `from_pin`, `to_pin`, `when` (transparent-part map: switches, shunts, buffers) |
 | `check` | `expr`, `expect`, `why` (an invariant the checker evaluates) |
-| `requirement` | `rid`, `text`, `fw_relevant` (PRD) |
+| `requirement` | `rid`, `text`, `fw_relevant`, `modality` (shall, should, may, nice-to-have), `priority`, `order` (PRD) |
 | `conflict` | `refs`, `sources` (`"<doc> <loc>: <says>"`), `text` |
 
 `prov` classes: `deterministic`, `deterministic+crosschecked`, `llm-verified`,
@@ -184,8 +185,17 @@ row; footnotes pulled onto the rows they qualify (a `note` column) and listed
 under the table; native names verbatim; an `aka:` line under each heading for
 alternative names (for example "master/controller"). Rendered tables sit between
 `<!-- atlas:table … -->` and `<!-- atlas:end -->`, so the prose around them survives
-a re-render; `<!-- atlas:covers … -->` declares what a section file covers. Token
-budgets are counted in o200k (real Claude counts run ~1.4×).
+a re-render; `<!-- atlas:covers … -->` declares what a section file covers (exact file
+stems first, then explicit covers, most specific id first, then implicit descent from a
+file named after a parent section). Token budgets are counted in o200k (real Claude
+counts run ~1.4×).
+
+The prose check (M) anchors every number in `card.md` and `s/*.md` to a cited page. A
+tag (`(derived)`, `(figure)`, `(equation)`, `(inference)`) covers the numbers before it in
+its clause and those inside its own parentheses; a number equal to a verified record's
+value anchors only when that record is on a page the line cites. Rendered structure
+(bits, widths, enum keys, check expressions) is not a numeric claim. A non-PDF source
+(an SVD) gets only the record-level checks.
 
 ## How a session sees the atlas
 
@@ -300,7 +310,8 @@ An atlas id is `<target>@<commit12>`.
 | `doc prep <pdf>` | `pdftext` | doc.json, pages/, toc, page classes |
 | `doc check <doc_id>` | `check` | checks A–T, writes checks.json, sets `prov` |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
-| `doc regparse <doc_id> --template ti` | `regparse` | deterministic register records |
+| `doc regparse <doc_id> --template ti\|maxim` | `regparse` | deterministic register records |
+| `doc freeze <doc_id> [--model M]` / `doc thaw-check <doc_id> [--from <old>] [--restore]` | `freeze` | record the LLM-written units in `cache/llm/`; after a new `doc prep`, list which frozen units are still valid and which go back to the LLM |
 | `mcu svd <svd> --doc-id <id>` | `svd` | registers/fields as records under the SVD doc |
 | `mcu vote --svd-doc <id> --rm-doc <id> [--header <h>] [--periph P]` | `vote` | SVD vs header vs RM: `conflict` / `quirk` (correct omission) / `rule` records under the RM doc |
 | `mcu rm-outline` / `rm-sections <atlas>` / `rm-text` / `rm-check` / `rm-freeze` | `rm` | outline; the worklist for peripherals in use; one work item's text with `[p.N]` markers; verify distilled RM files; freeze them in `cache/llm/` |

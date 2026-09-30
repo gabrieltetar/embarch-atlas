@@ -95,3 +95,22 @@ def test_helpers():
     assert R.short_id("demo.ec.VOVP.vbus") == "VOVP.vbus"
     assert R.slug("Logic Pin (EN1, EN2) Specifications") == "logic-pin-en1-en2-specifications"
     assert all(R.validate(r) == [] for r in ds.records())
+
+
+def test_schema_batch_1_conventions():
+    quirk = dict(GOOD[6], **{"class": "text-vs-text"})
+    assert R.validate(quirk) == []
+    req = dict(GOOD[10], modality="nice-to-have", priority="P2", order=3)
+    assert R.validate(req) == []
+    assert any("modality" in e for e in R.validate(dict(req, modality="must")))
+    assert any("order" in e for e in R.validate(dict(req, order=0)))
+    assert R.validate(dict(GOOD[2], pin=[3, "B2"])) == []                     # [number, ball]
+    fixed = {"id": "demo-conv.strap.fixed", "kind": "strap", "doc": "demo-conv@B", "p": 16, "src": "text",
+             "q": "x", "pin": "", "condition": "fixed", "value": "0x6B (1101011b)"}
+    assert R.validate(fixed) == []
+    reg = dict(GOOD[4], reset=None, note="0x20 on 1S parts, 0x21 on 2S-5S")
+    assert R.validate(reg) == []
+    strap = R.schema()["$defs"]["strap"]["description"]
+    assert 'pin ""' in strap.replace('\\"', '"') and '"fixed"' in strap and "7-bit" in strap
+    line = R.facts_line(req)
+    assert "rid=prd.4.2.charge-temp; modality=nice-to-have; priority=P2; order=3; text=" in line

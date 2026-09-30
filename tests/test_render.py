@@ -32,7 +32,7 @@ def test_tables_between_markers_prose_kept(doc):
     _, docdir = doc
     st = render.render_doc(docdir)
     out = (docdir / "s" / "6.5.md").read_text()
-    assert st["blocks"] == 2 and st["warnings"] == []
+    assert st["blocks"] == 3 and st["warnings"] == []          # + the check table in s/invariants.md
     assert "stale content" not in out
     assert "Hand-written prose stays exactly as it is, including this line (p.2)." in out
     assert "More prose after the table." in out
@@ -118,4 +118,89 @@ def test_footnote_blocks_restart_per_table():
 def test_cli_render(doc, capsys):
     atlas, _ = doc
     assert cli.main(["--atlas-dir", str(atlas), "doc", "render", ds.DOC_ID]) == 0
-    assert "2 tables in s/" in capsys.readouterr().out
+    assert "3 tables in s/" in capsys.readouterr().out
+
+
+def _write(docdir, name, recs):
+    from embarch_atlas import common
+    common.write_jsonl(docdir / "records" / name, recs)
+
+
+def test_field_enum_and_compact_fieldless_registers(doc):
+    _, docdir = doc
+    d = ds.DOC_ID
+    _write(docdir, "register.jsonl", [
+        {"id": "syn1234.reg.MODE", "kind": "register", "doc": d, "p": 5, "src": "table", "q": "x", "name": "MODE",
+         "addr": "0x04", "width": 8, "reset": "0x00", "desc": "operating mode"},
+        {"id": "syn1234.reg.TRIM", "kind": "register", "doc": d, "p": 5, "src": "table", "q": "x", "name": "TRIM",
+         "addr": "0x05", "width": 16, "reset": None, "note": "0x1234 on the A variant, 0x1235 on B",
+         "desc": "factory trim, do not write"},
+        {"id": "syn1234.reg.SPARE", "kind": "register", "doc": d, "p": 5, "src": "table", "q": "x", "name": "SPARE",
+         "addr": "0x06", "width": 8}])
+    _write(docdir, "field.jsonl", [
+        {"id": "syn1234.reg.MODE.SEL", "kind": "field", "doc": d, "p": 5, "src": "table", "q": "x",
+         "reg": "syn1234.reg.MODE", "name": "SEL", "bits": [7, 0], "reset": "0b00000000", "access": "rw",
+         "enum": {"0": "off", "1": "on"}, "desc": "mode select"}])
+    (docdir / "s" / "7.6.md").write_text("# regs (p.5)\n\n<!-- atlas:table kind=register id=syn1234.reg.MODE,"
+                                         "syn1234.reg.TRIM,syn1234.reg.SPARE -->\n<!-- atlas:end -->\n\n"
+                                         "<!-- atlas:table kind=field -->\n<!-- atlas:end -->\n")
+    render.render_doc(docdir)
+    out = (docdir / "s" / "7.6.md").read_text()
+    assert "| Addr | Register | Width | Reset | Access | Description | Note | p |" in out
+    assert "| 0x05 | TRIM | 16 |  |  | factory trim, do not write | 0x1234 on the A variant, 0x1235 on B | p.5 |" in out
+    assert "| 0x04 | MODE | 8 | 0x00 |  |  |  | p.5 |" in out          # its description is under its heading
+    assert "### 0x04 MODE (p.5)" in out
+    assert "### 0x05 TRIM" not in out and "### 0x06 SPARE" not in out  # field-less: the summary row only
+    assert "| Bits | Field | Access | Reset | Description | Enum | Note | p |" in out
+    assert "| 7:0 | SEL | rw | 0b00000000 | mode select | 0 = off; 1 = on |  | p.5 |" in out
+    assert "| MODE | 7:0 | SEL | rw | 0b00000000 | mode select | 0 = off; 1 = on |  | p.5 |" in out   # kind=field
+
+
+def test_selector_empty_value_selects_fixed_address_strap():
+    recs = [{"id": "a.strap.fixed", "kind": "strap", "p": 3, "pin": "", "condition": "fixed", "value": "0x6B"},
+            {"id": "a.strap.ADDR.gnd", "kind": "strap", "p": 3, "pin": "ADDR", "condition": "ADDR = GND",
+             "value": "0x40"}]
+    assert render.parse_selector("strap pin=") == {"kind": ["strap"], "pin": [""]}
+    assert [r["id"] for r in render.select(recs, render.parse_selector("strap pin="))] == ["a.strap.fixed"]
+    assert [r["id"] for r in render.select(recs, render.parse_selector("strap pin!="))] == ["a.strap.ADDR.gnd"]
+
+
+def test_check_records_render_only_in_invariants(doc):
+    _, docdir = doc
+    (docdir / "s" / "quirks.md").write_text("# quirks\n\n<!-- atlas:table kind=quirk,check -->\n<!-- atlas:end -->\n")
+    st = render.render_doc(docdir)
+    q = (docdir / "s" / "quirks.md").read_text()
+    assert "_1 invariants: see s/invariants.md._" in q and "uvlo_order" not in q
+    assert any("check records render only in s/invariants.md" in w for w in st["warnings"])
+    inv = (docdir / "s" / "invariants.md").read_text()
+    assert inv.startswith("# syn1234@2b: invariants") and "| uvlo_order | `R['syn1234.ec.VUVLO.vin'].max < 3.1" in inv
+    (docdir / "s" / "invariants.md").write_text("# my own heading (p.2)\n\nProse kept.\n\n"
+                                                 "<!-- atlas:table kind=check -->\n<!-- atlas:end -->\n")
+    render.render_doc(docdir)                                            # an existing file is only rendered
+    inv = (docdir / "s" / "invariants.md").read_text()
+    assert inv.startswith("# my own heading (p.2)\n\nProse kept.") and "uvlo_order" in inv
+
+
+def test_quirk_source_tag_follows_its_text_and_requirement_columns():
+    q = render.t_quirk([{"id": "a.quirk.curve", "kind": "quirk", "p": 4, "src": "figure", "class": "figure-only",
+                         "note": "read: png", "text": "the curve peaks near 0.77 A", "why": "budget 0.8 A"}], {})
+    assert q == ["- **curve** (figure-only; p.4; read: png): the curve peaks near 0.77 A (figure) "
+                 "*Why it matters:* budget 0.8 A"]
+    reqs = [{"id": "p.req.a", "kind": "requirement", "p": 2, "rid": "prd.a", "text": "charge first from USB",
+             "fw_relevant": True, "modality": "shall", "order": 1},
+            {"id": "p.req.b", "kind": "requirement", "p": 2, "rid": "prd.b", "text": "then from the dock",
+             "fw_relevant": True, "modality": "nice-to-have", "order": 2}]
+    t = render.t_requirement(reqs, {})
+    assert t[0] == "| Req | Requirement | Modality | Order | Firmware | Note | p |"
+    assert t[3] == "| prd.b | then from the dock | nice-to-have | 2 | yes |  | p.2 |"
+    assert render.t_requirement([dict(reqs[0], modality=None, order=None)], {})[0] == \
+        "| Req | Requirement | Firmware | Note | p |"
+
+
+def test_field_table_takes_meaning_from_the_llm_twin():
+    det = {"id": "a.reg.R.EN", "kind": "field", "p": 5, "reg": "a.reg.R", "name": "EN", "bits": [0, 0],
+           "reset": "0b1", "access": "rw", "prov": "deterministic"}
+    llm = dict(det, prov="llm-verified", desc="enable", enum={"0": "off", "1": "on"})
+    rows = render.t_field([det], {"all": [det, llm]})
+    assert rows[0] == "| Register | Bits | Field | Access | Reset | Description | Enum | Note | p |"
+    assert rows[2] == "| R | 0 | EN | rw | 0b1 | enable | 0 = off; 1 = on |  | p.5 |"

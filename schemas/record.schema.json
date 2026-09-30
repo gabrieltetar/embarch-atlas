@@ -363,7 +363,7 @@
       }
     },
     "reset": {
-      "description": "binary 0b... with the field or register width, or hex 0x...; null when undefined",
+      "description": "binary 0b... with the field or register width, or hex 0x...; null when undefined, or when it depends on a variant or a strap (then `note` gives each value, e.g. \"0x0A on 1S variants, 0x0B on 2S-5S\"; doc check G does not compare a null reset with a note against its deterministic twin)",
       "oneOf": [
         {
           "type": "string",
@@ -520,7 +520,7 @@
     "pin": {
       "properties": {
         "pin": {
-          "description": "pin number or ball, or several (one name on several pins)",
+          "description": "pin number or ball, or several: one name on several pins, or a multi-package pin table as [<number>, <ball>] (e.g. [3, \"B2\"]) in one record per name",
           "oneOf": [
             {
               "type": [
@@ -798,8 +798,10 @@
             "doc-artefact",
             "not-prod-tested",
             "narrow-condition",
-            "provenance"
-          ]
+            "provenance",
+            "text-vs-text"
+          ],
+          "description": "text-vs-text: two prose statements of the document disagree"
         },
         "text": {
           "type": "string",
@@ -866,18 +868,22 @@
       }
     },
     "strap": {
+      "description": "an address or mode strap. Fixed-address convention: a part whose bus address is not strapped is one record with pin \"\", condition \"fixed\" and a value that starts with the 7-bit address in hex (\"0x6B\", then any 8-bit or binary form in note); a variant with no address (a 1-Wire variant) has condition \"none\" and says so in note. A strapped address: pin is the strap pin, condition the strap state (\"ADDR = GND\"), value again starting with the 7-bit hex address",
       "properties": {
         "pin": {
+          "description": "the strap pin; \"\" for a fixed address",
           "type": [
             "string",
             "integer"
           ]
         },
         "condition": {
+          "description": "the strap state, or \"fixed\" (no strap pin) or \"none\" (a variant without an address)",
           "type": "string",
           "minLength": 1
         },
         "value": {
+          "description": "the resulting address or mode; an address starts with its 7-bit hex form (\"0x44\")",
           "type": "string",
           "minLength": 1
         }
@@ -953,6 +959,32 @@
         },
         "fw_relevant": {
           "type": "boolean"
+        },
+        "modality": {
+          "description": "the statement's force as printed: shall (must, required), should, may, or nice-to-have (\"Nice to Have\", optional)",
+          "enum": [
+            "shall",
+            "should",
+            "may",
+            "nice-to-have",
+            null
+          ]
+        },
+        "priority": {
+          "description": "the priority the document assigns (\"P1\", \"high\", 2), as printed",
+          "type": [
+            "string",
+            "integer",
+            "null"
+          ]
+        },
+        "order": {
+          "description": "1-based position in an ordered list the document gives (a charge-source waterfall, an allocation order)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
         }
       },
       "required": [
@@ -972,7 +1004,10 @@
           "note",
           "rid",
           "text",
-          "fw_relevant"
+          "fw_relevant",
+          "modality",
+          "priority",
+          "order"
         ]
       }
     },

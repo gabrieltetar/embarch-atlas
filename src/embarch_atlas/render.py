@@ -7,10 +7,14 @@ The LLM writes `s/<secid>.md`: prose, headings, and marker pairs where a table g
 
 Everything between a pair is replaced by the table of the records the selector matches; everything
 outside is kept byte for byte. Selector keys: `kind` (required, or the first bare word), any record
-field (`group=abs,esd`, `id=demo-switch.ec.V*`, globs allowed; `key!=a,b` excludes), and `p=5-9,12`
-(any cited page in range).
+field (`group=abs,esd`, `id=demo-switch.ec.V*`, globs allowed; `key!=a,b` excludes; `pin=` selects
+an empty value, the fixed-address strap's `pin: ""`), and `p=5-9,12` (any cited page in range).
 An optional `<!-- atlas:covers 6.2 6.3 -->` line says which outline sections the file also covers
 (toc.md's tier-2 column).
+
+`check` records render only in `s/invariants.md` (written when the document has checks and the file
+does not exist yet); a `kind=check` block anywhere else renders a pointer to it. There, expressions
+are not numeric claims (`doc check` M skips them).
 
 Row rules (DESIGN.md): one condition per row, no merged cells, symbol and unit on every row,
 footnotes on the rows they qualify (Note column) and listed under the table with their text from the
@@ -208,7 +212,7 @@ def _reset(v: Any, width: int | None = None) -> str:
 
 def register_view(recs: list[dict], all_recs: list[dict]) -> list[tuple[dict, list[dict]]]:
     """Registers with their fields: structure from the deterministic record when there is one, the
-    description from the LLM twin when there is one."""
+    description and the field encodings (`enum`) from the LLM twin when there is one."""
     llm = {r["id"]: r for r in all_recs if r.get("prov") in R.LLM and r.get("kind") in ("register", "field")}
     det = {r["id"]: r for r in all_recs if r.get("prov") in R.DETERMINISTIC and r.get("kind") in ("register", "field")}
     out, seen = [], set()
@@ -223,37 +227,70 @@ def register_view(recs: list[dict], all_recs: list[dict]) -> list[tuple[dict, li
         fs.sort(key=lambda f: -f["bits"][0])
         fields = []
         for f in fs:
-            d = (llm.get(f["id"]) or {}).get("desc") or f.get("desc")
-            fields.append(dict(f, desc=d))
+            twin = llm.get(f["id"]) or {}
+            fields.append(dict(f, desc=twin.get("desc") or f.get("desc"), enum=twin.get("enum") or f.get("enum")))
         out.append((dict(base, desc=desc), fields))
     return out
 
 
+def enum_cell(e: Any) -> str:
+    """A field's encodings, `0 = off; 1 = on`, in the record's order."""
+    if not isinstance(e, dict) or not e:
+        return ""
+    return "; ".join(f"{fmt(k)} = {fmt(v)}" for k, v in e.items())
+
+
+def _bits(f: dict) -> str:
+    hi, lo = f["bits"]
+    return f"{hi}" if hi == lo else f"{hi}:{lo}"
+
+
 def t_register(recs, ctx):
+    """The register summary (one row per register), then a subsection with the field table for each
+    register that has fields. A field-less register is its summary row only, with its description
+    there, so a summary-only map stays compact."""
     view = register_view(recs, ctx["all"])
-    out = _table(["Addr", "Register", "Width", "Reset", "Access", "Note", "p"],
-                 [[_addr(r.get("addr")), fmt(r["name"]), fmt(r.get("width")), _reset(r.get("reset"), r.get("width")),
-                   fmt(r.get("access")), note_cell(r), cite_cell(r)] for r, _ in view])
+    bare_desc = any(not fields and r.get("desc") for r, fields in view)
+    head = ["Addr", "Register", "Width", "Reset", "Access"] + (["Description"] if bare_desc else []) + ["Note", "p"]
+    rows = []
     for r, fields in view:
+        row = [_addr(r.get("addr")), fmt(r["name"]), fmt(r.get("width")), _reset(r.get("reset"), r.get("width")),
+               fmt(r.get("access"))]
+        if bare_desc:
+            row.append("" if fields else fmt(_shorten(r.get("desc") or "", 300)))
+        rows.append(row + [note_cell(r), cite_cell(r)])
+    out = _table(head, rows)
+    for r, fields in view:
+        if not fields:
+            continue
         out += ["", f"### {_addr(r.get('addr'))} {r['name']} ({cite_cell(r)})", ""]
         if r.get("desc"):
             out += [fmt(r["desc"]), ""]
+        enum = any(f.get("enum") for f in fields)
         rows = []
         for f in fields:
-            hi, lo = f["bits"]
-            rows.append([f"{hi}" if hi == lo else f"{hi}:{lo}", fmt(f["name"]), fmt(f.get("access")),
-                         _reset(f.get("reset")), fmt(_shorten(f.get("desc") or "", 400)), note_cell(f), cite_cell(f)])
-        out += _table(["Bits", "Field", "Access", "Reset", "Description", "Note", "p"], rows)
+            rows.append([_bits(f), fmt(f["name"]), fmt(f.get("access")), _reset(f.get("reset")),
+                         fmt(_shorten(f.get("desc") or "", 400))] + ([enum_cell(f.get("enum"))] if enum else [])
+                        + [note_cell(f), cite_cell(f)])
+        out += _table(["Bits", "Field", "Access", "Reset", "Description"] + (["Enum"] if enum else []) + ["Note", "p"],
+                      rows)
     return out
 
 
 def t_field(recs, ctx):
+    """Fields; of a twin pair the deterministic record gives the structure, the LLM record the
+    description and the encodings (as in register_view)."""
+    llm = {r["id"]: r for r in ctx.get("all", []) if r.get("prov") in R.LLM and r.get("kind") == "field"}
+    recs = [dict(f, desc=(llm.get(f["id"]) or {}).get("desc") or f.get("desc"),
+                 enum=(llm.get(f["id"]) or {}).get("enum") or f.get("enum")) for f in recs]
+    enum = any(f.get("enum") for f in recs)
     rows = []
     for f in recs:
-        hi, lo = f["bits"]
-        rows.append([R.short_id(f["reg"]), f"{hi}" if hi == lo else f"{hi}:{lo}", fmt(f["name"]), fmt(f.get("access")),
-                     _reset(f.get("reset")), fmt(f.get("desc")), note_cell(f), cite_cell(f)])
-    return _table(["Register", "Bits", "Field", "Access", "Reset", "Description", "Note", "p"], rows)
+        rows.append([R.short_id(f["reg"]), _bits(f), fmt(f["name"]), fmt(f.get("access")),
+                     _reset(f.get("reset")), fmt(f.get("desc"))] + ([enum_cell(f.get("enum"))] if enum else [])
+                    + [note_cell(f), cite_cell(f)])
+    return _table(["Register", "Bits", "Field", "Access", "Reset", "Description"] + (["Enum"] if enum else [])
+                  + ["Note", "p"], rows)
 
 
 def t_quirk(recs, ctx):
@@ -261,9 +298,10 @@ def t_quirk(recs, ctx):
     for r in recs:
         tail = f" *Why it matters:* {fmt(r['why'])}" if r.get("why") else ""
         meta = "; ".join(x for x in (fmt(r.get("class")), cite_cell(r), fmt(r.get("note")),
-                                     "(figure)" if r.get("src") == "figure" else "",
                                      "unverified" if r.get("prov") == "llm-unverified" else "") if x)
-        out.append(f"- **{R.short_id(r['id'])}** ({meta}): {fmt(r.get('text'))}{tail}")
+        # the src tag follows the text it tags (doc check M: a tag covers the numbers before it)
+        tag = f" ({r['src']})" if r.get("src") in ("figure", "equation") else ""
+        out.append(f"- **{R.short_id(r['id'])}** ({meta}): {fmt(r.get('text'))}{tag}{tail}")
     return out
 
 
@@ -283,8 +321,11 @@ def t_passthrough(recs, ctx):
 
 
 def t_requirement(recs, ctx):
-    return _table(["Req", "Requirement", "Firmware", "Note", "p"],
-                  [[fmt(r.get("rid")), fmt(r.get("text")), fmt(r.get("fw_relevant")), note_cell(r), cite_cell(r)] for r in recs])
+    """Modality, Priority and Order columns appear when any selected requirement has them."""
+    extra = [k for k in ("modality", "priority", "order") if any(r.get(k) not in (None, "") for r in recs)]
+    head = ["Req", "Requirement"] + [k.capitalize() for k in extra] + ["Firmware", "Note", "p"]
+    return _table(head, [[fmt(r.get("rid")), fmt(r.get("text"))] + [fmt(r.get(k)) for k in extra]
+                         + [fmt(r.get("fw_relevant")), note_cell(r), cite_cell(r)] for r in recs])
 
 
 def t_conflict(recs, ctx):
@@ -319,7 +360,7 @@ def parse_selector(s: str) -> dict[str, list[str]]:
         k, v = tok.split("=", 1)
         if k.endswith("!"):
             k = "!" + k[:-1]
-        sel[k] = [x for x in v.split(",") if x]
+        sel[k] = [x for x in v.split(",") if x] or [""]     # `pin=`: the empty value
     if "kind" not in sel:
         raise ValueError("selector has no kind")
     for k in sel["kind"]:
@@ -376,7 +417,18 @@ def _dedupe(recs: list[dict]) -> list[dict]:
 
 # ---------------------------------------------------------------- the run
 
-def render_section(text: str, all_recs: list[dict], docdir: Path) -> tuple[str, list[str], int]:
+INVARIANTS = "invariants.md"
+
+
+def invariants_stub(docdir: Path) -> str:
+    return (f"# {Path(docdir).name}: invariants\n\n"
+            "The invariants `doc check` evaluates (X). One with `expect: fail` records a known inconsistency "
+            "of the document; the quirk it backs says so. Expressions are not numeric claims; the Why "
+            "column is.\n\n<!-- atlas:table kind=check -->\n<!-- atlas:end -->\n")
+
+
+def render_section(text: str, all_recs: list[dict], docdir: Path, name: str | None = None) -> tuple[str, list[str], int]:
+    """`name` is the file's name under s/: `check` records render only in invariants.md."""
     lines = text.split("\n")
     out: list[str] = []
     warnings: list[str] = []
@@ -418,6 +470,10 @@ def render_section(text: str, all_recs: list[dict], docdir: Path) -> tuple[str, 
             for k, rs in by_kind.items():
                 if body:
                     body.append("")
+                if k == "check" and name is not None and name != INVARIANTS:
+                    warnings.append(f"line {i + 1}: check records render only in s/{INVARIANTS}")
+                    body.append(f"_{len(rs)} invariants: see s/{INVARIANTS}._")
+                    continue
                 body += RENDERERS[k](rs, ctx)
         out.append(lines[i])
         out.extend(body)
@@ -432,9 +488,12 @@ def render_doc(docdir: Path, log=None) -> dict:
     pairs = R.load_records(docdir)
     all_recs = [r for _, r in pairs]
     stats = {"files": 0, "blocks": 0, "warnings": [], "facts": 0}
+    inv = docdir / "s" / INVARIANTS
+    if (docdir / "s").is_dir() and not inv.exists() and any(r.get("kind") == "check" for r in all_recs):
+        inv.write_text(invariants_stub(docdir), encoding="utf-8")
     for f in sorted((docdir / "s").glob("*.md")) if (docdir / "s").is_dir() else []:
         text = f.read_text(encoding="utf-8")
-        new, warns, blocks = render_section(text, all_recs, docdir)
+        new, warns, blocks = render_section(text, all_recs, docdir, f.name)
         stats["warnings"] += [f"{f.name}: {w}" for w in warns]
         stats["blocks"] += blocks
         if new != text:
