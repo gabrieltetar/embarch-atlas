@@ -352,7 +352,8 @@ Return JSON Lines, one object per item:
 {"id": "<item id>", "reader": "second-look", "found": true|false, "p": <page>,
  "q": "<verbatim text>", "values": {...}, "claim": "supports"|"contradicts"|"not-found"}
 values by kind: limit/timing {"min","typ","max","nom","unit","cond"}; strap {"value","condition"};
-pin {"name","dir","type","active"}; field {"bits":[hi,lo],"reset","access"};
+pin {"name","dir","type","active"} (dir: in/out/io/supply/ground/nc; type: od, pp, analog, supply,
+or "unstated"; an overlined name gets a -bar suffix); field {"bits":[hi,lo],"reset","access"};
 register {"addr","width","reset","access"}; figure {"numbers":[every number on it with its unit]}.
 "claim" is only for quirk and rule items: does the page support or contradict the statement?"""
 
@@ -450,13 +451,47 @@ def text_value_verdict(first: str, second: str) -> tuple[str, str]:
     return "unresolved", f"{r:.0%} word overlap"
 
 
+def pin_name_norm(s) -> str:
+    """Pin names with the overline spelled one way: combining U+0305, `-bar`, `_N`/`#` suffixes."""
+    from embarch_atlas.join import pin_norm
+    s = str(s or "")
+    bar = "\u0305" in s or re.search(r"(-|_)?bar$|#$", s, re.I) is not None
+    s = re.sub(r"\u0305", "", s)
+    s = re.sub(r"(-|_)?bar$|#$", "", s, flags=re.I)
+    return (pin_norm(s) + ("~" if bar else "")) if s else ""
+
+
+def dir_class(s):
+    s = str(s or "").strip().lower()
+    if not s:
+        return None
+    if s in ("power", "supply", "ground", "gnd", "pwr", "p", "g"):
+        return "power"
+    if s in ("in", "i", "input"):
+        return "in"
+    if s in ("out", "o", "output"):
+        return "out"
+    if s in ("io", "i/o", "inout", "bidir", "bidirectional"):
+        return "io"
+    if s in ("nc", "n/c", "none"):
+        return "nc"
+    return s
+
+
+def is_od(s):
+    s = str(s or "").strip().lower()
+    if not s or s in ("digital", "logic", "unknown", "unstated"):
+        return None  # the reader's "not stated"
+    return s in ("od", "open-drain", "open drain", "opendrain")
+
+
 def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
     """confirmed / conflict / unresolved, and why. Deterministic: no judgment here."""
     if not reading.get("found", True):
         return "unresolved", ["the second reader did not find it on the page"]
     k = first.get("kind")
     vals = reading.get("values") or {}
-    diffs = []
+    diffs, soft = [], []
     if k in ("quirk", "rule"):
         c = reading.get("claim")
         if c == "supports":
@@ -486,11 +521,25 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
             if v != "confirmed":
                 return v, [f"value: first {fv!r} vs second {sv!r} ({why})"]
     elif k == "pin":
-        from embarch_atlas.join import pin_norm
-        for f in ("name", "dir", "type", "active"):
-            a, b = first.get(f), vals.get(f)
-            if a and b and (pin_norm(a) if f == "name" else str(a).lower()) != (pin_norm(b) if f == "name" else str(b).lower()):
-                diffs.append(f"{f}: first {a!r} vs second {b!r}")
+        # Compare what the join reads: the name (overline included), the direction class, whether
+        # the output is open-drain, and the active level. Free-form type words (analog, logic,
+        # supply) are vocabulary, not facts the join depends on.
+        a, b = pin_name_norm(first.get("name")), pin_name_norm(vals.get("name"))
+        if a and b and a != b:
+            diffs.append(f"name: first {first.get('name')!r} vs second {vals.get('name')!r}")
+        a, b = dir_class(first.get("dir")), dir_class(vals.get("dir"))
+        if a and b and a != b:
+            msg = f"dir: first {first.get('dir')!r} vs second {vals.get('dir')!r}"
+            if "power" in (a, b) and {a, b} - {"power"} <= {"in", "out", "io"}:
+                soft.append(msg + " (a power-path pin: the direction class is ambiguous)")
+            else:
+                diffs.append(msg)
+        a, b = is_od(first.get("type")), is_od(vals.get("type"))
+        if a is not None and b is not None and a != b:
+            diffs.append(f"open-drain: first {first.get('type')!r} vs second {vals.get('type')!r}")
+        a, b = str(first.get("active") or "").lower(), str(vals.get("active") or "").lower()
+        if a and b and a != b:
+            diffs.append(f"active: first {first.get('active')!r} vs second {vals.get('active')!r}")
     elif k in ("field", "register"):
         if k == "field" and first.get("bits") and vals.get("bits") and sorted(first["bits"]) != sorted(vals["bits"]):
             diffs.append(f"bits: first {first['bits']} vs second {vals['bits']}")
@@ -512,7 +561,9 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
             diffs.append(f"numbers in the first reading not seen by the second: {missing[:10]}")
     else:
         return "unresolved", [f"kind {k} has no deterministic comparison"]
-    return ("conflict", diffs) if diffs else ("confirmed", [])
+    if diffs:
+        return "conflict", diffs + soft
+    return ("unresolved", soft) if soft else ("confirmed", [])
 
 
 def compare(ad: Path, atlas: Path, readings_path: Path) -> list[dict]:

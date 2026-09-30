@@ -186,3 +186,11 @@ def test_text_value_verdict_compares_meaning():
     assert tv("1-Wire standard speed (variant B)", "standard speed 1-wire communication")[0] == "confirmed"
     assert tv("removal: charge voltage 4.2 V", "Battery removal")[0] == "unresolved"
     assert tv("2S", "2S")[0] == "confirmed"
+
+
+def test_pin_compare_uses_what_the_join_reads():
+    from embarch_atlas.secondlook import compare_one
+    first = {"kind": "pin", "name": "EN̅", "dir": "power", "type": "logic", "active": "low"}
+    assert compare_one(first, {"found": True, "values": {"name": "EN-bar", "dir": "supply", "type": "digital"}})[0] == "confirmed"
+    assert compare_one({"kind": "pin", "name": "FLT", "type": "od"}, {"found": True, "values": {"name": "FLT", "type": "pp"}})[0] == "conflict"
+    assert compare_one({"kind": "pin", "name": "ACOK"}, {"found": True, "values": {"name": "ACOK-bar"}})[0] == "conflict"
