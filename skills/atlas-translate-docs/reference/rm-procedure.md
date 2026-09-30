@@ -176,7 +176,8 @@ re-checks; it does not re-ask the model.
 - A newer freeze of the same files supersedes the older entry automatically (kept, never deleted);
   `rm-freeze --retire <entry>` marks one superseded by hand. `rm-sections` lists stale entries.
 - Numbers: a tag covers only its own clause (as in `doc check` M); an `[SVD]` cite covers the
-  numbers in its clause. List markers, `Tier N`, token counts, section references and backticked
+  numbers and the field names in its clause. A per-instance field (`TEIF1`) is found on the page in
+  the RM's generic form (`TEIFx`), so it needs no extra register-section cite. List markers, `Tier N`, token counts, section references and backticked
   identifiers are not numeric claims. Write ordinals as the page does ("eighth", not "8th").
 - A quirk written into a must file also gets a `quirk` record, so the mismatch report and
   `find_fact` see it.

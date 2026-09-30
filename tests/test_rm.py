@@ -618,3 +618,19 @@ def test_rm_outline_from_a_real_pdf(tmp_path):
 
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+def test_rm_check_field_forms_and_svd_clauses(tmp_path, capsys):
+    assert rm.field_on_page("TEIF1", "TEIFx is set by hardware on a transfer error")
+    assert rm.field_on_page("CC2IF", "flag CCxIF is set")
+    assert not rm.field_on_page("TEIF1", "HTIFx is set at half transfer")
+    root = demo_atlas(tmp_path)
+    s = root / "docs" / "demo-rm@1" / "s"
+    s.mkdir(exist_ok=True)
+    (s / "2.1.md").write_text("\n".join([
+        "- `UART_SR.TXE` flags an empty buffer [SVD]; EN must be set first [§2.1 p.3]",   # the SVD clause names it
+        "- `UART_SR.TXE` is described here [§2.1 p.3]",                                  # still needs the page
+    ]) + "\n")
+    _run("--atlas-dir", root, "mcu", "rm-check", "demo-rm@1", s / "2.1.md")
+    fails = [ln.strip() for ln in capsys.readouterr().out.splitlines() if ln.startswith("  ")]
+    assert fails == ["s/2.1.md:2 field TXE not on cited page(s) [3]"]

@@ -830,6 +830,25 @@ def bare_name(svd, name: str, periphs: list[str]) -> bool | None:
     return None
 
 
+def field_on_page(field: str, text: str) -> bool:
+    """A field name is on the page as printed, or in the RM's generic per-instance form: the SVD's
+    `TEIF1` or `CC2IF` is printed `TEIFx` / `CCxIF` (x, y or n for the channel number)."""
+    if re.search(rf"\b{re.escape(field)}\b", text):
+        return True
+    for m in re.finditer(r"\d+", field):
+        generic = re.escape(field[:m.start()]) + "[xyn]" + re.escape(field[m.end():])
+        if re.search(rf"\b{generic}\b", text):
+            return True
+    return False
+
+
+def in_svd_clause(line: str, ident: str) -> bool:
+    """Whether a backticked name sits in a clause an `[SVD]` cite covers (check.tagged_pieces): that
+    name is the SVD's, so the RM page need not print it."""
+    from .check import tagged_pieces
+    return any(cls == "svd" and f"`{ident}`" in piece for piece, cls in tagged_pieces(line))
+
+
 def check_files(rm: RmDoc, svd, files: list[Path], periphs: list[str] | None = None,
                 base: Path | None = None) -> dict:
     """The deterministic second pass over distilled RM files (spike 13's verify_cites).
@@ -895,10 +914,11 @@ def check_files(rm: RmDoc, svd, files: list[Path], periphs: list[str] | None = N
                     fails.append(f"{label}:{ln} `{ident}` not in the SVD")
                 parts = ident.split(".")
                 foreign = len(parts) == 3 and parts[0] not in local
-                if cites and not foreign and not (len(parts) == 2 and parts[0] in svd.regs):
+                if cites and not foreign and not (len(parts) == 2 and parts[0] in svd.regs) \
+                        and not in_svd_clause(line, ident):
                     f = parts[-1]
                     tot["support"] += 1
-                    if not re.search(rf"\b{re.escape(f)}\b", text):
+                    if not field_on_page(f, text):
                         tot["support_bad"] += 1
                         fails.append(f"{label}:{ln} field {f} not on cited page(s) {pages}")
             for name in dict.fromkeys(bare):
