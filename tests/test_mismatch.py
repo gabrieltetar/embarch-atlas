@@ -103,3 +103,11 @@ def test_driver_source_detection():
     assert not mismatch.is_driver_source({"doc": "rm0@1", "q": "Bit 5 resume driver"})
     assert not mismatch.is_driver_source({"define": "X_Msk", "doc": "header:vendor.h"})
     assert not mismatch.is_driver_source("svd")
+
+
+def test_rail_volts_and_pin_tolerance():
+    from embarch_atlas.mismatch import pin_tolerance, rail_volts
+    assert rail_volts("3V3") == 3.3 and rail_volts("1V8_IO") == 1.8 and rail_volts("+5V") == 5.0
+    assert rail_volts("VBUS") is None and rail_volts("NET_12") is None and rail_volts("3V3_SW") == 3.3
+    assert pin_tolerance("FT_fa") == 5.5 and pin_tolerance("TT_a") == 3.6 and pin_tolerance("RST, FT") == 3.6
+    assert pin_tolerance(None) is None

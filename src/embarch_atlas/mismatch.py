@@ -30,7 +30,7 @@ ORDER = [
     "dt-limit-declared-unknown", "reg-field-in-other-register", "reg-address-vs-name",
     "reg-mask-vs-field", "reg-reset-vs-datasheet", "reg-address-unknown", "document-reading-conflict",
     "pinctrl-func-vs-net-name", "polarity-vs-net-name", "open-drain-no-pull", "pull-conflict",
-    "pull-to-other-rail", "dt-pin-not-connected", "dt-no-binding", "dt-no-driver", "symbol-vs-datasheet",
+    "pull-to-other-rail", "far-end-level-above-tolerance", "dt-pin-not-connected", "dt-no-binding", "dt-no-driver", "symbol-vs-datasheet",
     "i2c-identity-unresolved", "reg-comment-vs-datasheet", "dt-limit-needs-formula", "dt-limit-outside-ec",
     "exti-line-shared", "pin-shared-in-dt", "connected-no-dt", "dni-on-path",
     "polarity-resolved",
@@ -49,6 +49,7 @@ SETTLE = {
     "open-drain-no-pull": "add a pull on the board or in DT, or confirm one exists off-board",
     "pull-conflict": "drop the DT pull or the board pull; they fight",
     "pull-to-other-rail": "the rail voltage against the pin's I/O structure (datasheet abs max)",
+    "far-end-level-above-tolerance": "a level shifter, a series resistor with clamp, or a 5 V tolerant pin; or the far-end part's I/O supply",
     "dt-pin-not-connected": "the schematic: is the DT pin really unconnected on this board revision",
     "dt-no-binding": "give the node a compatible and binding, or remove it: no driver can use it",
     "dt-no-driver": "enable the driver (Kconfig) or disable the node: its pinctrl is never applied",
@@ -63,7 +64,6 @@ SETTLE = {
 NOT_RUN = [
     ("enable / sequence timing", "code delays (`k_sleep`, `k_msleep`) vs datasheet timing records; DT `*-ms` properties "
      "are compared only on nodes that resolve to a part (the DT limits check)"),
-    ("power domain of the far-end part", "far-end VCC rail vs MCU I/O level needs pin records with supply pins"),
     ("boot state before firmware runs", "pulls + inverters + part reset values: done by hand so far"),
 ]
 
@@ -81,6 +81,60 @@ def _od(rec: dict | None) -> bool:
         return False
     t = " ".join(str(rec.get(k) or "") for k in ("type", "dir", "desc")).lower()
     return bool(re.search(r"\bod\b|open[- ]drain|open[- ]collector", t))
+
+
+def rail_volts(net: str | None) -> float | None:
+    """A rail's voltage from its net name (`3V3`, `1V8_IO`, `5V`, `+12V`); None when the name has none
+    (VBUS, VSYS, VBAT vary, and are not guessed)."""
+    n = (net or "").upper()
+    m = re.search(r"(?<![A-Z0-9.])\+?(\d{1,2})V(\d{1,2})(?![0-9])", n)
+    if m:
+        return float(f"{m[1]}.{m[2]}")
+    m = re.search(r"(?<![A-Z0-9.])\+?(\d{1,2}(?:\.\d{1,2})?)V(?![0-9A-Z])", n)
+    return float(m[1]) if m else None
+
+
+def pin_tolerance(io: str | None) -> float | None:
+    """The highest level an MCU input takes by its I/O structure: FT pins are 5 V tolerant (5.5 V
+    operating when VDD is up), TT and RST pins follow the 3.3 V supply (3.6 V). Unknown -> None."""
+    s = (io or "").upper().replace(" ", "")
+    if not s:
+        return None
+    parts = [x for x in re.split(r"[,/]", s) if x]
+    if all(x.startswith("FT") for x in parts):
+        return 5.5
+    if any(x.startswith(("TT", "RST")) for x in parts):
+        return 3.6
+    return None
+
+
+IO_SUPPLY_RE = re.compile(r"^(V_?IO|V_?L(OGIC)?|VDDIO\d*|VCCIO|DVDD|VDD_?IO)$", re.I)
+SUPPLY_NAME_RE = re.compile(r"^(V\w*|DVDD|AVDD|VCC\w*|VDD\w*|VS)$", re.I)
+
+
+def part_output_volts(J, board: str, ref: str, doc: str) -> tuple[float | None, str]:
+    """The level a part drives its push-pull outputs to: its dedicated I/O supply pin's rail when it
+    has one, else its only supply pin's rail. More than one candidate supply and no I/O pin: unknown."""
+    recs = [r for r in J.docs.records(doc, "pin")
+            if str(r.get("dir") or "").lower() in ("power", "supply") and not J.is_ground(r.get("name"))
+            and str(r.get("type") or "").lower() != "ground"]
+    io = [r for r in recs if IO_SUPPLY_RE.match(str(r.get("name") or ""))]
+    cands = io or [r for r in recs if SUPPLY_NAME_RE.match(str(r.get("name") or ""))]
+    if len(cands) != 1 and not io:
+        return None, f"{len(cands)} candidate supply pins, no dedicated I/O supply"
+    volts, nets = [], []
+    for r in cands:
+        pins = r.get("pin") if isinstance(r.get("pin"), list) else [r.get("pin")]
+        for pn in pins:
+            net = J.boards[board].net(f"{ref}-{pn}")
+            if net:
+                nets.append(net)
+                v = rail_volts(net)
+                if v is not None:
+                    volts.append(v)
+    if not volts:
+        return None, f"supply net(s) {sorted(set(nets)) or '?'} carry no voltage in their name"
+    return max(volts), f"supply {sorted(set(nets))}"
 
 
 class Report:
@@ -241,6 +295,38 @@ def run(J, stamp: dict, pins: dict) -> dict:
     else:
         R.not_run.append({"check": "open-drain far end has a pull",
                           "why": "no `pin` records for any part yet (translate the far-end parts' datasheets)"})
+
+    # ---- far-end output level vs the MCU pin's I/O structure (pin records on both sides)
+    name = "far-end output level vs MCU pin tolerance"
+    if have_pin_recs and any(r.get("io") for r in rows):
+        R.check(name, "far-end pin records (direction, open-drain, supply pins), netlist supply nets, MCU pin I/O structure")
+        for r in rows:
+            tol = pin_tolerance(r.get("io"))
+            if tol is None:
+                continue
+            for f in r["far"]:
+                if f["kind"] != "part-pin":
+                    continue
+                pr = J.part_pin_record(f["board"], f["pin"])
+                if not pr or _od(pr[1]) or re.fullmatch(r"(SDA|SCL|SMB\w*|I2C\w*)", str(pr[1].get("name") or ""), re.I):
+                    continue  # open-drain (and I2C by definition): the pull sets the level, checked above
+                if str(pr[1].get("dir") or "").lower() not in ("out", "io"):
+                    continue
+                ref = f["pin"].split("-", 1)[0]
+                volts, how = part_output_volts(J, f["board"], ref, pr[0])
+                if volts is None:
+                    R.folded[f"{name}: far-end supply unknown"].append(f"{f['board']}:{f['pin']} ({how})")
+                    continue
+                ok = volts <= tol + 1e-9
+                R.check(name, "", 1, int(ok))
+                if not ok:
+                    R.cand("far-end-level-above-tolerance", r["port"] or r["key"],
+                           f"{r['port']} ({r.get('io')}, tolerates {tol} V) is driven by {f['board']}:{f['pin']} "
+                           f"{f.get('pin_name')} ({f.get('mpn')}), a push-pull output on a {volts} V supply",
+                           [f"MCU pin I/O {r.get('ds_cite') or ''}", f"datasheet {pr[0]} {_cite(pr[1])}", how], name,
+                           severity="error")
+    else:
+        R.not_run.append({"check": name, "why": "needs pin records for the far-end parts and the MCU's pin I/O structures"})
 
     # ---- DT node reality: binding, driver
     R.check("DT node has a binding", "edt raw cells")
