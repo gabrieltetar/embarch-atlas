@@ -195,6 +195,15 @@ def batches(queue: list[dict], top: int, per_batch: int = 8) -> list[dict]:
     return out
 
 
+def select(queue: list[dict], why: str | None = None, doc: str | None = None) -> list[dict]:
+    """The queue items a round targets, rank kept: `why` is comma-separated reason substrings (any
+    matches, `llm-unverified,unit`), `doc` comma-separated doc ids."""
+    ws = [w.strip() for w in (why or "").split(",") if w.strip()]
+    ds = {d.strip() for d in (doc or "").split(",") if d.strip()}
+    return [q for q in queue if (not ws or any(w in r for r in q["why"] for w in ws))
+            and (not ds or q["doc"] in ds)]
+
+
 def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
     from embarch_atlas.join import Docs
     stamp = read_json(atlas / "atlas.json")
@@ -255,7 +264,7 @@ def cmd_queue(args) -> int:
     q, st = build_queue(ad, atlas)
     write_jsonl(atlas / "second_look_queue.jsonl", q)
     if getattr(args, "top", None):
-        bs = batches(q, args.top)
+        bs = batches(select(q, getattr(args, "why", None), getattr(args, "doc", None)), args.top)
         write_json(atlas / "second_look_batches.json", bs)
         print(f"top {min(args.top, len(q))} items in {len(bs)} page batches -> {atlas / 'second_look_batches.json'}")
     pages = {}
@@ -644,6 +653,9 @@ def register(sub, groups) -> None:
     p.add_argument("atlas")
     p.add_argument("--top", type=int, help="also group the N highest-priority items into page batches "
                                            "(second_look_batches.json), one fresh subagent per batch")
+    p.add_argument("--why", help="with --top: only items whose reasons contain one of these (comma-separated, "
+                                 "e.g. llm-unverified,unit)")
+    p.add_argument("--doc", help="with --top: only these doc ids (comma-separated)")
     p.set_defaults(func=cmd_queue)
     p = g.add_parser("prompt", help="print the blind reader's instructions for one page batch")
     p.add_argument("atlas")

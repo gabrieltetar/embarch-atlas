@@ -525,7 +525,7 @@ def run(J, stamp: dict, pins: dict) -> dict:
     sl = J.atlas / "second_look.jsonl"
     if sl.is_file():
         R.check("second look agrees with the first pass", "second_look.jsonl")
-        for v in read_jsonl(sl):
+        for v in current_verdicts(J, read_jsonl(sl), R):
             ok = v.get("verdict") == "confirmed"
             if v.get("verdict") == "unresolved":
                 R.folded["second look unresolved (record stays llm-unverified)"].append(str(v.get("id")))
@@ -547,6 +547,32 @@ def run(J, stamp: dict, pins: dict) -> dict:
         R.not_run.insert(0, {"check": "every pin check", "why": "no MCU found on the schematic boards (set [mcu] part or --mcu-ref)"})
 
     return finish(R, J, stamp)
+
+
+FOLD_OLD_VERDICT = "second look of an earlier version of the record (re-queued)"
+FOLD_GONE_VERDICT = "second look of a record id no longer in the docs (renamed or removed)"
+
+
+def current_verdicts(J, verdicts: list[dict], R=None) -> list[dict]:
+    """The verdicts that still describe a record as it is now: a verdict's `key` is the content key of
+    the record it read (secondlook.content_key), so after a re-translation the old verdict no longer
+    applies, and the record goes back into the queue. Superseded ones are folded into a count."""
+    from embarch_atlas.secondlook import content_key
+    keys: dict[str, set[str] | None] = {}
+    out = []
+    for v in verdicts:
+        rid, doc = v.get("id"), v.get("doc")
+        if rid not in keys:
+            d = (J.docs.docs.get(doc) or {}) if doc else {}
+            recs = [r for rs in (d.get("records") or {}).values() for r in rs if r.get("id") == rid]
+            # None: the document is not loaded here, so nothing can be said; keep the verdict
+            keys[rid] = {content_key(r, d["dir"]) for r in recs} if d.get("dir") else None
+        k = keys[rid]
+        if not v.get("key") or k is None or v["key"] in k:
+            out.append(v)
+        elif R is not None:
+            R.folded[FOLD_OLD_VERDICT if k else FOLD_GONE_VERDICT].append(f"{rid} ({v.get('verdict')})")
+    return out
 
 
 EXPECTED_RE = re.compile(r"(?<![A-Za-z0-9])(SWD\w*|SWCLK|SWO|NRST|N?RESET|BOOT0|OSC\d*|XTAL\w*|JTAG\w*|TCK|TMS|TDI|TDO)(?![A-Za-z])", re.I)

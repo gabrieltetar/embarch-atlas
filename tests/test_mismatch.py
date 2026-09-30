@@ -133,3 +133,23 @@ def test_dt_intent_keys_and_forms():
     assert mismatch.dt_intent(J, None, "USB") == "bring-up"
     assert mismatch.dt_intent(J, "/soc/x") == ""            # an empty reason declares nothing
     assert mismatch.dt_intent(object(), "USB") == ""
+
+
+def test_second_look_counts_only_verdicts_of_the_current_record(tmp_path):
+    from embarch_atlas import secondlook
+    from embarch_atlas.common import read_jsonl
+    ad, atlas = make_project(tmp_path)
+    d = ad / "docs" / "sns701@a"
+    rec = next(r for r in read_jsonl(d / "records" / "pin.jsonl") if r["id"] == "sns701.pin.ALERT")
+    now = secondlook.content_key(rec, d)
+    write_jsonl(atlas / "second_look.jsonl", [
+        {"id": "sns701.pin.ALERT", "doc": "sns701@a", "key": "0" * 64, "verdict": "conflict", "why": ["name"]},
+        {"id": "sns701.pin.ALERT", "doc": "sns701@a", "key": now, "verdict": "confirmed"},
+        {"id": "sns701.pin.GONE", "doc": "sns701@a", "key": "1" * 64, "verdict": "conflict", "why": ["name"]}])
+    run_join(ad, atlas)
+    rep = read_json(atlas / "mismatches.json")
+    chk = {c["check"]: c for c in rep["checks"]}["second look agrees with the first pass"]
+    assert (chk["ran"], chk["passed"]) == (1, 1)
+    assert "document-reading-conflict" not in _classes(rep)
+    assert rep["folded"][mismatch.FOLD_OLD_VERDICT] == ["sns701.pin.ALERT (conflict)"]
+    assert rep["folded"][mismatch.FOLD_GONE_VERDICT] == ["sns701.pin.GONE (conflict)"]

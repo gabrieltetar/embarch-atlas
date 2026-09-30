@@ -205,3 +205,14 @@ def test_pin_io_structure_compared():
     assert "I/O structure" in ask(r)
     assert compare_one(r, {"found": True, "values": {"name": "PC10", "io": "FT_fa"}})[0] == "confirmed"
     assert compare_one(r, {"found": True, "values": {"name": "PC10", "io": "TT_a"}})[0] == "conflict"
+
+
+def test_select_targets_reasons_and_docs_keeping_rank():
+    from embarch_atlas import secondlook
+    q = [{"id": "a", "doc": "d1@A", "why": ["pin fact read by the join"]},
+         {"id": "b", "doc": "d2@A", "why": ["figure-only", "llm-unverified"]},
+         {"id": "c", "doc": "d1@A", "why": ["unit not in the quoted row (unit-prefix risk)"]},
+         {"id": "d", "doc": "d2@A", "why": ["limit"]}]
+    assert [x["id"] for x in secondlook.select(q, "llm-unverified,unit")] == ["b", "c"]
+    assert [x["id"] for x in secondlook.select(q, "llm-unverified,unit", "d1@A")] == ["c"]
+    assert secondlook.select(q) == q
