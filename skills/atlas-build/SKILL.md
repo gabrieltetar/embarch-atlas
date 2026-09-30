@@ -36,25 +36,31 @@ Current state:
 
 ## Step 5: the second look
 
-The queue lists facts this atlas **uses** that need an independent look: figure-only
-facts, `llm-unverified` records, limits whose unit is printed once per row group,
-condition-bearing limits, quirks and register semantics. Items with a frozen
-verdict for the same content hash are skipped.
+```
+embarch-atlas second-look queue <atlas> --top <N>      # ranked; groups the N most important items into page batches
+embarch-atlas second-look prompt <atlas> <batch#>      # the blind reader's instructions for one batch
+embarch-atlas second-look compare <atlas> readings.jsonl -o verdicts.jsonl
+embarch-atlas second-look record <atlas> verdicts.jsonl
+```
 
-For each queue item, spawn a **fresh subagent** (Agent tool) that has not seen the
-first pass. Give it only the document path, the page(s), and **what to extract**
-(symbol, parameter, condition, or the quirk's question), **never the first-pass
-value**. It reads the page image (`Read` with `pages=`) and returns its own
-value, unit, condition and a verbatim quote. You then compare:
+The queue lists facts this atlas **uses** that need an independent look, ranked: straps and
+pins the join reads first, then figure-only and `llm-unverified` facts, units printed once
+per row group, quirks, register semantics, condition-bearing limits. Items with a frozen
+verdict for the same content hash are skipped, so each round only pays for new facts. Pick
+`N` from the budget: one batch is one set of pages, about 1.5K tokens a page to view.
 
-- agree: verdict `confirmed`; the record becomes `llm-verified` (or stays
-  `deterministic+crosschecked`);
-- disagree: verdict `conflict`; keep both readings, and the fact appears in the
-  mismatch report as a document-reading conflict;
-- the subagent cannot find it: verdict `unresolved`; the record stays `llm-unverified`.
+For each batch, spawn a **fresh subagent** (Agent tool) and give it exactly the output of
+`second-look prompt`: the PDF, the pages and what to extract, **never the first-pass
+values**. Collect its JSON Lines into `readings.jsonl`. **The verdict is not yours to
+make**: `second-look compare` decides it deterministically (numbers equal, same unit,
+same strap address, same bits; for quirks and rules the reader's supports/contradicts):
 
-Batch items that share a page into one subagent. Keep the verdict file as JSON
-Lines: `{"id", "verdict", "value", "unit", "cond", "q", "p", "reader": "second-look"}`.
+- `confirmed`: the record becomes `llm-verified` evidence (or stays `deterministic+crosschecked`);
+- `conflict`: both readings are kept, and the fact appears in the mismatch report as a
+  document-reading conflict;
+- `unresolved`: the reader could not find it; the record stays `llm-unverified`.
+
+Batch independent pages in parallel subagents; do not show one reader another's output.
 
 ## Step 7: what the engineer sees
 

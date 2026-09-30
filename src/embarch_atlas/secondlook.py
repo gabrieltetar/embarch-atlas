@@ -339,6 +339,162 @@ def record(ad: Path, atlas: Path, verdicts_path: Path) -> dict:
             "by_verdict": {k: sum(1 for e in added if e["verdict"] == k) for k in VERDICTS}}
 
 
+# ---------------------------------------------------------------- blind readers
+
+READER_RULES = """You are a second, independent reader of a hardware datasheet. You have NOT seen anyone
+else's reading and must not guess what it was. For each item, open the page(s) with the Read
+tool (`pages=`), find the fact, and report what the page itself shows. Copy numbers and units
+exactly as printed. If the page does not show the fact, say so (found: false): never infer,
+never compute, never use outside knowledge. Quote the text you read verbatim (the line with the
+values for a table row).
+
+Return JSON Lines, one object per item:
+{"id": "<item id>", "reader": "second-look", "found": true|false, "p": <page>,
+ "q": "<verbatim text>", "values": {...}, "claim": "supports"|"contradicts"|"not-found"}
+values by kind: limit/timing {"min","typ","max","nom","unit","cond"}; strap {"value","condition"};
+pin {"name","dir","type","active"}; field {"bits":[hi,lo],"reset","access"};
+register {"addr","width","reset","access"}; figure {"numbers":[every number on it with its unit]}.
+"claim" is only for quirk and rule items: does the page support or contradict the statement?"""
+
+
+def reader_prompt(batch: dict) -> str:
+    lines = [READER_RULES, "", f"Document: {batch.get('pdf')}", f"Pages: {batch.get('pages')}", "", "Items:"]
+    for it in batch["items"]:
+        lines.append(f"- id {it['id']}: {it['ask']}")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_prompt(args) -> int:
+    from embarch_atlas.build import resolve_atlas, resolve_atlas_dir
+    ad = resolve_atlas_dir(args)
+    atlas = resolve_atlas(ad, args.atlas)
+    bs = read_json(atlas / "second_look_batches.json")
+    if not 0 <= args.batch < len(bs):
+        raise SystemExit(f"batch {args.batch} out of range 0..{len(bs) - 1}")
+    print(reader_prompt(bs[args.batch]), end="")
+    return 0
+
+
+def _num(v):
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().replace("−", "-").replace(",", "")
+    m = re.fullmatch(r"[+]?(-?\d+(?:\.\d+)?)(?:e(-?\d+))?", s, re.I)
+    if m:
+        return float(m[1]) * (10 ** int(m[2]) if m[2] else 1)
+    m = re.fullmatch(r"0x([0-9a-f]+)|([0-9a-f]+)h|0b([01]+)|([01]+)b", s, re.I)
+    if m:
+        return float(int(m[1] or m[2], 16) if (m[1] or m[2]) else int(m[3] or m[4], 2))
+    return None
+
+
+def _unit(u) -> str:
+    u = (u or "").strip()
+    for k, alts in UNIT_ALIASES.items():
+        for a in alts:
+            u = u.replace(a, k)
+    return u.replace(" ", "")
+
+
+def _addr(v):
+    m = re.search(r"0x([0-9a-f]+)|\b([0-9a-f]+)h\b", str(v or ""), re.I)
+    return int(m[1] or m[2], 16) if m else _num(v)
+
+
+def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
+    """confirmed / conflict / unresolved, and why. Deterministic: no judgment here."""
+    if not reading.get("found", True):
+        return "unresolved", ["the second reader did not find it on the page"]
+    k = first.get("kind")
+    vals = reading.get("values") or {}
+    diffs = []
+    if k in ("quirk", "rule"):
+        c = reading.get("claim")
+        if c == "supports":
+            return "confirmed", []
+        if c == "contradicts":
+            return "conflict", ["the page contradicts the statement"]
+        return "unresolved", ["no supports/contradicts claim"]
+    if k in ("limit", "timing"):
+        for f in ("min", "nom", "typ", "max"):
+            a, b = _num(first.get(f)), _num(vals.get(f))
+            if a is None and b is None:
+                continue
+            if isinstance(first.get(f), str) and a is None:
+                continue  # an expression kept as text: not compared
+            if a is None or b is None or abs(a - b) > 1e-9 * max(1.0, abs(a)):
+                diffs.append(f"{f}: first {first.get(f)!r} vs second {vals.get(f)!r}")
+        if first.get("unit") and vals.get("unit") and _unit(first["unit"]) != _unit(vals["unit"]):
+            diffs.append(f"unit: first {first['unit']!r} vs second {vals['unit']!r}")
+    elif k == "strap":
+        a, b = _addr(first.get("value")), _addr(vals.get("value"))
+        if a is None or b is None or a != b:
+            diffs.append(f"value: first {first.get('value')!r} vs second {vals.get('value')!r}")
+    elif k == "pin":
+        from embarch_atlas.join import pin_norm
+        for f in ("name", "dir", "type", "active"):
+            a, b = first.get(f), vals.get(f)
+            if a and b and (pin_norm(a) if f == "name" else str(a).lower()) != (pin_norm(b) if f == "name" else str(b).lower()):
+                diffs.append(f"{f}: first {a!r} vs second {b!r}")
+    elif k in ("field", "register"):
+        if k == "field" and first.get("bits") and vals.get("bits") and sorted(first["bits"]) != sorted(vals["bits"]):
+            diffs.append(f"bits: first {first['bits']} vs second {vals['bits']}")
+        if k == "register" and first.get("addr") is not None and vals.get("addr") is not None \
+                and _addr(first["addr"]) != _addr(vals["addr"]):
+            diffs.append(f"addr: first {first['addr']!r} vs second {vals['addr']!r}")
+        a, b = _num(first.get("reset")), _num(vals.get("reset"))
+        if a is not None and b is not None and a != b:
+            diffs.append(f"reset: first {first.get('reset')!r} vs second {vals.get('reset')!r}")
+        acc = lambda x: re.sub(r"[^a-z0-9]", "", str(x or "").lower()).replace("rw", "rw")
+        if first.get("access") and vals.get("access") and acc(first["access"]) != acc(vals["access"]):
+            diffs.append(f"access: first {first['access']!r} vs second {vals['access']!r}")
+    elif k == "figure":
+        firsts = {_num(x) for x in re.findall(r"-?\d+(?:\.\d+)?", str(first.get("what") or ""))} - {None}
+        seconds = {_num(re.match(r"\s*(-?\d+(?:\.\d+)?)", str(x))[1]) for x in (vals.get("numbers") or [])
+                   if re.match(r"\s*-?\d", str(x))}
+        missing = sorted(firsts - seconds)
+        if missing:
+            diffs.append(f"numbers in the first reading not seen by the second: {missing[:10]}")
+    else:
+        return "unresolved", [f"kind {k} has no deterministic comparison"]
+    return ("conflict", diffs) if diffs else ("confirmed", [])
+
+
+def compare(ad: Path, atlas: Path, readings_path: Path) -> list[dict]:
+    from embarch_atlas.join import Docs
+    queued = {str(q["id"]): q for q in read_jsonl(atlas / "second_look_queue.jsonl")}
+    docs = Docs(ad)
+    out = []
+    for rd in read_jsonl(readings_path):
+        it = queued.get(str(rd.get("id")))
+        if not it:
+            continue
+        first = next((r for r in docs.docs.get(it["doc"], {}).get("records", {}).get(it["kind"], [])
+                      if r.get("id") == it["id"]), {"kind": it["kind"]})
+        verdict, why = compare_one(first, rd)
+        vals = rd.get("values") or {}
+        value = next((vals.get(f) for f in ("value", "typ", "max", "min", "reset") if vals.get(f) is not None), None)
+        out.append({"id": it["id"], "verdict": verdict, "reader": "second-look", "p": rd.get("p"), "q": rd.get("q"),
+                    "value": value, "unit": vals.get("unit"), "cond": vals.get("cond"), "why": why})
+    return out
+
+
+def cmd_compare(args) -> int:
+    from embarch_atlas.build import resolve_atlas, resolve_atlas_dir
+    ad = resolve_atlas_dir(args)
+    atlas = resolve_atlas(ad, args.atlas)
+    rows = compare(ad, atlas, Path(args.readings))
+    write_jsonl(Path(args.out), rows)
+    n = {v: sum(1 for r in rows if r["verdict"] == v) for v in VERDICTS}
+    print(f"{len(rows)} readings compared: {n} -> {args.out}")
+    for r in rows:
+        if r["verdict"] == "conflict":
+            print(f"  conflict {r['id']}: {'; '.join(r['why'])}")
+    return 0
+
+
 def cmd_record(args) -> int:
     from embarch_atlas.build import resolve_atlas, resolve_atlas_dir
     ad = resolve_atlas_dir(args)
@@ -358,6 +514,15 @@ def register(sub, groups) -> None:
     p.add_argument("--top", type=int, help="also group the N highest-priority items into page batches "
                                            "(second_look_batches.json), one fresh subagent per batch")
     p.set_defaults(func=cmd_queue)
+    p = g.add_parser("prompt", help="print the blind reader's instructions for one page batch")
+    p.add_argument("atlas")
+    p.add_argument("batch", type=int)
+    p.set_defaults(func=cmd_prompt)
+    p = g.add_parser("compare", help="readings.jsonl from blind readers -> verdicts.jsonl (deterministic)")
+    p.add_argument("atlas")
+    p.add_argument("readings")
+    p.add_argument("-o", "--out", required=True)
+    p.set_defaults(func=cmd_compare)
     p = g.add_parser("record", help="validate verdicts.jsonl, append to second_look.jsonl and freeze in cache/llm/")
     p.add_argument("atlas")
     p.add_argument("verdicts")

@@ -134,3 +134,29 @@ def test_priority_and_page_batches():
     bs = batches(q, top=12, per_batch=8)
     assert [len(b["items"]) for b in bs] == [8, 2, 2]
     assert bs[0]["pages"] == [3] and bs[0]["priority"] == 100
+
+
+def test_compare_one_is_deterministic():
+    from embarch_atlas.secondlook import compare_one
+    lim = {"kind": "limit", "min": 22, "typ": 23, "max": 25, "unit": "V"}
+    assert compare_one(lim, {"found": True, "values": {"min": "22", "typ": 23, "max": 25, "unit": "V"}})[0] == "confirmed"
+    v, why = compare_one(lim, {"found": True, "values": {"min": 22, "typ": 23, "max": 24.5, "unit": "V"}})
+    assert v == "conflict" and "max" in why[0]
+    assert compare_one(lim, {"found": True, "values": {"min": 22, "typ": 23, "max": 25, "unit": "mV"}})[0] == "conflict"
+    assert compare_one(lim, {"found": False})[0] == "unresolved"
+    strap = {"kind": "strap", "value": "0x44 (1000100b)"}
+    assert compare_one(strap, {"found": True, "values": {"value": "44h"}})[0] == "confirmed"
+    assert compare_one(strap, {"found": True, "values": {"value": "0x45"}})[0] == "conflict"
+    q = {"kind": "quirk", "text": "x"}
+    assert compare_one(q, {"found": True, "claim": "contradicts"})[0] == "conflict"
+    fld = {"kind": "field", "bits": [7, 7], "reset": "0b0", "access": "rw"}
+    assert compare_one(fld, {"found": True, "values": {"bits": [7, 7], "reset": "0", "access": "R/W"}})[0] == "confirmed"
+    fig = {"kind": "figure", "what": "discharge through 200 Ohm, 10 mOhm FETs"}
+    assert compare_one(fig, {"found": True, "values": {"numbers": ["200 Ohm"]}})[0] == "conflict"
+    assert compare_one(fig, {"found": True, "values": {"numbers": ["200 Ohm", "10 mOhm"]}})[0] == "confirmed"
+
+
+def test_reader_prompt_never_carries_first_values():
+    from embarch_atlas.secondlook import reader_prompt
+    text = reader_prompt({"pdf": "x.pdf", "pages": [8], "items": [{"id": "a.ec.V", "ask": "V under cond: min/typ/max", "key": "k"}]})
+    assert "a.ec.V" in text and "NOT seen" in text
