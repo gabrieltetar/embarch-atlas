@@ -204,3 +204,25 @@ def test_field_table_takes_meaning_from_the_llm_twin():
     rows = render.t_field([det], {"all": [det, llm]})
     assert rows[0] == "| Register | Bits | Field | Access | Reset | Description | Enum | Note | p |"
     assert rows[2] == "| R | 0 | EN | rw | 0b1 | enable | 0 = off; 1 = on |  | p.5 |"
+
+
+def test_values_keep_the_printed_spelling():
+    rec = {"id": "d.ec.VREF", "kind": "limit", "q": "Reference voltage 1.20 1.250 1.30 V", "min": 1.2, "typ": 1.25,
+           "max": 1.3, "unit": "V"}
+    assert [render.num(rec, k) for k in ("min", "typ", "max")] == ["1.20", "1.250", "1.30"]
+    assert "min=1.20; typ=1.250; max=1.30" in R.facts_line(dict(rec, doc="d@A", p=4))
+    pm = {"q": "Offset error ±0.50 mV", "min": -0.5, "max": 0.5}
+    assert (render.num(pm, "min"), render.num(pm, "max")) == ("-0.50", "0.50")
+    assert render.num({"q": "Gain 2 2.0 V/V", "typ": 2}, "typ") == "2"      # two spellings: the plain form
+    assert render.num({"q": "Delay 1.0A17 ms", "typ": 17}, "typ") == "17"    # a glued footnote marker is not a value
+    assert render.num({"q": None, "typ": 102.3984}, "typ") == "102.3984"     # no %g rounding to 6 digits
+
+
+def test_selector_p0_takes_only_the_first_cited_page():
+    rows = [{"id": "a", "kind": "limit", "p": [5, 9]}, {"id": "b", "kind": "limit", "p": 9},
+            {"id": "c", "kind": "limit", "p": [6, 9]}]
+    by_page = render.select(rows, render.parse_selector("kind=limit p=9"))
+    by_row = render.select(rows, render.parse_selector("kind=limit p0=9"))
+    assert [r["id"] for r in by_page] == ["a", "b", "c"]          # the shared footnote page pulls in every row
+    assert [r["id"] for r in by_row] == ["b"]
+    assert [r["id"] for r in render.select(rows, render.parse_selector("kind=limit p0=5-6"))] == ["a", "c"]

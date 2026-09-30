@@ -1,5 +1,6 @@
 import copy
 import io
+import json
 
 import pytest
 
@@ -500,3 +501,64 @@ def test_md_svd_numbers_are_counted_not_flagged(doc):
                  "- a claim with no source 5151 (p.3)\n")
     m = check.check_markdown_file(check.DocText(docdir), f, {})
     assert m["stats"]["svd"] == 1 and [b["number"] for b in m["unanchored"]] == [5151]
+
+
+def _twins(det_fields, llm_fields, reg_reset="0x00"):
+    reg = {"id": "d.reg.B", "kind": "register", "name": "B", "addr": "0x02", "width": 8, "reset": reg_reset}
+    det = [dict(reg, prov="deterministic")] + [dict(f, kind="field", reg="d.reg.B", prov="deterministic",
+                                                    id="d.reg.B." + f["name"].replace(" ", "_").upper())
+                                               for f in det_fields]
+    llm = [dict(reg)] + [dict(f, kind="field", reg="d.reg.B", id="d.reg.B." + f["name"].replace(" ", "_"))
+                         for f in llm_fields]
+    return check.check_registers(det + llm)
+
+
+def test_g_field_names_compare_without_case_or_separators():
+    rep = _twins([{"name": "INPUT_LEVEL", "bits": [7, 0], "reset": "0x00"}],
+                 [{"name": "Input Level", "bits": [7, 0], "reset": "0x00"}])
+    assert rep["diff"] == [] and rep["verdict"]["d.reg.B"] == "agree"
+    rep = _twins([{"name": "INPUT_LEVEL", "bits": [7, 0], "reset": "0x00"}],
+                 [{"name": "LEVEL", "bits": [7, 0], "reset": "0x00"}])     # other words: still two fields
+    assert {d["issue"] for d in rep["diff"]} == {"field INPUT_LEVEL only in deterministic", "field LEVEL only in llm"}
+
+
+def test_g_what_the_parser_could_not_read_is_not_compared():
+    # the template has no access column and no reset in the heading
+    rep = _twins([{"name": "RDY", "bits": [7, 0], "reset": None}],
+                 [{"name": "RDY", "bits": [7, 0], "reset": "0x00", "access": "ro"}], reg_reset=None)
+    assert rep["diff"] == [], rep["diff"]
+    # an LLM `reset: null` without a note is a claim (undefined) and still disagrees with a read value
+    rep = _twins([{"name": "RDY", "bits": [7, 0], "reset": "0x00"}], [{"name": "RDY", "bits": [7, 0], "reset": None}])
+    assert any("reset llm None det 0x00" in d["issue"] for d in rep["diff"])
+
+
+def test_g_access_refinements_agree_contradictions_do_not():
+    ok = _twins([{"name": "DONE", "bits": [7, 0], "reset": "0x00", "access": "ro"}],
+                [{"name": "DONE", "bits": [7, 0], "reset": "0x00", "access": "rclr"}])
+    assert ok["diff"] == []
+    bad = _twins([{"name": "DONE", "bits": [7, 0], "reset": "0x00", "access": "ro"}],
+                 [{"name": "DONE", "bits": [7, 0], "reset": "0x00", "access": "rw"}])
+    assert any("access llm rw det ro" in d["issue"] for d in bad["diff"])
+
+
+def test_g_reset_composition_the_document_contradicts_is_a_warning(doc):
+    docdir = doc[1]
+    recs = [{"id": "demo-conv.reg.CFG", "kind": "register", "doc": "demo-conv@B", "p": 1, "q": None, "src": "table",
+             "name": "CFG", "addr": "0x09", "width": 8, "reset": "0x00", "note": "heading prints 0h"},
+            {"id": "demo-conv.reg.CFG.EN", "kind": "field", "doc": "demo-conv@B", "p": 1, "q": None, "src": "table",
+             "reg": "demo-conv.reg.CFG", "name": "EN", "bits": [7, 0], "reset": "0x10"}]
+    conflict = {"id": "demo-conv.conflict.CFG.reset", "kind": "conflict", "doc": "demo-conv@B", "p": 1, "q": None,
+                "src": "table", "refs": ["demo-conv.reg.CFG"], "sources": ["heading", "field table"],
+                "text": "field resets compose to 0x10, the heading says 0x00"}
+    rd = docdir / "records"
+    for name, rows in (("register.jsonl", recs[:1]), ("field.jsonl", recs[1:])):
+        with open(rd / name, "a") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+    without = check.run_check(docdir, render=False, use_pdf=False)
+    assert any("field resets compose" in i for i in result(without, "demo-conv.reg.CFG")["issues"])
+    with open(rd / "conflict.jsonl", "a") as f:
+        f.write(json.dumps(conflict) + "\n")
+    rep = check.run_check(docdir, render=False, use_pdf=False)
+    assert not any("field resets compose" in i for i in result(rep, "demo-conv.reg.CFG")["issues"])
+    assert any(w.startswith("G: 1 register resets disagree") for w in rep["warnings"])

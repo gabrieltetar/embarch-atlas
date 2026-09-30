@@ -366,3 +366,17 @@ def test_cut_reads_two_columns():
     assert pdftext._cut(words, 320, 100, g)[0] == 30           # after the whole left column
     assert pdftext._cut(words, 40, 220, g)[0] == 9             # l0-l8; the right column comes later
     assert pdftext._gutter(left, 612) is None
+
+
+def test_tier2_files_lists_every_file_that_holds_a_section(tmp_path):
+    tree = {"7": None, "7.5": "7", "7.5.1": "7.5", "7.6": "7"}
+    (tmp_path / "s").mkdir()
+    for name, body in {"7.5.md": "# 7.5\n", "7.5-part2.md": "<!-- atlas:covers 7.5 -->\n",
+                       "7.5-part3.md": "<!-- atlas:covers 7.5, 7.6 -->\n"}.items():
+        (tmp_path / "s" / name).write_text(body)
+    secs = [{"id": k, "parent": v} for k, v in tree.items()]
+    files = pdftext.tier2_files(tmp_path, secs)
+    assert files["7.5"] == ["s/7.5.md", "s/7.5-part2.md", "s/7.5-part3.md"]    # own file first, then covers
+    assert files["7.5.1"] == files["7.5"]                                          # descent takes the list
+    assert files["7.6"] == ["s/7.5-part3.md"] and "7" not in files
+    assert pdftext.tier2_map(tmp_path, secs)["7.5"] == "s/7.5.md"

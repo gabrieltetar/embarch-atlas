@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import common
+from .pdftext import tier2_files
 
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000,
@@ -206,6 +207,8 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
         if not base:
             return _missing(f"section {under!r} in {d.name}", "Call doc_toc without `under` to list the top levels.")
     files = {p.stem for p in (d / "s").glob("*.md")} if (d / "s").is_dir() else set()
+    toc = _json(d / "toc.json")
+    t2 = tier2_files(d, toc["sections"]) if toc and toc.get("sections") else {}
     out = []
     lo = (base["level"] + 1) if base else 1
     hi = lo + depth - 1
@@ -219,9 +222,10 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
                 break
         if inside and lo <= r["level"] <= hi:
             f = next((s for s in (r["id"], _slug(r["title"])) if s in files), "")
+            held = ", ".join(t2.get(r["id"]) or ([f"s/{f}.md"] if f else []))
             pages = f"p{r['start']}" + (f"-{r['end']}" if r["end"] != r["start"] else "")
             out.append(f"{'  ' * (r['level'] - lo)}{r['id']} | {r['title']} | {pages} | {r['tokens']} tok"
-                       + (f" | s/{f}.md" if f else ""))
+                       + (f" | {held}" if held else ""))
     return _cap(_header(f"{d.name} toc" + (f" under {base['id']}" if base else "")) + "\n".join(out) + "\n", "doc_toc")
 
 

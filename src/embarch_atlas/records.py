@@ -227,11 +227,29 @@ def slug(s: str, maxlen: int = 48) -> str:
 
 # ---------------------------------------------------------------- facts.txt
 
+PRINTED_NUM = re.compile(r"(?<![\w.])[-\u2212]?(\d+(?:\.\d+)?)(?!\d)")
+VALUE_KEYS = ("min", "nom", "typ", "max")
+
+
+def printed(rec: dict, key: str) -> str | None:
+    """A numeric value as the page prints it: the number in the record's quote equal to the value
+    keeps its own spelling (`1.50`, `2.0`), which JSON drops. A negative value whose quote prints only
+    the magnitude (a `±X` cell) keeps the page's digits with the sign. None when the quote has no
+    such number, or two different spellings of it."""
+    v = rec.get(key)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    spellings = {m.group(1) for q in quotes(rec) for m in PRINTED_NUM.finditer(q) if float(m.group(1)) == abs(v)}
+    if len(spellings) != 1:
+        return None
+    return ("-" if v < 0 else "") + spellings.pop()
+
+
 def _fmt(v: Any) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, float):
-        return "%g" % v
+        return "%.15g" % v
     if isinstance(v, list):
         return ", ".join(_fmt(x) for x in v)
     if isinstance(v, dict):
@@ -268,7 +286,7 @@ def facts_line(rec: dict) -> str:
         if k == "bits" and isinstance(v, list) and len(v) == 2:
             parts.append(f"bits={v[0]}:{v[1]}")
             continue
-        parts.append(f"{k}={_fmt(v)}")
+        parts.append(f"{k}={printed(rec, k) if k in VALUE_KEYS and printed(rec, k) else _fmt(v)}")
     if rec.get("src") in ("figure", "equation"):
         parts.append(f"src={rec['src']}")
     if rec.get("note"):

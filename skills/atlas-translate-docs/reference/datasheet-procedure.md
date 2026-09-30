@@ -190,7 +190,9 @@ table: what the header conditions are, and which footnotes change a row's meanin
 You write the prose, headings, `aka:` lines and marker pairs. `doc render` fills every marker pair
 from the records it selects and keeps everything outside byte for byte. Selectors: `kind` (or a bare
 first word), any field (`group=ec,abs`, `id=demo-switch.ec.V*`), exclusion (`id!=...`), pages
-(`p=5-9`). **Never write a table of records by hand**: it would drift from the records, and the row
+(`p=5-9`: any cited page), and the first cited page only (`p0=5-9`: a row's own page, when its later
+cites are a footnote page shared with other tables). Values render as the quote prints them
+(`1.50` stays `1.50`), so quote the numbers line. **Never write a table of records by hand**: it would drift from the records, and the row
 rules (one condition per row, no merged cells, symbol and unit on every row, footnotes in a Note
 column and listed under the table) are the renderer's job.
 
@@ -226,7 +228,7 @@ fails. What the letters mean and what to do:
 | O | min > typ or typ > max | usually a column slip |
 | R | a ref resolves to nothing, or an id repeats | fix the id |
 | X | an invariant did not give its `expect` | a wrong value, or a wrong invariant |
-| G | register structure, or your twin disagrees with the parse | re-read the bit table; if the document disagrees with itself, there is a `conflict` record, so write a quirk |
+| G | register structure, or your twin disagrees with the parse | re-read the bit table; if the document disagrees with itself, there is a `conflict` record, so write a quirk. Field names match without case or separators (`Filt Empty` = `FILT_EMPTY`); what the parser could not read (no access column, no reset in a heading) is not compared; `rclr` refines a printed `R`. A register whose printed reset disagrees with its fields' resets, with a `conflict` record naming it, is a warning |
 | M | a number in card.md or s/ is on no cited page | cite the right page, or tag it `(derived)`, `(figure)`, `(inference)` |
 | S | glued, packed or fused cells in a markdown table | a table written by hand: replace it with a marker |
 | T | card or section over budget | cut or split |

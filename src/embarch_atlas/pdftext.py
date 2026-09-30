@@ -848,12 +848,13 @@ def _page_runs(ps: list[int]) -> str:
     return ", ".join(runs)
 
 
-def tier2_map(docdir: Path, sections: list[dict]) -> dict[str, str]:
-    """section id -> tier-2 file. A section's own claim wins; a section with none takes its nearest
-    claimed ancestor's file. The claims on a section, strongest first:
+def tier2_files(docdir: Path, sections: list[dict]) -> dict[str, list[str]]:
+    """section id -> the tier-2 files that hold it, strongest claim first. A section's own claims win;
+    a section with none takes its nearest claimed ancestor's files. The claims on a section:
 
     1. a file named after it, `s/<secid>.md`;
-    2. an `<!-- atlas:covers a b c -->` line naming it (the first such file in name order).
+    2. every `<!-- atlas:covers a b c -->` line naming it, in file-name order (a section split over
+       `s/<secid>.md`, `-part2`, `-part3` lists all of them).
 
     So an explicit cover of a subsection always beats a file named after a parent section (which
     reaches the subsection only by descent), and a cover naming a subsection beats one naming its
@@ -864,13 +865,13 @@ def tier2_map(docdir: Path, sections: list[dict]) -> dict[str, str]:
     ids = {s["id"] for s in sections}
     parent = {s["id"]: s.get("parent") for s in sections}
     files = sorted(sdir.glob("*.md"))
-    claim: dict[str, str] = {f.stem: f"s/{f.name}" for f in files if f.stem in ids}
+    claim: dict[str, list[str]] = {f.stem: [f"s/{f.name}"] for f in files if f.stem in ids}
     for f in files:
         for m in re.finditer(r"<!--\s*atlas:covers\s+([^>]*?)\s*-->", f.read_text(encoding="utf-8")):
             for sid in m.group(1).replace(",", " ").split():
-                if sid in ids:
-                    claim.setdefault(sid, f"s/{f.name}")
-    out: dict[str, str] = {}
+                if sid in ids and f"s/{f.name}" not in claim.setdefault(sid, []):
+                    claim[sid].append(f"s/{f.name}")
+    out: dict[str, list[str]] = {}
     for s in sections:
         sid, seen = s["id"], set()
         while sid is not None and sid not in claim and sid not in seen:
@@ -881,13 +882,18 @@ def tier2_map(docdir: Path, sections: list[dict]) -> dict[str, str]:
     return out
 
 
+def tier2_map(docdir: Path, sections: list[dict]) -> dict[str, str]:
+    """section id -> its strongest tier-2 file (`tier2_files`, first entry)."""
+    return {k: v[0] for k, v in tier2_files(docdir, sections).items()}
+
+
 def write_toc(docdir: Path) -> None:
     """toc.md from toc.json + pages/pages.json + the s/ files present now."""
     docdir = Path(docdir)
     meta = common.read_json(docdir / "doc.json")
     toc = common.read_json(docdir / "toc.json")
     pinfo = common.read_json(docdir / "pages" / "pages.json")
-    t2 = tier2_map(docdir, toc["sections"])
+    t2 = {k: ", ".join(v) for k, v in tier2_files(docdir, toc["sections"]).items()}
     total = sum(p.get("tokens") or 0 for p in pinfo)
     lines = [f"# {meta['doc_id']}: outline", "",
              f"{meta['file']}, {meta['pages']} pages, {total} tokens (o200k) of text layer. "

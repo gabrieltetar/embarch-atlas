@@ -751,6 +751,26 @@ def _structure(regs: list[dict], fields_by_reg: dict[str, list[dict]]) -> list[d
     return issues
 
 
+def field_key(name: str | None) -> str:
+    """A field name as G compares it: case and separators dropped, so a parser's `FILT_EMPTY` or
+    `Filt_Empty` and the printed `Filt Empty` are one field. Different words stay different."""
+    return re.sub(r"[^0-9a-z]", "", (name or "").casefold())
+
+
+# G compares an attribute only where the parser read one: a template with no access column or a
+# heading with no reset does not contradict the LLM's value. An LLM `reset: null` is a claim (the
+# document defines none) and is compared; an access left out is not. The access a parser reads from a
+# printed type column, and the SystemRDL refinements an LLM may add from the description (`R` plus
+# "cleared when read" is rclr), do not disagree.
+ACCESS_REFINES = {"ro": {"rclr"}, "rw": {"woclr", "w1s"}}
+
+
+def access_agrees(det: str | None, llm: str | None) -> bool:
+    if det is None or llm is None or det == llm:
+        return True
+    return llm in ACCESS_REFINES.get(det, set())
+
+
 def _variant_reset(rec: dict) -> bool:
     """`reset: null` with a `note`: the reset depends on a variant or a strap, and the note gives the
     values (schema, register.reset). A parser that read one of them is not contradicted."""
@@ -800,25 +820,28 @@ def check_registers(recs: list[dict]) -> dict:
                 continue
             dv = R.to_int(d.get(k)) if k != "width" else d.get(k)
             lv = R.to_int(l.get(k)) if k != "width" else l.get(k)
-            if dv != lv:
+            if dv is not None and dv != lv:          # a value the parser could not read is not compared
                 diffs.append(f"{k}: llm {l.get(k)} det {d.get(k)}")
-        dm = {f["name"]: f for f in merge_reserved(det_fields.get(rid, []))}
-        lm = {f["name"]: f for f in merge_reserved(llm_fields.get(rid, []))}
+        dm = {field_key(f["name"]): f for f in merge_reserved(det_fields.get(rid, []))}
+        lm = {field_key(f["name"]): f for f in merge_reserved(llm_fields.get(rid, []))}
         field_verdict: dict[str, str] = {}
-        for name in sorted(set(dm) | set(lm)):
-            df, lf = dm.get(name), lm.get(name)
+        for key in sorted(set(dm) | set(lm)):
+            df, lf = dm.get(key), lm.get(key)
             if df is None or lf is None:
+                name = (lf or df)["name"]
                 msg = f"field {name} only in {'llm' if df is None else 'deterministic'}"
                 diffs.append(msg)
                 for i in (lf or df)["_ids"]:
                     field_verdict[i] = f"disagree: {msg}"
                 continue
+            name = lf["name"]
             fd = []
             if df["bits"] != lf["bits"]:
                 fd.append(f"bits llm {lf['bits']} det {df['bits']}")
-            if df.get("access") != lf.get("access"):
+            if not access_agrees(df.get("access"), lf.get("access")):
                 fd.append(f"access llm {lf.get('access')} det {df.get('access')}")
-            if R.to_int(df.get("reset")) != R.to_int(lf.get("reset")) and not _variant_reset(lf):
+            if df.get("reset") is not None and R.to_int(df.get("reset")) != R.to_int(lf.get("reset")) \
+                    and not _variant_reset(lf):
                 fd.append(f"reset llm {lf.get('reset')} det {df.get('reset')}")
             v = "agree" if not fd else "disagree: " + "; ".join(fd)
             diffs += [f"{name}: {x}" for x in fd]
@@ -1165,7 +1188,13 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     greg = check_registers(recs)
     verdict = greg.get("verdict", {})
     struct_issue: dict[tuple[str, str], list[str]] = {}
+    documented = {ref: r["id"] for r in recs if r.get("kind") == "conflict" for ref in r.get("refs") or []}
+    documented_resets: list[str] = []
     for x in greg.get("structure", []):
+        if x["issue"].startswith("field resets compose") and x["id"] in documented:
+            # the document disagrees with itself and a conflict record keeps both sides (principle 4)
+            documented_resets.append(f"{x['id']} ({x['source']}, {documented[x['id']]})")
+            continue
         struct_issue.setdefault((x["id"], x["source"]), []).append(f"G: {x['issue']} ({x['source']})")
     checks = [r for r in recs if r.get("kind") == "check"]
     by_id: dict[str, dict] = {}
@@ -1262,6 +1291,9 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     failing = summary["failed"] or summary["M"]["unanchored"] or S or summary["T_over"]
     summary["exit"] = 1 if failing else 0
     warnings = []
+    if documented_resets:
+        warnings.append(f"G: {len(documented_resets)} register resets disagree with their fields' resets inside the "
+                        f"document, kept as conflict records: {', '.join(documented_resets[:6])}")
     for st, what in K_WARN.items():
         ids = [x["id"] for x in results if x["checks"].get("K") == f"not checkable: {st}"]
         if ids:

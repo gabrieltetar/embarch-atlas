@@ -8,7 +8,8 @@ The LLM writes `s/<secid>.md`: prose, headings, and marker pairs where a table g
 Everything between a pair is replaced by the table of the records the selector matches; everything
 outside is kept byte for byte. Selector keys: `kind` (required, or the first bare word), any record
 field (`group=abs,esd`, `id=demo-switch.ec.V*`, globs allowed; `key!=a,b` excludes; `pin=` selects
-an empty value, the fixed-address strap's `pin: ""`), and `p=5-9,12` (any cited page in range).
+an empty value, the fixed-address strap's `pin: ""`), `p=5-9,12` (any cited page in range) and
+`p0=5-9` (the first cited page only: a row's own page, when later cites are a shared footnote page).
 An optional `<!-- atlas:covers 6.2 6.3 -->` line says which outline sections the file also covers
 (toc.md's tier-2 column).
 
@@ -45,10 +46,16 @@ def fmt(v: Any) -> str:
     if isinstance(v, bool):
         return "yes" if v else "no"
     if isinstance(v, float):
-        return "%g" % v
+        return "%.15g" % v
     if isinstance(v, list):
         return ", ".join(fmt(x) for x in v)
     return str(v).replace("|", "\\|").replace("\n", " ")
+
+
+def num(rec: dict, key: str) -> str:
+    """A value as the page prints it (`records.printed`), else `fmt`."""
+    s = R.printed(rec, key)
+    return s if s is not None else fmt(rec.get(key))
 
 
 def cite_cell(rec: dict) -> str:
@@ -139,8 +146,8 @@ def t_limit(recs: list[dict], ctx: dict) -> list[str]:
         + (["Edge"] if timing else []) + ["Note", "p"]
     rows = []
     for r in recs:
-        row = [fmt(r.get("sym")), fmt(r.get("param")), fmt(r.get("cond")), fmt(r.get("min"))] \
-            + ([fmt(r.get("nom"))] if nom else []) + [fmt(r.get("typ")), fmt(r.get("max")), fmt(r.get("unit"))] \
+        row = [fmt(r.get("sym")), fmt(r.get("param")), fmt(r.get("cond")), num(r, "min")] \
+            + ([num(r, "nom")] if nom else []) + [num(r, "typ"), num(r, "max"), fmt(r.get("unit"))] \
             + ([fmt(r.get("edge"))] if timing else []) + [note_cell(r), cite_cell(r)]
         rows.append(row)
     out = _table(head, rows)
@@ -388,6 +395,8 @@ def select(recs: list[dict], sel: dict[str, list[str]]) -> list[dict]:
                 ok = r.get("kind") in vs
             elif k == "p":
                 ok = _page_ok(r, vs)
+            elif k == "p0":
+                ok = _page_ok({"p": R.pages(r)[:1]}, vs)
             elif k.startswith("!"):
                 v = r.get(k[1:])
                 ok = v is None or not any(fnmatch.fnmatchcase(fmt(v), pat) for pat in vs)
