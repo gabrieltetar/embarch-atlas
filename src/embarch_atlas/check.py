@@ -888,6 +888,7 @@ _STRIP_BEFORE_NUMBERS = NOT_CLAIMS + [
     SECTION_NUM,
     # hex and binary; an `h`/`b` suffix only on a whole token, so the fraction of 102.3984h stays
     re.compile(r"\b0x[0-9a-f]+\b|\b0b[01]+\b|(?<![\w.])[01]+b\b|(?<![\w.])(?=[0-9a-f]*\d)[0-9a-f]+h\b", re.I),
+    re.compile(r"(?<![\w.])0[01]{7,}(?![\w.])"),         # a bare bit string (a reset printed as 0000000000010000)
     re.compile(r"\b[A-Za-z_]+[A-Za-z_./]*\d[\w./]*(?:-\d[\w./]*)*"),            # identifiers: EN1, I2C, A5
     re.compile(r"\[\s*\d+\s*:\s*\d+\s*\]|\[\s*\d+\s*\]"),                       # bit ranges [7:5], [0]
 ]

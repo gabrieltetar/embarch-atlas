@@ -562,3 +562,8 @@ def test_g_reset_composition_the_document_contradicts_is_a_warning(doc):
     rep = check.run_check(docdir, render=False, use_pdf=False)
     assert not any("field resets compose" in i for i in result(rep, "demo-conv.reg.CFG")["issues"])
     assert any(w.startswith("G: 1 register resets disagree") for w in rep["warnings"])
+
+
+def test_md_bare_bit_strings_are_not_numbers():
+    assert check._md_numbers("field resets compose to 0000000000010000, the heading says 00000000") == []
+    assert check._md_numbers("the count is 10000100 cycles") == [10000100.0]       # no leading 0: a number
