@@ -218,7 +218,7 @@ def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
             mcu_docs.add(d)
     used_periph = {n.upper() for n, p in (in_use.get("peripherals") or {}).items()
                    if p.get("instantiated") or p.get("touched_by_code")} | set(CORE)
-    queue, stats = [], {"used_records": 0, "needs_look": 0, "frozen": 0, "by_reason": {}, "docs": {}}
+    queue, stats = [], {"used_records": 0, "needs_look": 0, "frozen": 0, "by_reason": {}, "docs": {}, "frozen_keys": []}
     for d, v in sorted(docs.docs.items()):
         is_mcu = d in mcu_docs
         if d not in part_docs and not is_mcu:
@@ -243,6 +243,7 @@ def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
                 key = content_key(r, v["dir"])
                 if cache_path(ad, key).is_file():
                     stats["frozen"] += 1
+                    stats["frozen_keys"].append((r.get("id"), key))
                     continue
                 for w in why:
                     stats["by_reason"][w] = stats["by_reason"].get(w, 0) + 1
@@ -263,6 +264,7 @@ def cmd_queue(args) -> int:
     atlas = resolve_atlas(ad, args.atlas)
     q, st = build_queue(ad, atlas)
     write_jsonl(atlas / "second_look_queue.jsonl", q)
+    carried = carry_frozen(ad, atlas, st["frozen_keys"])
     if getattr(args, "top", None):
         bs = batches(select(q, getattr(args, "why", None), getattr(args, "doc", None)), args.top)
         write_json(atlas / "second_look_batches.json", bs)
@@ -271,12 +273,39 @@ def cmd_queue(args) -> int:
     for it in q:
         pages.setdefault(it["doc"], set()).update(it["p"])
     print(f"{st['atlas']}: {st['used_records']} records used, {st['needs_look']} need a second look, "
-          f"{st['frozen']} reuse a frozen verdict, {st['queued']} queued -> {atlas / 'second_look_queue.jsonl'}")
+          f"{st['frozen']} reuse a frozen verdict ({carried} carried into second_look.jsonl), "
+          f"{st['queued']} queued -> {atlas / 'second_look_queue.jsonl'}")
     for w, n in sorted(st["by_reason"].items(), key=lambda x: -x[1]):
         print(f"  {n:4} {w}")
     for d, ps in sorted(pages.items()):
         print(f"  {d}: pages {','.join(str(p) for p in sorted(ps))}")
     return 0
+
+
+def carry_frozen(ad: Path, atlas: Path, frozen: list[tuple]) -> int:
+    """Append to this atlas's second_look.jsonl the frozen verdicts its records reuse.
+
+    A frozen verdict is keyed by the record's content, so it holds for every atlas that uses the
+    same record; without this a new atlas would skip them in the queue and then report the second
+    look as never run. Each carried line is the cache entry as recorded, less its cache version."""
+    out_f = atlas / "second_look.jsonl"
+    have = {(e.get("id"), e.get("key")) for e in read_jsonl(out_f)} if out_f.is_file() else set()
+    rows = []
+    for rid, key in frozen:
+        if (rid, key) in have:
+            continue
+        try:
+            e = read_json(cache_path(ad, key))
+        except (OSError, ValueError):
+            continue
+        e.pop("version", None)
+        rows.append(e)
+        have.add((rid, key))
+    if rows:
+        with open(out_f, "a", encoding="utf-8") as f:
+            for e in rows:
+                f.write(json.dumps(e, sort_keys=True, ensure_ascii=False) + "\n")
+    return len(rows)
 
 
 # ---------------------------------------------------------------- record

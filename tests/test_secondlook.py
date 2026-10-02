@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -100,6 +101,26 @@ def test_record_validates_appends_and_freezes(tmp_path):
     q3, _ = sl.build_queue(ad, atlas)
     assert "sns701.ec.VS" in {x["id"] for x in q3}
     json.dumps(q3)
+
+
+def test_a_new_atlas_carries_the_frozen_verdicts_it_reuses(tmp_path):
+    ad, atlas = _project(tmp_path)
+    q, _ = sl.build_queue(ad, atlas)
+    write_jsonl(atlas / "second_look_queue.jsonl", q)
+    good = tmp_path / "good.jsonl"
+    write_jsonl(good, [{"id": "sns701.ec.VS", "verdict": "confirmed", "value": [2.7, 5.5], "unit": "V",
+                        "q": "VS Supply voltage 2.7 5.5 V", "p": 5, "reader": "second-look"}])
+    sl.record(ad, atlas, good)
+    # the same records, another atlas: nothing to read again, and the verdict is there
+    other = atlas.parent / "demo@00000000beef"
+    shutil.copytree(atlas, other)
+    (other / "second_look.jsonl").unlink()
+    _q2, st = sl.build_queue(ad, other)
+    assert st["frozen"] == 1
+    assert sl.carry_frozen(ad, other, st["frozen_keys"]) == 1
+    row = next(read_jsonl(other / "second_look.jsonl"))
+    assert row["id"] == "sns701.ec.VS" and row["verdict"] == "confirmed" and row["kind"] != "second-look" and "version" not in row
+    assert sl.carry_frozen(ad, other, st["frozen_keys"]) == 0          # carried once
 
 
 def test_cli_queue_and_record(tmp_path, capsys):
