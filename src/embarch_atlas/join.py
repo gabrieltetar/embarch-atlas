@@ -1033,7 +1033,7 @@ def load_boards(ad: Path, labels: list[str], boards_dir: Path | None) -> dict[st
 def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None = None,
         mcu_part: str | None = None, mcu_ref: str | None = None, log=print,
         straps_path: Path | None = None, bindings_path: Path | None = None) -> dict:
-    from embarch_atlas import dt as dtmod, mapgen, mismatch
+    from embarch_atlas import dt as dtmod, graph, mapgen, mismatch
     stamp = read_json(atlas / "atlas.json")
     if (atlas / "build" / "edt.pickle").is_file():
         dt, in_use = dtmod.run(atlas, ad, svd)
@@ -1042,6 +1042,42 @@ def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None =
         in_use = read_json(atlas / "in_use.json") if (atlas / "in_use.json").is_file() else {"peripherals": {}}
     else:
         raise SystemExit(f"{atlas}: no build/edt.pickle and no dt.json (run `build` first)")
+    J, root, sysj = load_join(ad, atlas, stamp, dt, in_use, boards_dir, mcu_part, mcu_ref, straps_path,
+                              bindings_path, log)
+    boards, interfaces = J.boards, J.interfaces
+    rows = build_pin_map(J)
+    i2c = i2c_join(J, rows) if J.mcu else {"buses": [], "identity": []}
+    values = value_checks(J, i2c["identity"])
+    comments = comment_checks(J, stamp, rows) if J.mcu else []
+    mpn = J.boards[J.mcu[0]].mpn(J.mcu[1]) if J.mcu else None
+    io = [r for r in rows if r["port"]]
+    counts = {
+        "package_pins": len(rows), "io_pins": len(io), "dt_pins": len({r["port"] for r in io if r["dt"]}),
+        "dt_pins_total": len({u["pin"] for u in dt.get("uses", []) if u.get("pin") and not u.get("soc_defined")}),
+        "reach": sum(1 for r in io if r["reach"]), "cross": sum(1 for r in io if r["cross"]),
+        "pins_with_net": sum(1 for r in rows if r["net"]),
+    }
+    pins = {"atlas": stamp["id"], "mcu": {"key": f"{J.mcu[0]}:{J.mcu[1]}" if J.mcu else None, "mpn": mpn},
+            "interfaces": [{k: v for k, v in i.items() if k != "map"} for i in interfaces],
+            "counts": counts, "pins": rows, "i2c": i2c, "values": values, "comments": comments,
+            "part_docs": {f"{b}:{r}": d for (b, r), d in sorted(J.part_docs.items())}}
+    write_json(atlas / "pins.json", pins)
+    write_text(atlas / "pins.md", render_pins_md(stamp, J.mcu, mpn, rows, interfaces, i2c, values))
+    write_text(atlas / "pin_slice.txt", render_slice(stamp, rows))
+    snapshot_inputs(atlas, root, boards, J.docs, sysj)
+    report = mismatch.run(J, stamp, pins)
+    mp = mapgen.run(ad, atlas, J, stamp, pins, report)
+    g = graph.run(ad, atlas, J, stamp, pins, report, log=log)
+    log(f"{stamp['id']}: {counts['package_pins']} package pins, {counts['dt_pins']} MCU pins in DT, "
+        f"{counts['reach']}/{counts['io_pins']} I/O pins reach a part or connector, {counts['cross']} cross boards; "
+        f"{report['summary']}; MAP {mp['tokens']} tokens; graph {g['counts']['nodes']} nodes")
+    return pins
+
+
+def load_join(ad: Path, atlas: Path, stamp: dict, dt: dict, in_use: dict, boards_dir: Path | None = None,
+              mcu_part: str | None = None, mcu_ref: str | None = None, straps_path: Path | None = None,
+              bindings_path: Path | None = None, log=print) -> tuple[Join, Path, Path]:
+    """The Join over this atlas's inputs: boards, interfaces, bindings, straps, docs. Also (boards root, system.json)."""
     root = boards_dir or ad / "boards"
     boards = load_boards(ad, list(stamp.get("schematic_boards") or []), boards_dir)
     if not boards:
@@ -1062,32 +1098,7 @@ def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None =
     mcu = stamp.get("mcu") or {}
     J = Join(ad, atlas, boards, dt, in_use, docs, interfaces, bindings, straps,
              mcu_part or mcu.get("part"), mcu_ref or mcu.get("ref"))
-    rows = build_pin_map(J)
-    i2c = i2c_join(J, rows) if J.mcu else {"buses": [], "identity": []}
-    values = value_checks(J, i2c["identity"])
-    comments = comment_checks(J, stamp, rows) if J.mcu else []
-    mpn = J.boards[J.mcu[0]].mpn(J.mcu[1]) if J.mcu else None
-    io = [r for r in rows if r["port"]]
-    counts = {
-        "package_pins": len(rows), "io_pins": len(io), "dt_pins": len({r["port"] for r in io if r["dt"]}),
-        "dt_pins_total": len({u["pin"] for u in dt.get("uses", []) if u.get("pin") and not u.get("soc_defined")}),
-        "reach": sum(1 for r in io if r["reach"]), "cross": sum(1 for r in io if r["cross"]),
-        "pins_with_net": sum(1 for r in rows if r["net"]),
-    }
-    pins = {"atlas": stamp["id"], "mcu": {"key": f"{J.mcu[0]}:{J.mcu[1]}" if J.mcu else None, "mpn": mpn},
-            "interfaces": [{k: v for k, v in i.items() if k != "map"} for i in interfaces],
-            "counts": counts, "pins": rows, "i2c": i2c, "values": values, "comments": comments,
-            "part_docs": {f"{b}:{r}": d for (b, r), d in sorted(J.part_docs.items())}}
-    write_json(atlas / "pins.json", pins)
-    write_text(atlas / "pins.md", render_pins_md(stamp, J.mcu, mpn, rows, interfaces, i2c, values))
-    write_text(atlas / "pin_slice.txt", render_slice(stamp, rows))
-    snapshot_inputs(atlas, root, boards, docs, sysj)
-    report = mismatch.run(J, stamp, pins)
-    mp = mapgen.run(ad, atlas, J, stamp, pins, report)
-    log(f"{stamp['id']}: {counts['package_pins']} package pins, {counts['dt_pins']} MCU pins in DT, "
-        f"{counts['reach']}/{counts['io_pins']} I/O pins reach a part or connector, {counts['cross']} cross boards; "
-        f"{report['summary']}; MAP {mp['tokens']} tokens")
-    return pins
+    return J, root, sysj
 
 
 def snapshot_inputs(atlas: Path, root: Path, boards: dict[str, Board], docs: Docs, sysj: Path) -> None:

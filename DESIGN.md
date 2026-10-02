@@ -102,6 +102,7 @@ atlases/<target>@<commit12>/
   limits.json                   DT limit properties (SI) vs the part's datasheet limits
   second_look_queue.jsonl       facts this atlas uses that still need a second look
   second_look.jsonl             second-look verdicts
+  graph.json                    the whole atlas as one graph, for the embarch-ui Atlas tab (below)
   MAP.md                        tier 0, <= 5K tokens, byte-stable
 current.json                    which atlas matches the checkout (target, commit)
 MAP.md                          copy of the current atlas's MAP.md: the one stable path the session imports
@@ -235,6 +236,62 @@ same functions: `embarch-atlas q <verb>` and `embarch-atlas mcp` (stdio, `mcp>=2
 optional extra). Files stay the primary door: an agent's own `Read`/`Grep` reach
 them for free; the server carries what files cannot.
 
+## The whole-atlas graph (`graph.json`)
+
+The query surface answers one question at a time; a map needs everything at once.
+`graph.py` writes one file per atlas, read by embarch-ui's Atlas tab and by nothing
+that decides anything. It holds no new evidence: every status and citation comes
+from a file `join` or `secondlook` wrote.
+
+- **Layers** (served as vocabulary): external, app, middleware, drivers, SoC
+  peripherals + MCU pins, components + signals. The devicetree is not a layer; a
+  DT node is the label on an edge.
+- **Code model, from the build's ELF.** `nm -l` places each function in a file, and
+  the file names its module: `apps/<app>/**/<file>` (app), `lib/<name>` (middleware),
+  the driver's directory (drivers, named after the compatible it implements), the
+  in-tree Zephyr driver file or subsystem (shown only when firmware reaches it or the
+  DT instantiates it). `objdump -d` gives direct calls, by address, so two static
+  functions sharing a name stay apart; a literal-pool word that points at
+  `__device_dts_ord_<N>` is a device use, and one that points at a function is a
+  callback registration (a dependency). Kernel, arch and HAL code are not modules.
+- **Edges:** `call`, `device` (labelled with the DT node), `bind` (driver to part,
+  from the I2C identity join, else from a node whose gpio pins all reach one part),
+  `bus`, `periph`, `gpio` (the property and its flags), `pinctrl` (the function),
+  `net` (MCU pin to far-end part, with the net), `pad` (MCU pin to its package),
+  `mate` (board-to-board), `ext` (external system to its connector).
+- **Nets** per board, with `rail`/`ground`, `mates` across a declared interface,
+  and `fw` (the MCU port and the DT uses) wherever the MCU drives the net directly,
+  through a series part or across a connector.
+- **Symbols.** Every part gets a generic shape by refdes prefix and BOM text
+  (resistor, capacitor, inductor, ferrite, diode, LED, TVS, fuse, crystal, switch,
+  net tie, test point, transistor, IC, connector) and pin offsets: two-pin parts
+  upright with ground down and the anode up; a box puts supplies on top, grounds at
+  the bottom, an MCU's ports split by letter, otherwise datasheet direction (`out`
+  right) or pin order. Same-name same-net pins merge into one stub. A three-pin
+  transistor without pin names is a numbered box, never a guessed G/D/S. The part's
+  label position and drawn extent are computed here, so the packer and the browser
+  agree.
+- **Clusters** are feature areas: deterministic Louvain over modules, MCU pins,
+  peripherals and anchor parts (ICs, connectors, transistors), weighted by edge kind,
+  with signal nets shared by at most six anchors linking parts. Hubs (the MCU,
+  mated connectors, in-tree Zephyr modules, peripherals) go to their strongest
+  neighbour's cluster; the MCU and mated connectors get the first column. Small parts
+  are satellites of one anchor: the one they share a signal net with, else the nearest
+  on the same schematic page (`geometry.json`). A cluster is labelled after its
+  drivers, else its modules, else its ICs' part numbers: a fact about the graph, not a
+  name for a feature.
+- **Layout**, keyed by native IDs, so a part keeps its place across rebuilds: one
+  column per cluster on every layer; on the components layer one band per board, each
+  anchor with its satellites under it, shelf-packed, the plane sized about 2:1.
+- **Problems:** `check`-severity candidates (`M<n>`) and, per document, facts whose
+  second look ended `unresolved` or `conflict` (`U<n>`), each with the entities it
+  marks and one row per evidence line: `{src, says, cite}`. A cite is
+  `{t: "code", root, path, line}` or `{t: "doc", doc, p, sec, file, card, box}`; a
+  schematic page is the doc `sch:<board>`, its box the part's pin extent in PDF
+  points. `info` candidates are listed by class, never as problems.
+- **Docs:** every translated document and board schematic with its PDF path, so a
+  reader can render a cited page without parsing anything.
+
 ## Schematic ingest ladder
 
 First match wins; each rung cross-checks the one above.
@@ -328,7 +385,8 @@ An atlas id is `<target>@<commit12>`.
 | `mcu vote --svd-doc <id> --rm-doc <id> [--header <h>] [--periph P]` | `vote` | SVD vs header vs RM: `conflict` / `quirk` (correct omission) / `rule` records under the RM doc |
 | `mcu rm-outline <rm>` / `rm-sections <atlas>` / `rm-text <rm> <item>` / `rm-check <rm> [--chapter C]` / `rm-freeze <rm> [--item I \| --sections S \| --retire E]` | `rm` | outline; the worklist for peripherals in use; one work item's text with `[p.N]` markers; verify distilled RM files; freeze them in `cache/llm/` |
 | `build <target> [<commit>]` | `build` | worktree, west build, artifacts, stamp |
-| `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md |
+| `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md, graph.json |
+| `graph <atlas>` | `graph` | graph.json again from what `join` wrote (also run by `join`) |
 | `second-look queue <atlas> [--top N]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page; the blind reader's prompt; the deterministic verdict; record and freeze verdicts |
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name; abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
@@ -354,6 +412,6 @@ newer freeze of the same files marks the older entry `superseded` (kept, never d
 
 ## Not yet built (deliberately)
 
-The embarch-ui view, a native EDA adapter, geometry as a fallback (without anchor
+A native EDA adapter, geometry as a fallback (without anchor
 words) and the vision rung of the schematic ladder, `inventory/answers.toml`, PRD → code
 trace links.

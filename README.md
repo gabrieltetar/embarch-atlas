@@ -24,6 +24,9 @@ For one board and one firmware commit, an atlas under `<fw>/embarch/atlas/` (git
   the join depends on.
 - **Queries** over all of it: `embarch-atlas q ...` and the same seven lookups as an MCP
   server.
+- **A map for humans** (`graph.json`, drawn by embarch-ui's Atlas tab): app, middleware,
+  drivers, SoC pins and every part on every board as a generic schematic symbol, each pin
+  labelled with its net and, where the MCU drives it, the firmware's name for it.
 
 Fully local. **The tool never fetches a document**: a missing one becomes a question for
 the engineer. The only LLM is the Claude Code session running the skills.
