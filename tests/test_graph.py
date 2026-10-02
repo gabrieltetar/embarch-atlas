@@ -131,6 +131,10 @@ def test_symbol_kinds():
     assert graph.symbol_kind("U1", c3, None) == "ic"
     assert graph.symbol_kind("J2", c2, None) == "connector"
     assert graph.symbol_kind("TP7", {"pins": {"1": {}}}, None) == "testpoint"
+    # a resistor with one end unconnected is still a resistor, its open end drawn without a stub
+    assert graph.symbol_kind("R9", {"pins": {"1": {}}}, None) == "resistor"
+    one = graph.layout_symbol("resistor", _pins((1, None, "M:X", None)), set())
+    assert one["w"] <= 12 and [p["s"] for p in one["pins"]] == ["t"]
 
 
 def test_two_pin_parts_stand_with_ground_down_and_anode_up():

@@ -310,7 +310,7 @@ def symbol_kind(ref: str, comp: dict, bom: dict | None) -> str:
         return "nettie"
     if prefix in ("J", "P", "CN", "CON", "X") and not (prefix == "X" and "CRYSTAL" in desc):
         return "connector"
-    if n == 2:
+    if n in (1, 2):                    # a one-pin passive is a two-pin part with an end left open
         if prefix == "R":
             return "resistor"
         if prefix == "C":
@@ -377,6 +377,10 @@ def layout_symbol(kind: str, pins: list[dict], ground: set[str]) -> dict:
     if kind == "testpoint":
         p = pins[0] if pins else {"num": "1", "name": None, "net": None}
         return {"w": 8, "h": 8, "pins": [{**p, "nums": [p["num"]], "s": "b", "x": 0, "y": 4 + STUB}]}
+    if len(pins) == 1 and kind not in ("ic", "connector", "transistor"):
+        a = pins[0]
+        return {"w": 10, "h": TWO_PIN_BODY, "pins": [{**a, "nums": [a["num"]], "s": "t", "x": 0,
+                                                     "y": -(TWO_PIN_BODY / 2 + STUB)}]}
     if len(pins) == 2 and kind not in ("ic", "connector", "transistor"):
         a, b = pins
         if kind in ("diode", "led", "tvs"):
