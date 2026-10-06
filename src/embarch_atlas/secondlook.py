@@ -26,6 +26,24 @@ from pathlib import Path
 from embarch_atlas.common import read_json, read_jsonl, write_json, write_jsonl
 
 VERSION = "second-look/1"
+# The key a verdict is frozen under (DESIGN.md "the second look"): what the reader was asked and the
+# compare step checks, per kind, and the text of the cited pages. A field the look does not check
+# (a description, a note, a quote) can change without voiding the verdict, so bumping an atlas
+# re-reads only the facts that really changed. Verdicts frozen under the older whole-record key are
+# still found, and aliased to this one the first time they are.
+CHECKED_VERSION = "second-look-checked/1"
+CHECKED = {
+    "limit": ("param", "sym", "cond", "min", "nom", "typ", "max", "unit"),
+    "timing": ("param", "sym", "cond", "min", "nom", "typ", "max", "unit"),
+    "field": ("reg", "name", "bits", "reset", "access", "enum"),
+    "register": ("name", "addr", "width", "reset", "access"),
+    "pin": ("pin", "name", "dir", "type", "active", "io", "flow"),
+    "strap": ("pin", "condition", "value"),
+    "quirk": ("text",),
+    "rule": ("cond", "text", "steps"),
+    "figure": ("fig", "caption", "what"),
+    "passthrough": ("from_pin", "to_pin", "when"),
+}
 VERDICTS = ("confirmed", "conflict", "unresolved")
 SKIP_PROV = ("deterministic", "deterministic+crosschecked", "engineer-declared", "engineer-confirmed", "measured")
 CORE = ("RCC", "PWR", "EXTI", "GPIO", "DMA", "DMAMUX", "NVIC", "SYSCFG", "FLASH")
@@ -97,7 +115,9 @@ def ask(r: dict) -> str:
         return f"figure {r.get('fig') or ''} ({r.get('caption') or 'no caption'}): what it shows, every value and unit on it".replace("  ", " ")
     if k == "pin":
         io = ", I/O structure as printed (FT, FT_fa, TT_a, RST...)" if r.get("io") else ""
-        return f"pin {r.get('pin')}: name, direction, type (open-drain / push-pull / analog / supply), active level{io}"
+        flow = (", and for a power or supply pin which way power moves through it as the pin table "
+                "states it (source, sink, bidir, sense, local)") if r.get("flow") else ""
+        return f"pin {r.get('pin')}: name, direction, type (open-drain / push-pull / analog / supply), active level{io}{flow}"
     if k == "rule":
         return f"the behaviour rule on this page about: {r.get('cond') or (r.get('text') or '')[:80]}"
     return f"re-read record {r.get('id')}"
@@ -121,6 +141,38 @@ def content_key(r: dict, doc_dir: Path) -> str:
         h.update(f"|p{p}:".encode())
         h.update(hashlib.sha256((t or "").encode()).digest())
     return h.hexdigest()
+
+
+def checked_key(r: dict, doc_dir: Path) -> str:
+    """sha256 over the fields the second look checks for this kind (CHECKED) and the text of the
+    record's pages. A kind with no CHECKED entry falls back to the whole record (content_key)."""
+    fields = CHECKED.get(r.get("kind") or "")
+    if fields is None:
+        return content_key(r, doc_dir)
+    h = hashlib.sha256()
+    h.update(CHECKED_VERSION.encode())
+    h.update(str(r.get("kind")).encode())
+    h.update(json.dumps({f: r[f] for f in fields if f in r}, sort_keys=True, ensure_ascii=False).encode())
+    for p in _pages(r):
+        t = _page_text(doc_dir, p)
+        h.update(f"|p{p}:".encode())
+        h.update(hashlib.sha256((t or "").encode()).digest())
+    return h.hexdigest()
+
+
+def frozen_key(ad: Path, r: dict, doc_dir: Path) -> tuple[str, bool]:
+    """(the key to use, whether a verdict is frozen under it). A verdict frozen under the older
+    whole-record key is copied to the checked key the first time it is found, so it survives a later
+    change to a field the look does not check."""
+    key = checked_key(r, doc_dir)
+    if cache_path(ad, key).is_file():
+        return key, True
+    legacy = content_key(r, doc_dir)
+    if legacy != key and cache_path(ad, legacy).is_file():
+        e = read_json(cache_path(ad, legacy))
+        write_json(cache_path(ad, key), {**e, "key": key, "alias_of": legacy})
+        return key, True
+    return key, False
 
 
 def cache_path(ad: Path, key: str) -> Path:
@@ -240,8 +292,8 @@ def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
                 if not why:
                     continue
                 stats["needs_look"] += 1
-                key = content_key(r, v["dir"])
-                if cache_path(ad, key).is_file():
+                key, frozen = frozen_key(ad, r, v["dir"])
+                if frozen:
                     stats["frozen"] += 1
                     stats["frozen_keys"].append((r.get("id"), key))
                     continue
@@ -391,8 +443,11 @@ Return JSON Lines, one object per item:
 {"id": "<item id>", "reader": "second-look", "found": true|false, "p": <page>,
  "q": "<verbatim text>", "values": {...}, "claim": "supports"|"contradicts"|"not-found"}
 values by kind: limit/timing {"min","typ","max","nom","unit","cond"}; strap {"value","condition"};
-pin {"name","dir","type","active","io"} (dir: in/out/io/supply/ground/nc; type: od, pp, analog, supply,
-or "unstated"; an overlined name gets a -bar suffix); field {"bits":[hi,lo],"reset","access"};
+pin {"name","dir","type","active","io","flow"} (dir: in/out/io/supply/ground/nc; type: od, pp, analog, supply,
+or "unstated"; an overlined name gets a -bar suffix; flow only when asked: source (delivers power to a rail
+other parts use: a regulator or switch output), sink (draws power: a supply or switch input), bidir (either
+way by mode), sense (only measures a rail), local (a node of the part's own: a switching node, a bootstrap,
+an internal regulator output that only takes a bypass capacitor), or "unstated"); field {"bits":[hi,lo],"reset","access"};
 register {"addr","width","reset","access"}; figure {"numbers":[every number on it with its unit]}.
 "claim" is only for quirk and rule items: does the page support or contradict the statement?"""
 
@@ -633,6 +688,13 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
         a, b = str(first.get("active") or "").lower(), str(vals.get("active") or "").lower()
         if a and b and a != b:
             diffs.append(f"active: first {first.get('active')!r} vs second {vals.get('active')!r}")
+        fl = lambda x: {"bidirectional": "bidir", "input": "sink", "output": "source"}.get(
+            str(x or "").strip().lower(), str(x or "").strip().lower())
+        a, b = fl(first.get("flow")), fl(vals.get("flow"))
+        if a and b and b != "unstated" and a != b:
+            diffs.append(f"flow: first {first.get('flow')!r} vs second {vals.get('flow')!r}")
+        elif a and b == "unstated":
+            soft.append(f"flow: first {first.get('flow')!r}, the second reader found it unstated")
         squash = lambda x: re.sub(r"[\s,]+", "", str(x or "")).upper()
         if first.get("io") and vals.get("io") and squash(first["io"]) != squash(vals["io"]):
             diffs.append(f"io: first {first['io']!r} vs second {vals['io']!r}")

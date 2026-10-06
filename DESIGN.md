@@ -415,6 +415,7 @@ An atlas id is `<target>@<commit12>`.
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name; abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
+| `update <target> [commit]` | `update` | bump: stop if documents or schematics changed, build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts; the previous atlas's backlog is counted), the diff written into the new atlas |
 | `q <lookup>` | `query` | the twelve lookups (same answers as the MCP tools) |
 | `mcp` | `mcp_server` | the twelve lookups as an MCP server over stdio |
 
@@ -430,7 +431,11 @@ An atlas id is `<target>@<commit12>`.
 RM worklist units are keyed by section id + page-text hashes + procedure version;
 the model goes into the cache entry, so regrouping work items never invalidates
 frozen output. Second-look verdicts are frozen as `cache/llm/sl-<key>.json` and
-reused by every later atlas whose fact has the same content hash. When several entries share a
+reused by every later atlas whose fact has the same key: a hash over **the fields the second look
+checks for that kind** (`secondlook.CHECKED`: a pin's number, name, direction, type, active level,
+I/O and power flow; a limit's symbol, condition, values and unit; ...) and the text of the cited
+pages. A field the look does not check (a description, a note, a quote) can change without voiding
+the verdict; a verdict found under the older whole-record key is aliased to this one on first use. When several entries share a
 unit key, the one whose recorded file hashes match the files on disk wins, then the newest; a
 newer freeze of the same files marks the older entry `superseded` (kept, never deleted).
 

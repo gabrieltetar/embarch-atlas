@@ -31,6 +31,7 @@ MODULES = [
     "codecheck",
     "secondlook",
     "diff",
+    "update",
     "query",
     "mcp_server",
 ]

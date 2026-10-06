@@ -27,8 +27,13 @@ a = sys.argv[1:]
 top = Path.cwd()
 projects = json.loads(os.environ["FAKE_WEST_PROJECTS"])
 if a[0] == "list":
+    fmt = a[a.index("-f") + 1] if "-f" in a else "{name}"
+    names = [x for i, x in enumerate(a[1:], 1) if x != "-f" and a[i - 1] != "-f"]
     for p in projects:
-        print("\t".join([p["name"], p["path"], "main", "0" * 40, str(top / p["path"])]))
+        if names and p["name"] not in names:
+            continue
+        print(fmt.format(name=p["name"], path=p["path"], revision="main", sha="0" * 40,
+                         abspath=str(top / p["path"]), cloned="cloned"))
 elif a[0] == "config":
     print("zephyr")
 elif a[0] == "build":

@@ -185,20 +185,27 @@ def find_west(cfg: dict) -> str:
 
 
 def west_projects(west: str, topdir: Path) -> list[dict]:
-    """Every active project: name, path, revision, manifest sha, abspath, and the checked-out HEAD."""
-    r = subprocess.run([west, "list", "-f", "{name}\t{path}\t{revision}\t{sha}\t{abspath}"],
-                       cwd=topdir, capture_output=True, text=True)
-    if r.returncode:
-        raise BuildError(f"west list failed: {r.stderr.strip()}")
+    """Every active project: name, path, revision, manifest sha, abspath, and the checked-out HEAD.
+
+    `{sha}` makes `west list` fail outright when any project is not cloned, and a manifest can name
+    a project the build never needs (a tool repo nobody fetched), so the sha is asked for the
+    cloned ones only; an uncloned project is recorded with `cloned: false` and no sha."""
+    def run(fmt: str, *names: str) -> list[list[str]]:
+        r = subprocess.run([west, "list", "-f", fmt, *names], cwd=topdir, capture_output=True, text=True)
+        if r.returncode:
+            raise BuildError(f"west list failed: {r.stderr.strip()}")
+        return [[x.strip() for x in line.split("\t")] for line in r.stdout.splitlines()]
+
+    rows = [f for f in run("{name}\t{path}\t{revision}\t{abspath}\t{cloned}") if len(f) == 5]
+    cloned = [f[0] for f in rows if f[4] == "cloned" or (Path(f[3]) / ".git").exists()]
+    shas = {f[0]: f[1] for f in run("{name}\t{sha}", *cloned) if len(f) == 2} if cloned else {}
     out = []
-    for line in r.stdout.splitlines():
-        f = line.split("\t")
-        if len(f) != 5:
-            continue
-        name, path, rev, sha, absp = (x.strip() for x in f)
-        sha = None if sha in ("N/A", "") else sha
+    for name, path, rev, absp, _ in rows:
+        sha = shas.get(name)
+        sha = None if sha in (None, "N/A", "") else sha
         head = _git(Path(absp), "rev-parse", "HEAD", check=False) if (Path(absp) / ".git").exists() else ""
-        out.append({"name": name, "path": path, "revision": rev, "sha": sha, "abspath": absp, "head": head or None})
+        out.append({"name": name, "path": path, "revision": rev, "sha": sha, "abspath": absp, "head": head or None,
+                    "cloned": name in cloned})
     return out
 
 

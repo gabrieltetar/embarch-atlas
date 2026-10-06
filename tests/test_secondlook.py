@@ -257,3 +257,45 @@ def test_compare_reads_a_one_cell_pair_as_min_and_max():
     assert compare_one(both, {"found": True, "values": {"max": "-5 / 0", "unit": "mA"}})[0] == "confirmed"
     assert compare_one(na, {"found": True, "values": {"max": "-5 / NA(3)", "unit": "mA"}})[0] == "confirmed"
     assert compare_one(both, {"found": True, "values": {"max": "-4 / 0", "unit": "mA"}})[0] == "conflict"
+
+
+def test_a_verdict_survives_a_change_to_a_field_the_look_does_not_check(tmp_path):
+    d = tmp_path / "docs" / "demo@1"
+    (d / "pages").mkdir(parents=True)
+    (d / "pages" / "p005.txt").write_text("VOVP 22 23 25 V\n")
+    r = {"id": "demo.ec.VOVP", "kind": "limit", "doc": "demo@1", "p": 5, "sym": "VOVP", "min": 22, "typ": 23,
+         "max": 25, "unit": "V", "q": "VOVP 22 23 25 V"}
+    k = sl.checked_key(r, d)
+    assert sl.checked_key({**r, "q": "another quote", "note": "x", "desc": "y"}, d) == k
+    assert sl.checked_key({**r, "max": 26}, d) != k
+    (d / "pages" / "p005.txt").write_text("VOVP 22 23 26 V\n")
+    assert sl.checked_key(r, d) != k          # the page itself changed
+
+
+def test_a_verdict_frozen_under_the_whole_record_key_is_found_and_aliased(tmp_path):
+    d = tmp_path / "docs" / "demo@1"
+    (d / "pages").mkdir(parents=True)
+    (d / "pages" / "p003.txt").write_text("3 VIN PWR Input power supply\n")
+    r = {"id": "demo.pin.VIN", "kind": "pin", "doc": "demo@1", "p": 3, "pin": 3, "name": "VIN", "dir": "power",
+         "desc": "input"}
+    legacy = sl.content_key(r, d)
+    write_json(sl.cache_path(tmp_path, legacy), {"id": r["id"], "key": legacy, "verdict": "confirmed"})
+    key, frozen = sl.frozen_key(tmp_path, r, d)
+    assert frozen and key == sl.checked_key(r, d) and key != legacy
+    assert json.loads(sl.cache_path(tmp_path, key).read_text())["alias_of"] == legacy
+    # Now a field the look does not check changes, and the verdict still holds.
+    assert sl.frozen_key(tmp_path, {**r, "desc": "changed"}, d) == (key, True)
+    # A checked field it never saw (flow) is a new fact to look at.
+    assert sl.frozen_key(tmp_path, {**r, "flow": "sink"}, d)[1] is False
+
+
+def test_pin_flow_is_compared():
+    first = {"kind": "pin", "name": "OUT", "dir": "power", "flow": "source"}
+    ok = sl.compare_one(first, {"values": {"name": "OUT", "dir": "supply", "flow": "source"}})
+    assert ok[0] == "confirmed"
+    bad = sl.compare_one(first, {"values": {"name": "OUT", "dir": "supply", "flow": "sink"}})
+    assert bad[0] == "conflict" and "flow" in bad[1][0]
+    vague = sl.compare_one(first, {"values": {"name": "OUT", "dir": "supply", "flow": "unstated"}})
+    assert vague[0] == "unresolved"
+    asked = "which way power moves"
+    assert asked in sl.ask({"kind": "pin", "pin": 2, "flow": "sink"}) and asked not in sl.ask({"kind": "pin", "pin": 2})
