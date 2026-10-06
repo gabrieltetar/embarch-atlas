@@ -203,9 +203,14 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
                     "doc_toc")
     base = None
     if under:
-        base = next((r for r in rows if r["id"] == under or _norm(r["title"]) == _norm(under)), None)
-        if not base:
+        found = _toc_find(rows, under)
+        if not found:
             return _missing(f"section {under!r} in {d.name}", "Call doc_toc without `under` to list the top levels.")
+        if len(found) > 1:
+            listed = "\n".join(f"{r['id']} | {r['title']} | p{r['start']}" for r in found)
+            return _cap(_header(f"{d.name} toc", extra=f"under={under!r} matches={len(found)}")
+                        + f"{len(found)} sections match {under!r}; pass one id as `under`:\n{listed}\n", "doc_toc")
+        base = found[0]
     files = {p.stem for p in (d / "s").glob("*.md")} if (d / "s").is_dir() else set()
     toc = _json(d / "toc.json")
     t2 = tier2_files(d, toc["sections"]) if toc and toc.get("sections") else {}
@@ -227,6 +232,23 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
             out.append(f"{'  ' * (r['level'] - lo)}{r['id']} | {r['title']} | {pages} | {r['tokens']} tok"
                        + (f" | {held}" if held else ""))
     return _cap(_header(f"{d.name} toc" + (f" under {base['id']}" if base else "")) + "\n".join(out) + "\n", "doc_toc")
+
+
+def _toc_find(rows: list[dict], under: str) -> list[dict]:
+    """An exact id or title first; else the rows whose title contains `under`, cut to the one
+    that holds all the others when there is one (a peripheral's name finds its chapter, not the
+    subsections that repeat it)."""
+    u = _norm(under)
+    exact = next((r for r in rows if r["id"] == under or _norm(r["title"]) == u), None)
+    if exact:
+        return [exact]
+    hits, seen = [], set()
+    for r in rows:
+        if u and u in _norm(r["title"]) and r["id"] not in seen:
+            seen.add(r["id"])
+            hits.append(r)
+    roots = [h for h in hits if all(o is h or str(o["id"]).startswith(f"{h['id']}.") for o in hits)]
+    return roots if len(roots) == 1 else hits
 
 
 def _slug(s: str) -> str:
@@ -287,14 +309,63 @@ def doc_section(a: Atlas, doc: str, section: str | None = None, page: int | None
 _TOKEN = re.compile(r"[A-Za-z0-9_]+")
 
 
-def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = None, limit: int = 20) -> str:
-    """Lines of facts.txt ranked lexically (BM25) across every document, each with its cite."""
+FIND_FACT_LIMIT = 10   # hits shown when the caller gives no limit
+FIND_FACT_FLOOR = 0.4  # ... and only those scoring at least this fraction of the top hit
+
+
+def _query_part(a: Atlas, terms: list[str]) -> tuple[Path | None, set[str]]:
+    """The one document the query's terms name, and those terms. A term names a document when it
+    equals its part, doc id or document number, or a board MPN, or extends one of them with an
+    ordering suffix (`xyz1234rgtr` of part XYZ1234), or prefixes a board MPN (`abc5678` of
+    ABC5678G+T). Only
+    terms of 4+ characters with a digit count, so words never narrow a search."""
+    keys: dict[str, set[str]] = {}
+    for d in a.docs:
+        meta = a.doc_meta(d)
+        for k in (d.name.split("@")[0], meta.get("part"), meta.get("doc_no")):
+            if k:
+                keys.setdefault(_norm(str(k)), set()).add(d.name)
+    mpns = {_norm(m): ids for m, ids in a.mpn_docs().items()}
+    for m, ids in mpns.items():
+        keys.setdefault(m, set()).update(ids)
+    named: set[str] = set()
+    used: set[str] = set()
+    for t in terms:
+        tn = _norm(t)
+        if len(tn) < 4 or not re.search(r"\d", tn):
+            continue
+        for k, ids in keys.items():
+            if tn == k or (len(k) >= 5 and re.search(r"\d", k) and tn.startswith(k)) \
+                    or (k in mpns and k.startswith(tn)):
+                named |= ids
+                used.add(t)
+    if len(named) != 1:
+        return None, set()
+    return a.find_doc(next(iter(named))), used
+
+
+def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = None,
+              limit: int | None = None) -> str:
+    """Lines of facts.txt ranked lexically (BM25) across every document, each with its cite.
+    A query term naming one part narrows the search to it, as `part` does. With no `limit`, shows
+    up to FIND_FACT_LIMIT hits scoring at least FIND_FACT_FLOOR of the top one; a `limit` lists
+    exactly that many, past the floor."""
+    q = [t.lower() for t in _TOKEN.findall(query)]
+    if not q:
+        return _missing("query terms", "Give words or symbols, e.g. `OVP threshold` or `VOVP`.")
     docs = a.docs
+    narrowed = ""
     if part:
         d = a.find_doc(part)
         if not d:
             return _missing(f"part {part!r}", "Omit `part` to search every document.")
         docs = [d]
+    else:
+        d, used = _query_part(a, q)
+        if d:
+            docs = [d]
+            narrowed = f" part={d.name} (named in the query)"
+            q = [t for t in q if t not in used] or q
     lines = []
     for d in docs:
         f = d / "facts.txt"
@@ -302,9 +373,6 @@ def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = 
             for ln in f.read_text(encoding="utf-8").splitlines():
                 if ln.strip() and (not kind or f"kind={kind};" in ln or f"kind={kind} " in ln):
                     lines.append(ln)
-    q = [t.lower() for t in _TOKEN.findall(query)]
-    if not q:
-        return _missing("query terms", "Give words or symbols, e.g. `OVP threshold` or `VOVP`.")
     toks = [[t.lower() for t in _TOKEN.findall(ln)] for ln in lines]
     n = len(toks) or 1
     avg = sum(map(len, toks)) / n if toks else 1
@@ -320,20 +388,26 @@ def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = 
         if s > 0:
             scored.append((-s, ln))
     scored.sort()
-    hits = [ln for _, ln in scored[: max(1, limit)]]
-    head = _header(f"facts.txt ({len(docs)} docs)", extra=f"query={query!r} hits={len(scored)}")
-    return _cap(head + ("\n".join(hits) if hits else "(no fact matches; try a symbol, or doc_toc + doc_section)") + "\n",
-                "find_fact")
+    if limit is None:
+        floor = -scored[0][0] * FIND_FACT_FLOOR if scored else 0.0
+        hits = [ln for s, ln in scored[:FIND_FACT_LIMIT] if -s >= floor]
+    else:
+        hits = [ln for _, ln in scored[: max(1, limit)]]
+    unmatched = [t for t in dict.fromkeys(q) if not df[t]]
+    head = _header(f"facts.txt ({len(docs)} docs)",
+                   extra=f"query={query!r}{narrowed} hits={len(scored)} shown={len(hits)}"
+                   + (f" unmatched={','.join(unmatched)}" if unmatched else ""))
+    body = "\n".join(hits) if hits else "(no fact matches; try a symbol, or doc_toc + doc_section)"
+    if limit is None and len(hits) < len(scored):
+        body += (f"\n({len(scored) - len(hits)} more hits, each under {FIND_FACT_FLOOR:g} of the top score or past "
+                 f"the first {FIND_FACT_LIMIT}; pass `limit` to list them)")
+    return _cap(head + body + "\n", "find_fact")
 
 
-def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
-    """A register (MCU `PERIPH.REG` or external `part.REG`) with its fields, rules and conflicts."""
-    head, _, reg = target.partition(".")
-    if not reg:
-        return _missing(f"register {target!r}", "Use `PERIPH.REG` (MCU, e.g. I2C1.CR1) or `<part>.<REG>`.")
+def _reg_cands(a: Atlas, hn: str, rn: str, head_doc: str) -> list[tuple[Path, dict]]:
+    """Register records named `rn` (with or without an instance prefix) owned by `hn`, an MCU
+    instance or a part; one per id."""
     cands: list[tuple[Path, dict]] = []
-    hn, rn = _norm(head), _norm(reg)
-    head_doc = (a.find_doc(head) or Path("-")).name
     for d in a.docs:
         for r in _records(d):
             if r.get("kind") != "register":
@@ -347,42 +421,109 @@ def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
             owner = _norm(r.get("periph") or inst)
             if owner == hn or head_doc == d.name or (not owner and _norm(d.name).startswith(hn)):
                 cands.append((d, r))
-    if not cands:
-        return _missing(f"register {target!r}", "Check the name in the SVD slice (docs/<svd>/s/<PERIPH>.md) or the "
-                        "part's register section; names are matched without punctuation.")
     seen_ids: set = set()
-    cands = [c for c in cands if not (c[1].get("id") in seen_ids or seen_ids.add(c[1].get("id")))]
-    d, reg_rec = cands[0]
-    rid = reg_rec.get("id")
+    return [c for c in cands if not (c[1].get("id") in seen_ids or seen_ids.add(c[1].get("id")))]
+
+
+def _names_reg(r: dict, rid: str) -> bool:
+    refs = r.get("refs") or []
+    note = r.get("note") or ""
+    return bool(rid) and (rid in refs or r.get("reg") == rid or f"{rid}." in note + " " or note.endswith(rid)
+                          or any(str(x).startswith(rid + ".") for x in refs))
+
+
+def _reg_joins(a: Atlas, rid: str, field: str | None) -> tuple[list[dict], list[tuple[str, dict]]]:
+    """The register's fields (twins merged) and the rules, quirks and conflicts that name it."""
     fields, related = [], []
     for dd in a.docs:
         for r in _records(dd):
             if r.get("kind") == "field" and r.get("reg") == rid and (not field or _norm(r.get("name", "")) == _norm(field)):
                 fields.append(r)
-            elif r.get("kind") in ("conflict", "rule", "quirk") and rid and (
-                    rid in (r.get("refs") or []) or r.get("reg") == rid
-                    or f"{rid}." in (r.get("note") or "") + " " or (r.get("note") or "").endswith(rid)
-                    or any(str(x).startswith(rid + ".") for x in (r.get("refs") or []))):
+            elif r.get("kind") in ("conflict", "rule", "quirk") and _names_reg(r, rid):
                 related.append((dd.name, r))
-    fields = _merge_twins(fields)
+    return _merge_twins(fields), related
+
+
+def _field_line(f: dict) -> str:
+    bits = f.get("bits") or []
+    rng = f"[{bits[0]}:{bits[1]}]" if len(bits) == 2 and bits[0] != bits[1] else (f"[{bits[0]}]" if bits else "")
+    return (f"- {f.get('name')}{rng} access={f.get('access')} reset={f.get('reset')}"
+            + (f" enum={f.get('enum')}" if f.get("enum") and len(str(f.get("enum"))) < 200 else "")
+            + f" cite={_cite(f)}" + (f" prov={f.get('prov')}" if f.get("prov") else ""))
+
+
+def _reg_tail(a: Atlas, related: list[tuple[str, dict]], rids: list[str]) -> list[str]:
+    out = []
+    if related:
+        out += ["", "## Rules, quirks and conflicts"]
+        for _, r in related[:30]:
+            text = r.get("text") or r.get("note") or ""
+            out.append(f"- {r.get('kind')} {r.get('id')}: {text} ({_cite(r)}; prov={r.get('prov')})")
+    code = [c for rid in rids for c in _codecheck_refs(a, rid)]
+    if code:
+        out += ["", "## Firmware references"] + code[:20]
+    return out
+
+
+def _byte_value(v: Any) -> int | None:
+    s = str(v or "").strip().lower()
+    try:
+        n = int(s[2:], 2) if s.startswith("0b") else int(s, 16) if s.startswith("0x") else int(s)
+    except ValueError:
+        return None
+    return n if 0 <= n <= 0xFF else None
+
+
+def _register_pair(a: Atlas, reg: str, msb: tuple[Path, dict], lsb: tuple[Path, dict], field: str | None) -> str:
+    """A 16-bit register a datasheet tables as two bytes (`<REG>_MSB` + `<REG>_LSB`), shown as one:
+    MSB fields move up to bits 15:8, and the reset is joined when both bytes state one."""
+    d, m = msb
+    l = lsb[1]
+    if m.get("width") != 8 or l.get("width") != 8:
+        return _missing(f"register {reg!r}", f"It is split into {m.get('name')} and {l.get('name')}, which are "
+                        "not both 8 bits wide; ask for each.")
+    ids = [m.get("id"), l.get("id")]
+    mf, related = _reg_joins(a, ids[0], field)
+    lf, rel_l = _reg_joins(a, ids[1], field)
+    seen = {r.get("id") for _, r in related}
+    related += [x for x in rel_l if x[1].get("id") not in seen]
+    fields = [dict(f, bits=[b + 8 for b in f.get("bits") or []]) for f in mf] + lf
+    fields.sort(key=lambda r: -(r.get("bits") or [0])[0])
+    hi, lo = _byte_value(m.get("reset")), _byte_value(l.get("reset"))
+    reset = f"0x{hi << 8 | lo:04X}" if hi is not None and lo is not None else f"MSB {m.get('reset')} / LSB {l.get('reset')}"
+    access = m.get("access") if m.get("access") == l.get("access") else f"MSB {m.get('access')} / LSB {l.get('access')}"
+    provs = sorted({str(p) for p in (m.get("prov"), l.get("prov")) if p})
+    out = [_header(f"{d.name} {ids[0]} + {ids[1]}", " & ".join(provs) or None).rstrip("\n"), "",
+           f"{reg}: {m.get('name')} addr={m.get('addr')} is bits 15:8, {l.get('name')} addr={l.get('addr')} is bits 7:0",
+           f"width=16 reset={reset} access={access} cite={_cite(m)}; {_cite(l)}", ""]
+    out += [_field_line(f) for f in fields]
+    return _cap("\n".join(out + _reg_tail(a, related, ids)) + "\n", "register")
+
+
+def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
+    """A register (MCU `PERIPH.REG` or external `part.REG`) with its fields, rules and conflicts.
+    A name a datasheet splits into `<REG>_MSB` and `<REG>_LSB` returns both as one 16-bit view."""
+    head, _, reg = target.partition(".")
+    if not reg:
+        return _missing(f"register {target!r}", "Use `PERIPH.REG` (MCU, e.g. I2C1.CR1) or `<part>.<REG>`.")
+    hn, rn = _norm(head), _norm(reg)
+    head_doc = (a.find_doc(head) or Path("-")).name
+    cands = _reg_cands(a, hn, rn, head_doc)
+    if not cands:
+        msb, lsb = _reg_cands(a, hn, rn + "msb", head_doc), _reg_cands(a, hn, rn + "lsb", head_doc)
+        if msb and lsb and msb[0][0] == lsb[0][0]:
+            return _register_pair(a, reg, msb[0], lsb[0], field)
+        return _missing(f"register {target!r}", "Check the name in the SVD slice (docs/<svd>/s/<PERIPH>.md) or the "
+                        "part's register section; names are matched without punctuation.")
+    d, reg_rec = cands[0]
+    rid = reg_rec.get("id")
+    fields, related = _reg_joins(a, rid, field)
     fields.sort(key=lambda r: -(r.get("bits") or [0])[0])
     out = [_header(f"{d.name} {rid}", reg_rec.get("prov")).rstrip("\n"), "",
            f"{reg_rec.get('name')} addr={reg_rec.get('addr')} width={reg_rec.get('width')} "
            f"reset={reg_rec.get('reset')} access={reg_rec.get('access')} cite={_cite(reg_rec)}", ""]
-    for f in fields:
-        bits = f.get("bits") or []
-        rng = f"[{bits[0]}:{bits[1]}]" if len(bits) == 2 and bits[0] != bits[1] else (f"[{bits[0]}]" if bits else "")
-        out.append(f"- {f.get('name')}{rng} access={f.get('access')} reset={f.get('reset')}"
-                   + (f" enum={f.get('enum')}" if f.get("enum") and len(str(f.get("enum"))) < 200 else "")
-                   + f" cite={_cite(f)}" + (f" prov={f.get('prov')}" if f.get("prov") else ""))
-    if related:
-        out += ["", "## Rules, quirks and conflicts"]
-        for dn, r in related[:30]:
-            text = r.get("text") or r.get("note") or ""
-            out.append(f"- {r.get('kind')} {r.get('id')}: {text} ({_cite(r)}; prov={r.get('prov')})")
-    code = _codecheck_refs(a, rid)
-    if code:
-        out += ["", "## Firmware references"] + code
+    out += [_field_line(f) for f in fields]
+    out += _reg_tail(a, related, [rid])
     if len(cands) > 1:
         out += ["", "Also named " + reg + " in: " + ", ".join(sorted({c[0].name for c in cands[1:]}))]
     return _cap("\n".join(out) + "\n", "register")
@@ -533,7 +674,7 @@ def register(sub, groups) -> None:
     add("doc_toc", doc_toc, (["doc"], {}), (["--under"], {}), (["--depth"], {"type": int, "default": 2}))
     add("doc_section", doc_section, (["doc"], {}), (["--section"], {}), (["--page"], {"type": int}),
         (["--tier"], {"choices": ["distilled", "text"], "default": "distilled"}), (["--offset"], {"type": int, "default": 0}))
-    add("find_fact", find_fact, (["query"], {"nargs": "+"}), (["--part"], {}), (["--kind"], {}), (["--limit"], {"type": int, "default": 20}))
+    add("find_fact", find_fact, (["query"], {"nargs": "+"}), (["--part"], {}), (["--kind"], {}), (["--limit"], {"type": int}))
     add("register", register_lookup, (["target"], {}), (["--field"], {}))
     add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}))
     add("mismatch_report", mismatch_report, (["--scope"], {}), (["--cls"], {}), (["--offset"], {"type": int, "default": 0}))

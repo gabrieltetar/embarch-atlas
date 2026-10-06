@@ -228,9 +228,14 @@ value anchors only when that record is on a page the line cites. Rendered struct
 ## Query surface
 
 `query.py` holds the seven lookups as plain functions returning markdown: `part_card`,
-`doc_toc`, `doc_section`, `find_fact` (BM25 over every `facts.txt`), `register` (MCU
-`PERIPH.REG` or `<part>.<REG>`, twins merged, rules/quirks/conflicts and firmware
-references joined), `pin_trace`, `mismatch_report`. Each answer starts with a `src:`
+`doc_toc` (`under` takes an id, a title, or a word of a title, which resolves to the one
+matching section that holds all the others, else lists the matches), `doc_section`,
+`find_fact` (BM25 over every `facts.txt`; a query term naming one part narrows to it like
+`part`; with no `limit`, the best 10 hits scoring at least 0.4 of the top one, and the
+header names the query terms no fact contains), `register` (MCU `PERIPH.REG` or
+`<part>.<REG>`, twins merged, rules/quirks/conflicts and firmware references joined; a
+register tabled as `<REG>_MSB` + `<REG>_LSB` bytes answers to `<REG>` as one 16-bit view),
+`pin_trace`, `mismatch_report`. Each answer starts with a `src:`
 line and is paged at a per-tool token budget with `next=<offset>`. Two doors call the
 same functions: `embarch-atlas q <verb>` and `embarch-atlas mcp` (stdio, `mcp>=2.2`,
 optional extra). Files stay the primary door: an agent's own `Read`/`Grep` reach

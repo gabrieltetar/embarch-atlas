@@ -81,6 +81,18 @@ def test_doc_toc_and_under(atlas_dir):
     assert "7.1 | MODE Register | p9" in sub and "Features" not in sub
 
 
+def test_doc_toc_under_by_title_word(atlas_dir):
+    a = query.Atlas(atlas_dir)
+    sub = query.doc_toc(a, "demo-bb@A", under="register")
+    assert sub.startswith("src: demo-bb@A toc under 7") and "7.1 | MODE Register" in sub
+    toc = atlas_dir / "docs" / "demo-bb@A" / "toc.json"
+    data = json.loads(toc.read_text())
+    data["sections"].append({"id": "8", "title": "Register Maps", "level": 1, "pages": [11, 11], "tokens": 100})
+    toc.write_text(json.dumps(data))
+    many = query.doc_toc(a, "demo-bb@A", under="register")
+    assert "3 sections match 'register'" in many and "8 | Register Maps | p11" in many
+
+
 def test_doc_section_distilled_text_and_pagination(atlas_dir):
     a = query.Atlas(atlas_dir)
     assert "| 0x06 | MODE |" in query.doc_section(a, "demo-bb@A", section="7")
@@ -100,6 +112,67 @@ def test_find_fact_ranks_by_symbol(atlas_dir):
     assert lines[0].startswith("src: facts.txt")
     assert lines[2].startswith("demo-bb.ec.VOVP")
     assert "VREF" not in out.split("\n", 3)[2]
+
+
+def _flr_doc(atlas_dir):
+    """A doc where one fact matches a rare term and six match only a common one."""
+    d = atlas_dir / "docs" / "flr@1"
+    write_json(d / "doc.json", {"doc_id": "flr@1", "part": "FLR", "kind": "datasheet"})
+    lines = ["flr.ec.VOVP kind=limit; sym=VOVP; param=OVP threshold; cite=flr@1 p1"]
+    lines += [f"flr.ec.X{i} kind=limit; sym=X{i}; param=threshold {i}; cite=flr@1 p1" for i in range(6)]
+    lines += [f"flr.ec.Y{i} kind=limit; sym=Y{i}; param=other {i}; cite=flr@1 p1" for i in range(3)]
+    write_text(d / "facts.txt", "\n".join(lines))
+
+
+def test_find_fact_floor_hides_weak_hits_and_limit_lists_them(atlas_dir):
+    _flr_doc(atlas_dir)
+    a = query.Atlas(atlas_dir)
+    out = query.find_fact(a, "OVP threshold", part="flr")
+    assert "hits=7 shown=1" in out.splitlines()[0]
+    assert "flr.ec.VOVP" in out and "flr.ec.X0" not in out
+    assert "6 more hits" in out
+    listed = query.find_fact(a, "OVP threshold", part="flr", limit=20)
+    assert "shown=7" in listed and "flr.ec.X5" in listed and "more hits" not in listed
+
+
+def test_find_fact_names_unmatched_terms(atlas_dir):
+    out = query.find_fact(query.Atlas(atlas_dir), "VOVP nosuchterm")
+    assert "unmatched=nosuchterm" in out.splitlines()[0]
+    assert "unmatched" not in query.find_fact(query.Atlas(atlas_dir), "VOVP").splitlines()[0]
+
+
+def test_find_fact_narrows_to_a_part_named_in_the_query(atlas_dir):
+    d = atlas_dir / "docs" / "xldo42@1"
+    write_json(d / "doc.json", {"doc_id": "xldo42@1", "part": "XLDO42", "kind": "datasheet"})
+    write_text(d / "facts.txt", "xldo42.ec.VUVLO kind=limit; sym=VUVLO; param=UVLO threshold; cite=xldo42@1 p4")
+    a = query.Atlas(atlas_dir)
+    for q in ("XLDO42 threshold", "XLDO42DBVR threshold"):
+        out = query.find_fact(a, q)
+        assert "part=xldo42@1 (named in the query)" in out.splitlines()[0], q
+        assert "xldo42.ec.VUVLO" in out and "demo-bb.ec.VOVP" not in out, q
+    both = query.find_fact(a, "threshold")
+    assert "named in the query" not in both and "demo-bb.ec.VOVP" in both and "xldo42.ec.VUVLO" in both
+
+
+def test_register_byte_pair_is_one_16_bit_view(atlas_dir):
+    d = atlas_dir / "docs" / "demo-bb@A"
+    base = {"kind": "register", "doc": "demo-bb@A", "width": 8, "access": "rw", "p": 12, "prov": "llm-verified"}
+    write_jsonl(d / "records" / "pair.jsonl", [
+        dict(base, id="demo-bb.reg.CHGOPT_MSB", name="CHGOPT_MSB", addr="0x35", reset="0b00000100"),
+        dict(base, id="demo-bb.reg.CHGOPT_LSB", name="CHGOPT_LSB", addr="0x34", reset="0b00110100"),
+        {"id": "demo-bb.reg.CHGOPT_MSB.EN_HIZ", "kind": "field", "doc": "demo-bb@A", "reg": "demo-bb.reg.CHGOPT_MSB",
+         "name": "EN_HIZ", "bits": [7, 7], "reset": "0b0", "access": "rw", "p": 12, "prov": "llm-verified"},
+        {"id": "demo-bb.reg.CHGOPT_LSB.BATFET", "kind": "field", "doc": "demo-bb@A", "reg": "demo-bb.reg.CHGOPT_LSB",
+         "name": "BATFET", "bits": [0, 0], "reset": "0b0", "access": "rw", "p": 12, "prov": "llm-verified"},
+        {"id": "demo-bb.quirk.batfet", "kind": "quirk", "doc": "demo-bb@A", "text": "BATFET is active low", "p": 12,
+         "prov": "llm-verified", "refs": ["demo-bb.reg.CHGOPT_LSB"]}])
+    a = query.Atlas(atlas_dir)
+    out = query.register_lookup(a, "demo-bb.CHGOPT")
+    assert out.startswith("src: demo-bb@A demo-bb.reg.CHGOPT_MSB + demo-bb.reg.CHGOPT_LSB")
+    assert "width=16 reset=0x0434 access=rw" in out
+    assert out.index("- EN_HIZ[15]") < out.index("- BATFET[0]")
+    assert "BATFET is active low" in out
+    assert "width=8" in query.register_lookup(a, "demo-bb.CHGOPT_LSB")
 
 
 def test_register_merges_twins_and_joins_quirks(atlas_dir):

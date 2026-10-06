@@ -44,7 +44,8 @@ def build_server(atlas_dir: Path, atlas: str | None = None):
 
     @server.tool()
     def doc_toc(doc: str, under: str | None = None, depth: int = 2) -> str:
-        """A document's outline: section id | title | pages | tokens | distilled file. `under` narrows to a section."""
+        """A document's outline: section id | title | pages | tokens | distilled file. `under` narrows to a section,
+        by id, title, or a word of the title (the shallowest section holding it)."""
         return query.doc_toc(view(), doc, under, depth)
 
     @server.tool()
@@ -55,15 +56,17 @@ def build_server(atlas_dir: Path, atlas: str | None = None):
         return query.doc_section(view(), doc, section, page, tier, offset)
 
     @server.tool()
-    def find_fact(query_text: str, part: str | None = None, kind: str | None = None, limit: int = 20) -> str:
+    def find_fact(query_text: str, part: str | None = None, kind: str | None = None, limit: int | None = None) -> str:
         """Search every document's facts (one per line, with cite and provenance), ranked lexically.
-        `kind`: limit, timing, pin, rule, register, field, quirk, strap, requirement, conflict."""
+        A part named in the query narrows to it, like `part`. Without `limit`: the best 10 above 0.4x the
+        top score. `kind`: limit, timing, pin, rule, register, field, quirk, strap, requirement, conflict."""
         return query.find_fact(view(), query_text, part, kind, limit)
 
     @server.tool()
     def register(target: str, field: str | None = None) -> str:
         """A register with its fields, rules, quirks, SVD/RM conflicts and firmware references.
-        `target` is `PERIPH.REG` for the MCU (I2C1.TIMINGR) or `<part>.<REG>` for an external part."""
+        `target` is `PERIPH.REG` for the MCU (I2C1.TIMINGR) or `<part>.<REG>` for an external part; a register
+        split into `<REG>_MSB`/`_LSB` bytes is also found by `<REG>`, as one 16-bit view."""
         return query.register_lookup(view(), target, field)
 
     @server.tool()
