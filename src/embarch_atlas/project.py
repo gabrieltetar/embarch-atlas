@@ -226,7 +226,7 @@ def wire_mcp(fw: Path, command: str = "embarch-atlas") -> list[str]:
     """Register the atlas MCP server for sessions in `fw` through a git-excluded `.mcp.json`.
 
     Merges into an existing `.mcp.json` (other servers are kept), sets `alwaysLoad` so the
-    seven tools skip deferred tool search, and excludes the file unless git ignores it or
+    atlas tools skip deferred tool search, and excludes the file unless git ignores it or
     already tracks it (a tracked one is edited in place and reported, never excluded).
     Claude Code asks the engineer to approve a project server on first use.
     """

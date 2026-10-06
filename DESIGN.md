@@ -156,7 +156,7 @@ Kinds and their own fields:
 |---|---|
 | `limit` | `group` (abs, esd, thermal, recommended, ec, i2c, register, application, other), `sym`, `param`, `cond`, `min`, `nom`, `typ`, `max`, `unit`, `fn` (footnote ids), `guar` (production-tested / design / characterization). `±X` is `min: -X, max: X` |
 | `timing` | as `limit`, plus `edge` |
-| `pin` | `pin` (number/ball, or [number, ball]), `name`, `dir`, `type` (od, pp, analog, supply, ...), `io` (an MCU pin's I/O structure as printed: FT, FT_fa, TT_a...), `active`, `pull`, `desc` |
+| `pin` | `pin` (number/ball, or [number, ball]), `name`, `dir`, `type` (od, pp, analog, supply, ...), `io` (an MCU pin's I/O structure as printed: FT, FT_fa, TT_a...), `active`, `pull`, `desc`, `flow` (power and supply pins: source, sink, bidir, sense, local, as the pin table states it) |
 | `rule` | `text`, `cond`, `recover`, `steps` (behaviour rule, "OK goes low on fault, latches until EN toggles") |
 | `register` | `name`, `addr` (int or `0x..`), `width`, `reset` (`0b…`/`0x…`), `access`, `summary` |
 | `field` | `reg` (the register's record id), `name`, `bits` ([hi, lo]), `reset`, `access` (SystemRDL vocabulary: rw, ro, wo, rclr, woclr, w1s, rsvd), `enum` |
@@ -227,7 +227,7 @@ value anchors only when that record is on a page the line cites. Rendered struct
 
 ## Query surface
 
-`query.py` holds the seven lookups as plain functions returning markdown: `part_card`,
+`query.py` holds the eight lookups as plain functions returning markdown: `part_card`,
 `doc_toc` (`under` takes an id, a title, or a word of a title, which resolves to the one
 matching section that holds all the others, else lists the matches), `doc_section`,
 `find_fact` (BM25 over every `facts.txt`; a query term naming one part narrows to it like
@@ -235,7 +235,10 @@ matching section that holds all the others, else lists the matches), `doc_sectio
 header names the query terms no fact contains), `register` (MCU `PERIPH.REG` or
 `<part>.<REG>`, twins merged, rules/quirks/conflicts and firmware references joined; a
 register tabled as `<REG>_MSB` + `<REG>_LSB` bytes answers to `<REG>` as one 16-bit view),
-`pin_trace`, `mismatch_report`. Each answer starts with a `src:`
+`pin_trace` (MCU pins, from `pins.json`), `net_trace` (any net, part pin or part on any board,
+read from the netlists through the join at query time: members across connector mates, then
+what feeds the net from datasheet pin records with `flow` only, the feeding parts' enables and
+their MCU port or pull, and the datasheets still needed), `mismatch_report`. Each answer starts with a `src:`
 line and is paged at a per-tool token budget with `next=<offset>`. Two doors call the
 same functions: `embarch-atlas q <verb>` and `embarch-atlas mcp` (stdio, `mcp>=2.2`,
 optional extra). Files stay the primary door: an agent's own `Read`/`Grep` reach
@@ -396,8 +399,8 @@ An atlas id is `<target>@<commit12>`.
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name; abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
-| `q <lookup>` | `query` | the seven lookups (same answers as the MCP tools) |
-| `mcp` | `mcp_server` | the seven lookups as an MCP server over stdio |
+| `q <lookup>` | `query` | the eight lookups (same answers as the MCP tools) |
+| `mcp` | `mcp_server` | the eight lookups as an MCP server over stdio |
 
 ## What an LLM step may and may not do
 

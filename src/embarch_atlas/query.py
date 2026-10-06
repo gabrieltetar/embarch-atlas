@@ -1,4 +1,4 @@
-"""The seven atlas lookups, as plain functions returning markdown.
+"""The eight atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -20,7 +20,7 @@ from .pdftext import tier2_files
 
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000,
-          "register": 1500, "pin_trace": 4000, "mismatch_report": 4000}
+          "register": 1500, "pin_trace": 4000, "net_trace": 4000, "mismatch_report": 4000}
 
 
 # --------------------------------------------------------------------------- plumbing
@@ -154,7 +154,7 @@ def _missing(what: str, hint: str) -> str:
     return f"src: none\n\n{what} not found. {hint}\n"
 
 
-# --------------------------------------------------------------------------- the seven
+# --------------------------------------------------------------------------- the eight
 
 def part_card(a: Atlas, part: str, board: str | None = None) -> str:
     """The part's card.md; with `board`, the refs of that part on the boards and their nets."""
@@ -584,8 +584,8 @@ def pin_trace(a: Atlas, query: str, board: str | None = None) -> str:
                 or any(n and _norm(n) == qn for n in parts):
             hits.append(p)
     if not hits:
-        return _missing(f"pin/net/part-pin {query!r}", "Use an MCU port (PB9), a net name, or a board-qualified "
-                        "part pin (A:U3-6); pins.md lists them all.")
+        return _missing(f"pin/net/part-pin {query!r}", "pins.md lists the MCU pins and the nets they reach. "
+                        "For a net no MCU pin reaches (a rail, a sense line), or a part or part pin, use net_trace.")
     out = [_header(f"{a.atlas.name} pins.json", extra=f"query={query!r}").rstrip("\n"), ""]
     for p in hits:
         far = "; ".join(_far(f) for f in (p.get("far") or []) if not board or f.get("board") == board) or "no far end"
@@ -615,6 +615,19 @@ def _dt(u: dict) -> str:
         bits.append(f"driver {files}{'' if drv.get('compiled', True) else ' (not compiled)'}")
     bits.append(u.get("loc") or "")
     return " ".join(b for b in bits if b)
+
+
+def net_trace(a: Atlas, query: str, board: str | None = None, offset: int = 0) -> str:
+    """Any net, part pin (number or name) or part on any board: its members across connector mates,
+    then what feeds it, from datasheet pin records with `flow` only, and the datasheets still needed."""
+    from . import nettrace
+    if not any((a.dir / "boards").glob("*/netlist.json")):
+        return _missing("netlists", "Run atlas-translate-docs on the schematics first.")
+    J = nettrace.load(a.dir, a.atlas, _json)
+    src, body = nettrace.answer(J, query, board)
+    if not src:
+        return f"src: none\n\n{body}\n"
+    return _cap(_header(src, extra=f"query={query!r}") + body + "\n", "net_trace", offset)
 
 
 def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
@@ -653,7 +666,7 @@ def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, 
 
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
-    "register": register_lookup, "pin_trace": pin_trace, "mismatch_report": mismatch_report,
+    "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "mismatch_report": mismatch_report,
 }
 
 
@@ -677,6 +690,7 @@ def register(sub, groups) -> None:
     add("find_fact", find_fact, (["query"], {"nargs": "+"}), (["--part"], {}), (["--kind"], {}), (["--limit"], {"type": int}))
     add("register", register_lookup, (["target"], {}), (["--field"], {}))
     add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}))
+    add("net_trace", net_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
     add("mismatch_report", mismatch_report, (["--scope"], {}), (["--cls"], {}), (["--offset"], {"type": int, "default": 0}))
 
 

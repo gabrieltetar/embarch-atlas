@@ -163,6 +163,12 @@ Field notes:
 - **check**: an invariant you propose, which the checker evaluates: `R['<id>'].min/.nom/.typ/.max`,
   arithmetic, comparisons, `abs/min/max/all/any/round/sum/len`, comprehensions. Nothing else runs.
   `expect: fail` records a known inconsistency of the document; the quirk it backs should say so.
+- **pin**: every power or supply pin gets `flow`, which is what lets `net_trace` name the part
+  that feeds a rail. `source`: the row says output (regulator, LDO, switch output). `sink`: input or
+  supply. `bidir`: the part moves power either way by mode (a bidirectional switch; cite the page
+  that says so). `sense`: the pin only measures the rail. `local`: a node of the part's own (switch
+  node, bootstrap, an internal regulator bypassed to a capacitor). A row that says none of these
+  gets no `flow`; never infer one from the pin's name. Ground and signal pins get none.
 - **strap**: address or mode straps (a resistor table on a MODE pin): `pin`, `condition`, `value`.
 - **rule** with `steps`: `q` is a list in step order, one verbatim quote per step that has one, and
   `p` every page a step came from. Numbers in `steps` and `text` are not column-checked, so each must

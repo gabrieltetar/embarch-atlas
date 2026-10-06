@@ -586,6 +586,17 @@
             "null"
           ],
           "description": "an MCU pin's I/O structure as printed in the datasheet's pin table (FT, FT_fa, TT_a, RST, ...); 5 V tolerance and analog capability come from it"
+        },
+        "flow": {
+          "enum": [
+            "source",
+            "sink",
+            "bidir",
+            "sense",
+            "local",
+            null
+          ],
+          "description": "which way power moves through a power or supply pin, as its pin-table row (or the page that the row points to) states it: source drives a rail (a regulator or switch output), sink draws from one (a supply or switch input), bidir is either by mode, sense only measures the rail, local is a node of the part's own (switch node, bootstrap, bypassed internal regulator). Left out on signal and ground pins"
         }
       },
       "required": [
@@ -609,7 +620,8 @@
           "active",
           "pull",
           "desc",
-          "io"
+          "io",
+          "flow"
         ]
       }
     },
