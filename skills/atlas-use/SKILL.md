@@ -64,7 +64,7 @@ pin → net → far-end part pin → DT node → driver) and `boards/<label>/net
 | A limit / threshold / timing, or any behaviour | `find_fact` (records and distilled prose), or `grep -r <SYMBOL> embarch/atlas/docs/*/facts.txt embarch/atlas/docs/*/s/`, then the section |
 | A register or field of an external part | `docs/<doc>/s/` register section, or `grep` the register name in `facts.txt` |
 | An MCU register or field | `docs/<svd-doc>/s/<PERIPH>.md`; conflicts between the SVD and the RM are `conflict` records under the RM doc |
-| What an MCU register holds on the running board | `reg_read PERIPH.REG` (or a whole `PERIPH`), listed when embarch-core answers: read through Core with the core halted a few ms, decoded field by field; a read-to-clear register is refused unless `allow_clear` |
+| What an MCU register holds on the running board | `reg_read PERIPH.REG` (or a whole `PERIPH`), listed when embarch-core answers: read through Core with the core halted about 20 ms, decoded field by field; a read-to-clear register is refused unless `allow_clear` |
 | How an MCU peripheral must be programmed | `docs/<rm-doc>/s/<ch>.must.md`, then the section |
 | Does DT/driver agree with the board | `atlases/<id>/checks.md` |
 | A product requirement | `docs/<prd-doc>/s/`, `facts.txt` (`requirement` records) |

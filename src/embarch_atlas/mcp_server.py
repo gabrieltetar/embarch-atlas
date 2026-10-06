@@ -124,7 +124,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         def reg_read(target: str, allow_clear: bool = False, role: str | None = None) -> str:
             """Live: an MCU register (`PERIPH.REG`, e.g. RCC.APBENR1) or a whole peripheral (`UCPD1`) read on
             the running board through embarch-core and decoded field by field against the SVD; `*` marks a
-            field not at its reset value. A running core is halted for the read (a few ms) and let run
+            field not at its reset value. A running core is halted for the read (about 20 ms over a J-Link) and let run
             again. A register whose read clears something (a FIFO data register, a read-to-clear flag) is
             refused, or left out of a peripheral read, unless allow_clear=true."""
             return live_mod.reg_read(atlas_dir, target, allow_clear, role)
