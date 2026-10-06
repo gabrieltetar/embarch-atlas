@@ -359,6 +359,28 @@ description, datasheet_link, comment, manufacturer, footprint, in_bom, pins}`.
 `proposed` (machine, scored), `name_check`, `inputs`, and a `board-to-board-check`
 scoring each declared interface.
 
+## Live (`live.py`)
+
+The live module reads the running board. It is not part of the twelve lookups: the atlas never
+touches hardware, so `reg_read` names addresses and decodes the answer, and embarch-core does the
+read (its decision 81) through the `embarch-api mem-read` subcommand, which resolves Core and its
+token the way every suite tool does. Core picks the probe and chip from the role's enrollment,
+runs the board-identity gate, halts a running core for the read and lets it run again. One-off
+reads halt because some MCUs sleeping without a DMA clock answer every running debug read with
+0 or a stale word; keeping a DMA clock on would change the firmware for the debugger's sake.
+
+- `reg_read PERIPH.REG` decodes one register field by field against the SVD records, with the
+  reset value and the enum name; a register the SVD splits into alternate views at one address
+  answers with all of them. `reg_read PERIPH` reads the whole peripheral as one snapshot (one
+  request, one halt, ranges merged across up to 8 reserved words) and shows only the fields that
+  differ from reset. Bits set outside every field are flagged.
+- **Read-to-clear guard.** A register is refused by name, and left out of a peripheral read,
+  when the SVD marks a field `readAction` (access `rclr`) or the reference manual's field text says
+  reading it clears something ("cleared by reading the USART_RDR register", matched by a few
+  wordings over `rm_regs.json`). `allow_clear=true` reads it and says what the read cleared.
+- Off unless Core answers: the MCP server asks `embarch-api status` once at start and lists
+  `reg_read` only then. External parts' registers wait for the live shell.
+
 ## `atlas.toml`
 
 ```toml
@@ -385,6 +407,11 @@ board = "<zephyr board>"
 app = "apps/<app>"
 schematic_boards = ["A", "B"]        # which schematic boards make up this product
 extra_args = []                      # extra `west build` arguments
+
+[live]                               # optional: the live module
+api = "embarch-api"                  # the embarch-api binary
+api_config = "<fw>/embarch/embarch.toml"  # its config (this is the default)
+role = "dut"                         # the enrolled role reg_read reads from
 ```
 
 An atlas id is `<target>@<commit12>`.
@@ -417,7 +444,8 @@ An atlas id is `<target>@<commit12>`.
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump: stop if documents or schematics changed, build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts; the previous atlas's backlog is counted), the diff written into the new atlas |
 | `q <lookup>` | `query` | the twelve lookups (same answers as the MCP tools) |
-| `mcp` | `mcp_server` | the twelve lookups as an MCP server over stdio |
+| `live reg-read <PERIPH[.REG]> [--allow-clear] [--role R]` | `live` | a register or peripheral read on the board through embarch-core, decoded |
+| `mcp` | `mcp_server` | the twelve lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ## What an LLM step may and may not do
 

@@ -32,6 +32,7 @@ MODULES = [
     "secondlook",
     "diff",
     "update",
+    "live",
     "query",
     "mcp_server",
 ]

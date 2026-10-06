@@ -1,4 +1,5 @@
-"""`embarch-atlas mcp`: the atlas's twelve lookups as an MCP server over stdio.
+"""`embarch-atlas mcp`: the atlas's twelve lookups as an MCP server over stdio, and the live
+module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
 too, so an agent, a script and a human get the same bytes. Files stay the primary
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, query
+from . import common, live as live_mod, query
 
 INSTRUCTIONS = (
     "Hardware atlas of this firmware project: schematics, datasheets, the MCU reference "
@@ -27,7 +28,8 @@ INSTRUCTIONS = (
 )
 
 
-def build_server(atlas_dir: Path, atlas: str | None = None):
+def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = None):
+    """`live`: list the live tools; None asks embarch-core once, at start (off unless it answers)."""
     from mcp.server.mcpserver import MCPServer
 
     server = MCPServer(name="embarch-atlas", instructions=INSTRUCTIONS)
@@ -114,6 +116,18 @@ def build_server(atlas_dir: Path, atlas: str | None = None):
         """Checks run and passed, then candidate mismatches between schematic, DT, driver and datasheet,
         each with evidence and what would settle it. `scope` filters by substring, `cls` by class."""
         return query.mismatch_report(view(), scope, cls, offset)
+
+    if live is None:
+        live = live_mod.available(atlas_dir) is None
+    if live:
+        @server.tool()
+        def reg_read(target: str, allow_clear: bool = False, role: str | None = None) -> str:
+            """Live: an MCU register (`PERIPH.REG`, e.g. RCC.APBENR1) or a whole peripheral (`UCPD1`) read on
+            the running board through embarch-core and decoded field by field against the SVD; `*` marks a
+            field not at its reset value. A running core is halted for the read (a few ms) and let run
+            again. A register whose read clears something (a FIFO data register, a read-to-clear flag) is
+            refused, or left out of a peripheral read, unless allow_clear=true."""
+            return live_mod.reg_read(atlas_dir, target, allow_clear, role)
 
     return server
 
