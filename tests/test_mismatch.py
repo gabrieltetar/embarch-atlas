@@ -153,3 +153,18 @@ def test_second_look_counts_only_verdicts_of_the_current_record(tmp_path):
     assert "document-reading-conflict" not in _classes(rep)
     assert rep["folded"][mismatch.FOLD_OLD_VERDICT] == ["sns701.pin.ALERT (conflict)"]
     assert rep["folded"][mismatch.FOLD_GONE_VERDICT] == ["sns701.pin.GONE (conflict)"]
+
+
+def test_a_verdict_under_the_checked_key_is_current(tmp_path):
+    from embarch_atlas import secondlook
+    from embarch_atlas.common import read_jsonl
+    ad, atlas = make_project(tmp_path)
+    d = ad / "docs" / "sns701@a"
+    rec = next(r for r in read_jsonl(d / "records" / "pin.jsonl") if r["id"] == "sns701.pin.ALERT")
+    write_jsonl(atlas / "second_look.jsonl", [
+        {"id": "sns701.pin.ALERT", "doc": "sns701@a", "key": secondlook.checked_key(rec, d), "verdict": "confirmed"}])
+    run_join(ad, atlas)
+    rep = read_json(atlas / "mismatches.json")
+    chk = {c["check"]: c for c in rep["checks"]}["second look agrees with the first pass"]
+    assert (chk["ran"], chk["passed"]) == (1, 1)
+    assert mismatch.FOLD_OLD_VERDICT not in rep["folded"]

@@ -554,10 +554,11 @@ FOLD_GONE_VERDICT = "second look of a record id no longer in the docs (renamed o
 
 
 def current_verdicts(J, verdicts: list[dict], R=None) -> list[dict]:
-    """The verdicts that still describe a record as it is now: a verdict's `key` is the content key of
-    the record it read (secondlook.content_key), so after a re-translation the old verdict no longer
-    applies, and the record goes back into the queue. Superseded ones are folded into a count."""
-    from embarch_atlas.secondlook import content_key
+    """The verdicts that still describe a record as it is now: a verdict's `key` is the key of the
+    record it read (secondlook.checked_key, or the older whole-record content_key), so after a
+    re-translation that changes what the look checks the old verdict no longer applies, and the
+    record goes back into the queue. Superseded ones are folded into a count."""
+    from embarch_atlas.secondlook import checked_key, content_key
     keys: dict[str, set[str] | None] = {}
     out = []
     for v in verdicts:
@@ -566,7 +567,8 @@ def current_verdicts(J, verdicts: list[dict], R=None) -> list[dict]:
             d = (J.docs.docs.get(doc) or {}) if doc else {}
             recs = [r for rs in (d.get("records") or {}).values() for r in rs if r.get("id") == rid]
             # None: the document is not loaded here, so nothing can be said; keep the verdict
-            keys[rid] = {content_key(r, d["dir"]) for r in recs} if d.get("dir") else None
+            keys[rid] = ({k for r in recs for k in (checked_key(r, d["dir"]), content_key(r, d["dir"]))}
+                         if d.get("dir") else None)
         k = keys[rid]
         if not v.get("key") or k is None or v["key"] in k:
             out.append(v)
