@@ -1,4 +1,4 @@
-"""The eight atlas lookups, as plain functions returning markdown.
+"""The ten atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -20,7 +20,8 @@ from .pdftext import tier2_files
 
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000,
-          "register": 1500, "pin_trace": 4000, "net_trace": 4000, "mismatch_report": 4000}
+          "register": 1500, "pin_trace": 4000, "net_trace": 4000, "mismatch_report": 4000,
+          "config": 1500, "dt_node": 2500}
 
 
 # --------------------------------------------------------------------------- plumbing
@@ -154,7 +155,7 @@ def _missing(what: str, hint: str) -> str:
     return f"src: none\n\n{what} not found. {hint}\n"
 
 
-# --------------------------------------------------------------------------- the eight
+# --------------------------------------------------------------------------- the ten
 
 def part_card(a: Atlas, part: str, board: str | None = None) -> str:
     """The part's card.md; with `board`, the refs of that part on the boards and their nets."""
@@ -630,6 +631,37 @@ def net_trace(a: Atlas, query: str, board: str | None = None, offset: int = 0) -
     return _cap(_header(src, extra=f"query={query!r}") + body + "\n", "net_trace", offset)
 
 
+def _build_src(a: Atlas, build: str | None, query: str, fn):
+    from . import buildq
+    try:
+        src = buildq.source(a, build)
+    except (LookupError, FileNotFoundError, OSError, RuntimeError) as e:
+        return None, f"src: none\n\n{e}\n"
+    return src, fn(src, query)
+
+
+def config(a: Atlas, symbol: str, build: str | None = None) -> str:
+    """A Kconfig symbol (CONFIG_X or X; `*` lists matches): its value, the fragment that set it, its
+    depends on and whether it is met, who selects or implies it, the default that applies, where it
+    is defined. From the pinned build, or the build dir `build` names."""
+    from . import buildq
+    src, body = _build_src(a, build, symbol, buildq.config_answer)
+    if src is None:
+        return body
+    return _cap(_header(f"{src.label} kconfig", extra=f"query={symbol!r}") + body + "\n", "config")
+
+
+def dt_node(a: Atlas, node: str, build: str | None = None) -> str:
+    """A devicetree node by path, label, alias, chosen name or compatible: status, binding, the
+    driver compiled for it, whether its device is in the ELF, every property with the file:line
+    that set it, its pins and children. From the pinned build, or the build dir `build` names."""
+    from . import buildq
+    src, body = _build_src(a, build, node, buildq.dt_answer)
+    if src is None:
+        return body
+    return _cap(_header(f"{src.label} devicetree", extra=f"query={node!r}") + body + "\n", "dt_node")
+
+
 def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
     """Checks run and passed first, then candidates (claim, evidence, what would settle it)."""
     if not a.atlas:
@@ -667,6 +699,7 @@ def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, 
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
     "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "mismatch_report": mismatch_report,
+    "config": config, "dt_node": dt_node,
 }
 
 
@@ -691,6 +724,8 @@ def register(sub, groups) -> None:
     add("register", register_lookup, (["target"], {}), (["--field"], {}))
     add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}))
     add("net_trace", net_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
+    add("config", config, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}))
+    add("dt_node", dt_node, (["node"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}))
     add("mismatch_report", mismatch_report, (["--scope"], {}), (["--cls"], {}), (["--offset"], {"type": int, "default": 0}))
 
 

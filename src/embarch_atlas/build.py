@@ -490,6 +490,15 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
                        "zephyr_modules": mods, "artifacts": copied, "tools": tools,
                        "zephyr_base": str(zb) if zb else None, "west_topdir": str(topdir), "fw": str(fw),
                        "from_worktree": ev}}
+    # Kconfig now, while the workspace's Zephyr is the tree this build used (kconfig.py)
+    from .dt import rel_bases
+    from .kconfig import extract
+    try:
+        write_json(out / "kconfig.json", extract(zdir, rel_bases(extra, ad)))
+        extra["build"]["kconfig"] = "kconfig.json"
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
+        extra["build"]["kconfig"] = f"not extracted: {str(e)[-300:]}"
+        log(f"warning: kconfig.json not written: {e}")
     write_json(out / "atlas.json", stamp(cfg, ad, commit, projects, fw, extra))
     log(f"{atlas_id}: built from {wt}; {ev['tus_in_worktree']}/{ev['tus']} TUs from the worktree, "
         f"0 from the main checkout; board dir {ev.get('board_dir')}")

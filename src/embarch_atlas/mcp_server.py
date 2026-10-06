@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's eight lookups as an MCP server over stdio.
+"""`embarch-atlas mcp`: the atlas's ten lookups as an MCP server over stdio.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
 too, so an agent, a script and a human get the same bytes. Files stay the primary
@@ -83,6 +83,20 @@ def build_server(atlas_dir: Path, atlas: str | None = None):
         return query.net_trace(view(), net_or_pin, board, offset)
 
     @server.tool()
+    def config(symbol: str, build: str | None = None) -> str:
+        """A Kconfig symbol (CONFIG_X or X; `USB_*` lists matches): value, the fragment that set it,
+        depends on and whether it is met, selected/implied by, the default that applies, where defined.
+        `build`: a build dir (absolute or relative to the fw repo); default the atlas's pinned build."""
+        return query.config(view(), symbol, build)
+
+    @server.tool()
+    def dt_node(node: str, build: str | None = None) -> str:
+        """A devicetree node by path, label, alias, chosen name or compatible: status, binding, the driver
+        compiled for it, whether its device is in the ELF, each property with the file:line that set it,
+        its pins, children. `build`: a build dir; default the atlas's pinned build."""
+        return query.dt_node(view(), node, build)
+
+    @server.tool()
     def mismatch_report(scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
         """Checks run and passed, then candidate mismatches between schematic, DT, driver and datasheet,
         each with evidence and what would settle it. `scope` filters by substring, `cls` by class."""
@@ -98,6 +112,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's eight lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's ten lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)

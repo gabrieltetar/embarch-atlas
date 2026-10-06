@@ -64,7 +64,7 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
          "net `B:3V3`). Mismatches are candidates for the engineer, never facts. Paths are relative to `embarch/atlas/`.", "",
          "Find: `grep -r <SYMBOL> embarch/atlas/docs/*/facts.txt` (one fact per line, with its cite and "
          "provenance). Tools: the `embarch-atlas` MCP server (part_card, doc_toc, doc_section, find_fact, "
-         "register, pin_trace, net_trace, mismatch_report), or the same as `embarch-atlas q <verb>`.", ""]
+         "register, pin_trace, net_trace, mismatch_report, config, dt_node), or the same as `embarch-atlas q <verb>`.", ""]
     c = pins.get("counts", {})
     L += ["## Files", "",
           f"- [{rel}/pins.md]({rel}/pins.md): every MCU pin -> net -> far end -> DT use -> driver; I2C identity; DT values "

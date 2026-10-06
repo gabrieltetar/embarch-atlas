@@ -32,7 +32,9 @@ every file, and a missing one becomes a question.
    schematic analysis. The MPN is the join key between the two.
 6. **Every atlas is pinned to one target + one firmware commit** and built from a
    git worktree at that commit. The engineer's working tree and build dirs are
-   never touched.
+   never written. `config` and `dt_node` may *read* a build dir the caller names, and
+   say which build answered (owner decision, 2026-10-06: branch work is mostly on
+   unpinned builds).
 7. **LLM outputs are frozen by content hash.** A re-run re-verifies; it does not
    re-ask the model. Only changed pages go back to the LLM.
 
@@ -87,6 +89,7 @@ boards/bindings.json            optional: compatible -> MPN, prop -> pin, extra 
                                 (DT property -> limit record ids, with `times`/`per` for scaled props),
                                 dt_intent (node -> why it is okay without a driver: folds dt-no-driver)
 cache/llm/<key>.json            frozen LLM outputs; second-look verdicts as sl-<key>.json
+cache/kconfig/, cache/dt/       a named build dir's kconfig/dt extraction, keyed by the content it came from
 .work/<commit12>/<fw basename>  the build worktree
 atlases/<target>@<commit12>/
   atlas.json                    the stamp (below)
@@ -94,6 +97,9 @@ atlases/<target>@<commit12>/
                                 zephyr.dts.d, zephyr_modules.txt, build_info.yml
   inputs/, inputs.json          netlist and BOM snapshots the atlas was joined against (for diff)
   dt.json                       pins, devices, buses, IRQ/EXTI from the edt
+  kconfig.json                  every Kconfig symbol: value, assigning fragment, depends on (met?),
+                                selected/implied by, the default that applies, where defined.
+                                Written by `build` while the workspace's Zephyr is the build's
   in_use.json                   peripherals: dt-okay / instantiated / touched-by-code
   pins.md, pins.json            pin/net map
   pin_slice.txt                 always-loadable slice (~1.5K tokens)
@@ -227,7 +233,7 @@ value anchors only when that record is on a page the line cites. Rendered struct
 
 ## Query surface
 
-`query.py` holds the eight lookups as plain functions returning markdown: `part_card`,
+`query.py` holds the ten lookups as plain functions returning markdown: `part_card`,
 `doc_toc` (`under` takes an id, a title, or a word of a title, which resolves to the one
 matching section that holds all the others, else lists the matches), `doc_section`,
 `find_fact` (BM25 over every `facts.txt`; a query term naming one part narrows to it like
@@ -238,7 +244,11 @@ register tabled as `<REG>_MSB` + `<REG>_LSB` bytes answers to `<REG>` as one 16-
 `pin_trace` (MCU pins, from `pins.json`), `net_trace` (any net, part pin or part on any board,
 read from the netlists through the join at query time: members across connector mates, then
 what feeds the net from datasheet pin records with `flow` only, the feeding parts' enables and
-their MCU port or pull, and the datasheets still needed), `mismatch_report`. Each answer starts with a `src:`
+their MCU port or pull, and the datasheets still needed), `mismatch_report`, `config` (a
+Kconfig symbol, or a `*` pattern) and `dt_node` (a node by path, label, alias, chosen name or
+compatible), both from the pinned build or a named build dir (`buildq.py`; a named build's
+extraction runs only while the workspace's `git describe` equals the build's `BUILD_VERSION`,
+else `config` gives the value and the fragment assignments only). Each answer starts with a `src:`
 line and is paged at a per-tool token budget with `next=<offset>`. Two doors call the
 same functions: `embarch-atlas q <verb>` and `embarch-atlas mcp` (stdio, `mcp>=2.2`,
 optional extra). Files stay the primary door: an agent's own `Read`/`Grep` reach
@@ -399,8 +409,8 @@ An atlas id is `<target>@<commit12>`.
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name; abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
-| `q <lookup>` | `query` | the eight lookups (same answers as the MCP tools) |
-| `mcp` | `mcp_server` | the eight lookups as an MCP server over stdio |
+| `q <lookup>` | `query` | the ten lookups (same answers as the MCP tools) |
+| `mcp` | `mcp_server` | the ten lookups as an MCP server over stdio |
 
 ## What an LLM step may and may not do
 
