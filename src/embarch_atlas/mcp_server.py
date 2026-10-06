@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's ten lookups as an MCP server over stdio.
+"""`embarch-atlas mcp`: the atlas's twelve lookups as an MCP server over stdio.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
 too, so an agent, a script and a human get the same bytes. Files stay the primary
@@ -97,6 +97,19 @@ def build_server(atlas_dir: Path, atlas: str | None = None):
         return query.dt_node(view(), node, build)
 
     @server.tool()
+    def footprint(build: str | None = None, vs: str | None = None, by: str = "dir") -> str:
+        """Flash image and RAM against the flash, SRAM and code partition (headroom left), then the largest
+        contributors by dir, file or symbol; `vs` (a build dir, or "pinned") gives the change against that
+        build instead. `build`: a build dir; default the atlas's pinned build."""
+        return query.footprint(view(), build, vs, by)
+
+    @server.tool()
+    def stacks(build: str | None = None) -> str:
+        """Every thread stack in the image: size, symbol, the line that defined it, and the *_STACK_SIZE
+        option it most likely comes from (inference). Static sizes; high-water marks need the board."""
+        return query.stacks(view(), build)
+
+    @server.tool()
     def mismatch_report(scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
         """Checks run and passed, then candidate mismatches between schematic, DT, driver and datasheet,
         each with evidence and what would settle it. `scope` filters by substring, `cls` by class."""
@@ -112,6 +125,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's ten lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's twelve lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)

@@ -1,4 +1,4 @@
-"""The ten atlas lookups, as plain functions returning markdown.
+"""The twelve atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import subprocess
 from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
@@ -21,7 +22,7 @@ from .pdftext import tier2_files
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000,
           "register": 1500, "pin_trace": 4000, "net_trace": 4000, "mismatch_report": 4000,
-          "config": 1500, "dt_node": 2500}
+          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500}
 
 
 # --------------------------------------------------------------------------- plumbing
@@ -155,7 +156,7 @@ def _missing(what: str, hint: str) -> str:
     return f"src: none\n\n{what} not found. {hint}\n"
 
 
-# --------------------------------------------------------------------------- the ten
+# --------------------------------------------------------------------------- the twelve
 
 def part_card(a: Atlas, part: str, board: str | None = None) -> str:
     """The part's card.md; with `board`, the refs of that part on the boards and their nets."""
@@ -662,6 +663,33 @@ def dt_node(a: Atlas, node: str, build: str | None = None) -> str:
     return _cap(_header(f"{src.label} devicetree", extra=f"query={node!r}") + body + "\n", "dt_node")
 
 
+def footprint(a: Atlas, build: str | None = None, vs: str | None = None, by: str = "dir") -> str:
+    """Flash image and RAM against the flash, SRAM and code partition the devicetree gives, then the
+    largest contributors `by` dir, file or symbol; with `vs` (a build dir, or "pinned"), the change
+    against that build instead. From the pinned build, or the build dir `build` names."""
+    from . import buildq
+    try:
+        src = buildq.source(a, build)
+        other = (buildq.pinned(a) if vs == "pinned" else buildq.named(a, vs)) if vs else None
+        body = buildq.footprint_answer(src, by, other)
+    except (LookupError, FileNotFoundError, OSError, RuntimeError, subprocess.CalledProcessError) as e:
+        return f"src: none\n\n{e}\n"
+    return _cap(_header(f"{src.label} zephyr.elf", extra=f"by={by}" + (f" vs={vs!r}" if vs else "")) + body + "\n",
+                "footprint")
+
+
+def stacks(a: Atlas, build: str | None = None) -> str:
+    """Every thread stack in the image: size, symbol, the line that defined it, the *_STACK_SIZE option
+    it most likely comes from (by inference). Static sizes only; high-water marks are live."""
+    from . import buildq
+    try:
+        src = buildq.source(a, build)
+        body = buildq.stacks_answer(src)
+    except (LookupError, FileNotFoundError, OSError, RuntimeError, subprocess.CalledProcessError) as e:
+        return f"src: none\n\n{e}\n"
+    return _cap(_header(f"{src.label} zephyr.elf") + body + "\n", "stacks")
+
+
 def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
     """Checks run and passed first, then candidates (claim, evidence, what would settle it)."""
     if not a.atlas:
@@ -699,7 +727,7 @@ def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, 
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
     "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "mismatch_report": mismatch_report,
-    "config": config, "dt_node": dt_node,
+    "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
 }
 
 
@@ -726,6 +754,10 @@ def register(sub, groups) -> None:
     add("net_trace", net_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
     add("config", config, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}))
     add("dt_node", dt_node, (["node"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}))
+    add("footprint", footprint, (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
+        (["--vs"], {"help": "compare against this build dir, or `pinned`"}),
+        (["--by"], {"choices": ["dir", "file", "symbol"], "default": "dir"}))
+    add("stacks", stacks, (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}))
     add("mismatch_report", mismatch_report, (["--scope"], {}), (["--cls"], {}), (["--offset"], {"type": int, "default": 0}))
 
 

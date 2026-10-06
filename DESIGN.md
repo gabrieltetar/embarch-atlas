@@ -90,6 +90,7 @@ boards/bindings.json            optional: compatible -> MPN, prop -> pin, extra 
                                 dt_intent (node -> why it is okay without a driver: folds dt-no-driver)
 cache/llm/<key>.json            frozen LLM outputs; second-look verdicts as sl-<key>.json
 cache/kconfig/, cache/dt/       a named build dir's kconfig/dt extraction, keyed by the content it came from
+cache/footprint/<elf sha>.json  one ELF's sections (objdump -h) and sized symbols (nm -l -S), for footprint and stacks
 .work/<commit12>/<fw basename>  the build worktree
 atlases/<target>@<commit12>/
   atlas.json                    the stamp (below)
@@ -233,7 +234,7 @@ value anchors only when that record is on a page the line cites. Rendered struct
 
 ## Query surface
 
-`query.py` holds the ten lookups as plain functions returning markdown: `part_card`,
+`query.py` holds the twelve lookups as plain functions returning markdown: `part_card`,
 `doc_toc` (`under` takes an id, a title, or a word of a title, which resolves to the one
 matching section that holds all the others, else lists the matches), `doc_section`,
 `find_fact` (BM25 over every `facts.txt`; a query term naming one part narrows to it like
@@ -246,7 +247,11 @@ read from the netlists through the join at query time: members across connector 
 what feeds the net from datasheet pin records with `flow` only, the feeding parts' enables and
 their MCU port or pull, and the datasheets still needed), `mismatch_report`, `config` (a
 Kconfig symbol, or a `*` pattern) and `dt_node` (a node by path, label, alias, chosen name or
-compatible), both from the pinned build or a named build dir (`buildq.py`; a named build's
+compatible), `footprint` (flash image and RAM from the ELF's sections, against the flash, SRAM
+and code partition the devicetree's chosen nodes give; the largest contributors by dir, file or
+symbol, or the change against another build) and `stacks` (every thread stack in `noinit`, its
+size and defining line, and the `*_STACK_SIZE` option it most likely comes from, by inference),
+all four from the pinned build or a named build dir (`buildq.py`, `footprint.py`; a named build's
 extraction runs only while the workspace's `git describe` equals the build's `BUILD_VERSION`,
 else `config` gives the value and the fragment assignments only). Each answer starts with a `src:`
 line and is paged at a per-tool token budget with `next=<offset>`. Two doors call the
@@ -409,8 +414,8 @@ An atlas id is `<target>@<commit12>`.
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name; abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
-| `q <lookup>` | `query` | the ten lookups (same answers as the MCP tools) |
-| `mcp` | `mcp_server` | the ten lookups as an MCP server over stdio |
+| `q <lookup>` | `query` | the twelve lookups (same answers as the MCP tools) |
+| `mcp` | `mcp_server` | the twelve lookups as an MCP server over stdio |
 
 ## What an LLM step may and may not do
 

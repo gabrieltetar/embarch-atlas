@@ -40,7 +40,7 @@ def _modules(zdir: Path) -> list[tuple[str, str]]:
         for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
             parts = re.findall(r'"([^"]*)"', line)
             if len(parts) >= 2:
-                out.append((parts[1], parts[0]))
+                out.append((parts[1], Path(parts[1]).name))     # tagged by dir name, as dt.rel_bases does
     return out
 
 
@@ -56,6 +56,9 @@ class Source:
         self.dt_why: str | None = None
         self.load_kconfig = lambda: None
         self.load_dt = lambda: None
+        self.elf: Path | None = None
+        self.tools: dict[str, str] = {}
+        self.cache: Path | None = None
 
     def rel(self, path: str) -> str:
         return KC._rel(path, "/", self.bases)
@@ -83,6 +86,7 @@ def pinned(a) -> Source:
         else:
             src.dt_why = f"{a.atlas.name} has no dt.json"
     src.load_kconfig, src.load_dt = load_kconfig, load_dt
+    src.elf, src.tools, src.cache = bd / "zephyr.elf", (stamp.get("build") or {}).get("tools") or {}, a.dir / "cache"
     return src
 
 
@@ -142,6 +146,8 @@ def named(a, build: str) -> Source:
         src.dt = _dt_of_build(zdir, Path(zb), bases, python)
         write_json(dc, src.dt)
     src.load_kconfig, src.load_dt = load_kconfig, load_dt
+    from .footprint import build_tools
+    src.elf, src.tools, src.cache = zdir / "zephyr" / "zephyr.elf", build_tools(zdir / "CMakeCache.txt"), cache
     return src
 
 
@@ -323,3 +329,24 @@ def dt_answer(src: Source, query: str) -> str:
     if kids:
         out.append(f"children ({len(kids)}): " + ", ".join(k.rsplit("/", 1)[-1] for k in kids[:MAX_LIST]))
     return "\n".join(out)
+
+
+# ---------------------------------------------------------------- footprint, stacks
+
+def _image(src: Source) -> dict:
+    from . import footprint as F
+    if not src.elf or not src.elf.is_file():
+        raise FileNotFoundError(f"no zephyr.elf in this build ({src.elf})")
+    return F.image(src.elf, src.tools, src.cache, src.rel)
+
+
+def footprint_answer(src: Source, by: str = "dir", vs: Source | None = None) -> str:
+    from . import footprint as F
+    src.load_dt()
+    return F.footprint_answer(_image(src), src.dt, by, _image(vs) if vs else None, vs.label if vs else "")
+
+
+def stacks_answer(src: Source) -> str:
+    from . import footprint as F
+    src.load_kconfig()
+    return F.stacks_answer(_image(src), F.dotconfig_of(src.dotconfig), (src.kconfig or {}).get("symbols"))

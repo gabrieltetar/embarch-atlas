@@ -59,6 +59,8 @@ pin → net → far-end part pin → DT node → driver) and `boards/<label>/net
 | What feeds a rail, what enables it, a net no MCU pin reaches | `net_trace <board:net>` (MCP or `embarch-atlas q net-trace`) |
 | A Kconfig symbol's value and why | `config <SYMBOL>`; add `build=<dir>` for a branch build |
 | A devicetree node: properties and where each was set, driver, pins | `dt_node <label or path>`; `build=<dir>` likewise |
+| Flash/RAM use, headroom in the code partition, what grew between two builds | `footprint` (`vs=<dir or pinned>`, `by=dir|file|symbol`) |
+| Thread stack sizes and where each is defined | `stacks` (high-water marks need the board: `kernel thread stacks`) |
 | A limit / threshold / timing | `grep -r <SYMBOL> embarch/atlas/docs/*/facts.txt`, then the section |
 | A register or field of an external part | `docs/<doc>/s/` register section, or `grep` the register name in `facts.txt` |
 | An MCU register or field | `docs/<svd-doc>/s/<PERIPH>.md`; conflicts between the SVD and the RM are `conflict` records under the RM doc |

@@ -22,7 +22,7 @@ For one board and one firmware commit, an atlas under `<fw>/embarch/atlas/` (git
   strap, pinctrl vs net names, DT values vs BOM, driver register constants vs the
   datasheet's register map, SVD vs reference manual, a blind second reading of the facts
   the join depends on.
-- **Queries** over all of it: `embarch-atlas q ...` and the same ten lookups as an MCP
+- **Queries** over all of it: `embarch-atlas q ...` and the same twelve lookups as an MCP
   server.
 - **A map for humans** (`graph.json`, drawn by embarch-ui's Atlas tab): app, middleware,
   drivers, SoC pins and every part on every board as a generic schematic symbol, each pin
