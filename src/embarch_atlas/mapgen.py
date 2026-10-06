@@ -62,8 +62,9 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
          "Protocol: MAP -> CARD -> section -> page. Read a part's card, then the section it points to, then the PDF page "
          "(`Read` with `pages=`) to verify. Cite every fact as `<doc_id> p<N>`; board keys are board-qualified (`B:U1-12`, "
          "net `B:3V3`). Mismatches are candidates for the engineer, never facts. Paths are relative to `embarch/atlas/`.", "",
-         "Find: `grep -r <SYMBOL> embarch/atlas/docs/*/facts.txt` (one fact per line, with its cite and "
-         "provenance). Tools: the `embarch-atlas` MCP server (part_card, doc_toc, doc_section, find_fact, "
+         "Find: `find_fact` searches the records and the distilled prose; by hand, `grep -r <SYMBOL> "
+         "embarch/atlas/docs/*/facts.txt embarch/atlas/docs/*/s/` (facts.txt alone misses what a "
+         "distillation wrote only as prose). Tools: the `embarch-atlas` MCP server (part_card, doc_toc, doc_section, find_fact, "
          "register, pin_trace, net_trace, mismatch_report, config, dt_node, footprint, stacks), or the same as "
          "`embarch-atlas q <verb>`.", ""]
     c = pins.get("counts", {})

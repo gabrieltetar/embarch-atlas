@@ -237,7 +237,8 @@ value anchors only when that record is on a page the line cites. Rendered struct
 `query.py` holds the twelve lookups as plain functions returning markdown: `part_card`,
 `doc_toc` (`under` takes an id, a title, or a word of a title, which resolves to the one
 matching section that holds all the others, else lists the matches), `doc_section`,
-`find_fact` (BM25 over every `facts.txt`; a query term naming one part narrows to it like
+`find_fact` (BM25 over every `facts.txt` and the distilled prose of `card.md` and `s/*.md`
+outside rendered tables, as `kind=prose` lines; a query term naming one part narrows to it like
 `part`; with no `limit`, the best 10 hits scoring at least 0.4 of the top one, and the
 header names the query terms no fact contains), `register` (MCU `PERIPH.REG` or
 `<part>.<REG>`, twins merged, rules/quirks/conflicts and firmware references joined; a

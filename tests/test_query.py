@@ -175,6 +175,22 @@ def test_register_byte_pair_is_one_16_bit_view(atlas_dir):
     assert "width=8" in query.register_lookup(a, "demo-bb.CHGOPT_LSB")
 
 
+def test_find_fact_reaches_prose_but_not_rendered_tables(atlas_dir):
+    d = atlas_dir / "docs" / "demo-bb@A" / "s"
+    write_text(d / "7.must.md", "# Must\n\n4. Keep the bus master clocked, or a debugger read during sleep returns zero [p.9].\n")
+    write_text(d / "7.fields.md", "- generated field list mentioning sleep and debugger reads [p.9]\n")
+    write_text(d / "8.md", "Intro line long enough to count as prose.\n<!-- atlas:table limit -->\n"
+                           "| debugger | sleep | zero |\n<!-- atlas:end -->\n")
+    a = query.Atlas(atlas_dir)
+    out = query.find_fact(a, "debugger read during sleep")
+    assert out.splitlines()[0].startswith("src: facts.txt + prose")
+    assert "demo-bb@A s/7.must.md:3 kind=prose; text=Keep the bus master clocked" in out
+    assert "7.fields.md" not in out and "| debugger | sleep |" not in out
+    only = query.find_fact(a, "debugger sleep", kind="prose")
+    assert only.splitlines()[0].startswith("src: prose") and "demo-bb.ec" not in only
+    assert "kind=prose" not in query.find_fact(a, "OVP threshold", kind="limit")
+
+
 def test_register_merges_twins_and_joins_quirks(atlas_dir):
     out = query.register_lookup(query.Atlas(atlas_dir), "demo-bb.MODE")
     assert out.count("- OE[7]") == 1

@@ -125,10 +125,21 @@ Tier 2, distilled. Register and field names are SVD names.
 - **programming sequences** as numbered steps (init, reset, the transfer flows, recovery), from the
   RM's flowcharts and prose, each step cited;
 - **must-notes**: the RM's "must", "only when", "not allowed" statements that matter across
-  registers (field-level ones are already in `s/<ch>.fields.md`; do not copy them, point to them);
+  registers (field-level ones are already in `s/<ch>.fields.md`; do not copy them, point to them).
+  **Each must-note that names a register or field also goes into `records/must.jsonl`** (kind
+  `rule`; `rule.jsonl` is `mcu vote`'s and is never edited), id
+  `<rm slug>.rule.<chapter>.<slug>`, with `p`, a verbatim `q`, `text`, and `refs` to the SVD ids it
+  names (e.g. a must-note about keeping a DMA clock on refs `<svd>.reg.RCC.AHBENR.DMA1EN`). Prose
+  alone is searchable, but only a record shows up under that register's `register` lookup, which
+  is where an agent touching the register looks;
 - **quirks**, each checked against a second source (another RM section, the SVD, the header, the
   `conflict` records): the RM contradicting itself, a mux named after another block, an interrupt
-  line shared between instances, vocabulary that differs between RM and SVD (search both). A quirk
+  line shared between instances, vocabulary that differs between RM and SVD (search both). **Two
+  shapes are always quirks, never only must-notes:** a sentence that takes back a general statement
+  nearby ("Sleep mode does not impose any restrictions" followed by "the debugger read access to
+  SRAM during Sleep mode is not possible"), and any condition under which a read or an access
+  silently returns a wrong value instead of failing ("returns 0x0"). Those are the facts an agent
+  debugging hardware needs and will not think to look up. A quirk
   also goes into `records/quirk.jsonl` as a record with `p` and a verbatim `q`, id
   `<rm slug>.quirk.<chapter>.<slug>`.
 

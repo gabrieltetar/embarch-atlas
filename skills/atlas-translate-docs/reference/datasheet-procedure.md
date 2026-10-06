@@ -156,7 +156,10 @@ Field notes:
   `<NAME>_LSB` / `<NAME>_MSB`, and a split field `<FIELD>_<hi>_<lo>` (absolute bits). `reset` in
   binary (`0b...`, the field's width) or hex (`0x...`), `null` when undefined. `access` in SystemRDL
   terms: `rw`, `ro`, `wo`, `rclr` (clears on read), `woclr`, `w1s`.
-- **quirk**: `class` is one of `table-vs-table`, `text-vs-table`, `text-vs-figure`, `figure-only`,
+- **quirk**: a sentence that takes back a general statement nearby ("no restrictions" followed by
+  an exception), and any condition under which a read or an access silently returns a wrong value
+  instead of failing, are always quirks: the facts an agent debugging hardware needs and will not
+  think to look up. `class` is one of `table-vs-table`, `text-vs-table`, `text-vs-figure`, `figure-only`,
   `footnote-condition`, `silent-default`, `must`, `do-not`, `absence`, `variant`, `doc-artefact`,
   `not-prod-tested`, `narrow-condition`, `provenance`. `refs` point at the records it compares; the
   checker resolves them.

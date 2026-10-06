@@ -311,6 +311,41 @@ def doc_section(a: Atlas, doc: str, section: str | None = None, page: int | None
 _TOKEN = re.compile(r"[A-Za-z0-9_]+")
 
 
+PROSE_TABLE_START = re.compile(r"^<!--\s*atlas:table\b")
+PROSE_TABLE_END = re.compile(r"^<!--\s*atlas:end\s*-->")
+PROSE_MIN_CHARS = 24   # a prose line shorter than this is a label, not a fact
+
+
+def _prose_lines(d: Path) -> list[str]:
+    """A document's distilled prose as find_fact lines: every line of `card.md` and `s/*.md` that
+    states something, outside the rendered `atlas:table` blocks and the generated `*.fields.md`
+    (both are records, already in facts.txt), as `<doc> <file>:<line> kind=prose; text=<line>`.
+
+    Without it a fact the distillation wrote only as prose — a must-note, a step, a caveat — is in
+    the atlas and unreachable by search: a reference manual's "debugger read access to SRAM during
+    Sleep mode is not possible" sat in a chapter's section file and must-list while find_fact
+    answered `unmatched=debug,debugger`."""
+    files = ([d / "card.md"] if (d / "card.md").is_file() else []) + sorted((d / "s").glob("*.md"))
+    out = []
+    for f in files:
+        if f.name.endswith(".fields.md"):
+            continue
+        rel = f.relative_to(d).as_posix()
+        inside = False
+        for i, raw in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            if PROSE_TABLE_START.match(raw):
+                inside = True
+                continue
+            if PROSE_TABLE_END.match(raw):
+                inside = False
+                continue
+            line = re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", raw).strip()
+            if inside or not line or line.startswith("#") or len(line) < PROSE_MIN_CHARS:
+                continue
+            out.append(f"{d.name} {rel}:{i} kind=prose; text={line}")
+    return out
+
+
 FIND_FACT_LIMIT = 10   # hits shown when the caller gives no limit
 FIND_FACT_FLOOR = 0.4  # ... and only those scoring at least this fraction of the top hit
 
@@ -348,8 +383,9 @@ def _query_part(a: Atlas, terms: list[str]) -> tuple[Path | None, set[str]]:
 
 def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = None,
               limit: int | None = None) -> str:
-    """Lines of facts.txt ranked lexically (BM25) across every document, each with its cite.
-    A query term naming one part narrows the search to it, as `part` does. With no `limit`, shows
+    """Lines of facts.txt, and of the distilled prose (`kind=prose`), ranked lexically (BM25)
+    across every document, each with its cite. A query term naming one part narrows the search to
+    it, as `part` does. With no `limit`, shows
     up to FIND_FACT_LIMIT hits scoring at least FIND_FACT_FLOOR of the top one; a `limit` lists
     exactly that many, past the floor."""
     q = [t.lower() for t in _TOKEN.findall(query)]
@@ -371,10 +407,12 @@ def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = 
     lines = []
     for d in docs:
         f = d / "facts.txt"
-        if f.is_file():
+        if f.is_file() and kind != "prose":
             for ln in f.read_text(encoding="utf-8").splitlines():
                 if ln.strip() and (not kind or f"kind={kind};" in ln or f"kind={kind} " in ln):
                     lines.append(ln)
+        if not kind or kind == "prose":
+            lines += _prose_lines(d)
     toks = [[t.lower() for t in _TOKEN.findall(ln)] for ln in lines]
     n = len(toks) or 1
     avg = sum(map(len, toks)) / n if toks else 1
@@ -396,7 +434,7 @@ def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = 
     else:
         hits = [ln for _, ln in scored[: max(1, limit)]]
     unmatched = [t for t in dict.fromkeys(q) if not df[t]]
-    head = _header(f"facts.txt ({len(docs)} docs)",
+    head = _header(f"facts.txt + prose ({len(docs)} docs)" if kind != "prose" else f"prose ({len(docs)} docs)",
                    extra=f"query={query!r}{narrowed} hits={len(scored)} shown={len(hits)}"
                    + (f" unmatched={','.join(unmatched)}" if unmatched else ""))
     body = "\n".join(hits) if hits else "(no fact matches; try a symbol, or doc_toc + doc_section)"
