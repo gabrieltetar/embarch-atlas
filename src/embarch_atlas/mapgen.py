@@ -66,7 +66,8 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
          "embarch/atlas/docs/*/facts.txt embarch/atlas/docs/*/s/` (facts.txt alone misses what a "
          "distillation wrote only as prose). Tools: the `embarch-atlas` MCP server (part_card, doc_toc, doc_section, find_fact, "
          "register, pin_trace, net_trace, mismatch_report, config, dt_node, footprint, stacks), or the same as "
-         "`embarch-atlas q <verb>`.", ""]
+         "`embarch-atlas q <verb>`. Live, when embarch-core answers: `reg_read PERIPH[.REG]` reads an MCU register "
+         "on the board (core halted a few ms) and decodes it; `embarch-atlas live reg-read`.", ""]
     c = pins.get("counts", {})
     L += ["## Files", "",
           f"- [{rel}/pins.md]({rel}/pins.md): every MCU pin -> net -> far end -> DT use -> driver; I2C identity; DT values "
