@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from . import common
 
 KINDS = ("limit", "timing", "pin", "rule", "register", "field", "quirk", "figure", "strap",
-         "passthrough", "requirement", "conflict", "check")
+         "passthrough", "requirement", "conflict", "check", "bus")
 PROV = ("deterministic", "deterministic+crosschecked", "llm-verified", "llm-unverified",
         "engineer-declared", "engineer-confirmed", "measured")
 DETERMINISTIC = ("deterministic", "deterministic+crosschecked")
@@ -43,6 +43,7 @@ FACT_KEYS = {
     "requirement": ("rid", "modality", "priority", "order", "text", "fw_relevant"),
     "conflict": ("refs", "sources", "text"),
     "check": ("expr", "expect", "why"),
+    "bus": ("iface", "byte_order", "reg_addr_bytes", "windows"),
 }
 _SKIP_IN_FACTS = {"id", "kind", "doc", "p", "q", "prov", "fn", "note", "src"}
 

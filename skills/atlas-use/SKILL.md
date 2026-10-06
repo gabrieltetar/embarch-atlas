@@ -65,6 +65,8 @@ pin → net → far-end part pin → DT node → driver) and `boards/<label>/net
 | A register or field of an external part | `docs/<doc>/s/` register section, or `grep` the register name in `facts.txt` |
 | An MCU register or field | `docs/<svd-doc>/s/<PERIPH>.md`; conflicts between the SVD and the RM are `conflict` records under the RM doc |
 | What an MCU register holds on the running board | `reg_read PERIPH.REG` (or a whole `PERIPH`), listed when embarch-core answers: read through Core with the core halted about 20 ms, decoded field by field; a read-to-clear register is refused unless `allow_clear` |
+| What an external part's register holds on the board | `reg_read <DT label>.<REG>` (or a whole small part): the shell's `i2c read` through Core, decoded against the datasheet; a device that does not answer is reported with its `device list` state |
+| A command on the board's shell | `shell <command>` (Core's exchange on the role's console), not a hand-written serial script |
 | How an MCU peripheral must be programmed | `docs/<rm-doc>/s/<ch>.must.md`, then the section |
 | Does DT/driver agree with the board | `atlases/<id>/checks.md` |
 | A product requirement | `docs/<prd-doc>/s/`, `facts.txt` (`requirement` records) |

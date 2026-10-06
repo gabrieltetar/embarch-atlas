@@ -43,6 +43,7 @@ CHECKED = {
     "rule": ("cond", "text", "steps"),
     "figure": ("fig", "caption", "what"),
     "passthrough": ("from_pin", "to_pin", "when"),
+    "bus": ("iface", "byte_order", "reg_addr_bytes", "windows"),
 }
 VERDICTS = ("confirmed", "conflict", "unresolved")
 SKIP_PROV = ("deterministic", "deterministic+crosschecked", "engineer-declared", "engineer-confirmed", "measured")
@@ -89,6 +90,8 @@ def reasons(r: dict, join_kinds: set[str]) -> list[str]:
         why.append("quirk")
     if kind in ("register", "field"):
         why.append("register semantics")
+    if kind == "bus":
+        why.append("bus framing read by the live module")
     if kind in join_kinds:
         why.append(f"{kind} fact read by the join")
     return why
@@ -120,6 +123,9 @@ def ask(r: dict) -> str:
         return f"pin {r.get('pin')}: name, direction, type (open-drain / push-pull / analog / supply), active level{io}{flow}"
     if k == "rule":
         return f"the behaviour rule on this page about: {r.get('cond') or (r.get('text') or '')[:80]}"
+    if k == "bus":
+        return (f"the {r.get('iface') or 'serial'} interface: the byte order of a multi-byte register on the bus, "
+                "how many register-address bytes the host sends, and which bus address serves which register range")
     return f"re-read record {r.get('id')}"
 
 
@@ -448,7 +454,10 @@ or "unstated"; an overlined name gets a -bar suffix; flow only when asked: sourc
 other parts use: a regulator or switch output), sink (draws power: a supply or switch input), bidir (either
 way by mode), sense (only measures a rail), local (a node of the part's own: a switching node, a bootstrap,
 an internal regulator output that only takes a bypass capacitor), or "unstated"); field {"bits":[hi,lo],"reset","access"};
-register {"addr","width","reset","access"}; figure {"numbers":[every number on it with its unit]}.
+register {"addr","width","reset","access"}; figure {"numbers":[every number on it with its unit]};
+bus {"byte_order": "lsb-first"|"msb-first"|"unstated", "reg_addr_bytes", "windows": [{"from","to","addr"}]}
+(addr as a 7-bit hex address; when the part answers at more than one bus address, one window per register
+range with the address that serves it, every range included; else no windows).
 "claim" is only for quirk and rule items: does the page support or contradict the statement?"""
 
 
@@ -500,6 +509,19 @@ def _addr(v):
         return int(m[1] or m[2], 2)
     m = re.search(r"0x([0-9a-f]+)|\b([0-9a-f]+)h\b", s, re.I)
     return int(m[1] or m[2], 16) if m else _num(v)
+
+
+def bus_windows(ws) -> list[tuple]:
+    """(from, to, addr) per window, sorted, with adjacent ranges at one address merged: a table that
+    splits one address's range by protocol (SMBus, then I2C) states the same mapping."""
+    rows = sorted((_addr(w.get("from")), _addr(w.get("to")), _addr(w.get("addr"))) for w in ws or [])
+    out: list[list] = []
+    for f, to, a in rows:
+        if out and a == out[-1][2] and None not in (f, out[-1][1]) and f == out[-1][1] + 1:
+            out[-1][1] = to
+        else:
+            out.append([f, to, a])
+    return [tuple(x) for x in out]
 
 
 def _same_address(a: int, b: int) -> bool:
@@ -710,6 +732,19 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
         acc = lambda x: re.sub(r"[^a-z0-9]", "", str(x or "").lower()).replace("rw", "rw")
         if first.get("access") and vals.get("access") and acc(first["access"]) != acc(vals["access"]):
             diffs.append(f"access: first {first['access']!r} vs second {vals['access']!r}")
+    elif k == "bus":
+        a, b = str(first.get("byte_order") or ""), str(vals.get("byte_order") or "")
+        if b == "unstated" or not b:
+            soft.append(f"byte_order: first {a!r}, the second reader found it unstated")
+        elif a != b:
+            diffs.append(f"byte_order: first {a!r} vs second {b!r}")
+        if first.get("reg_addr_bytes") is not None and vals.get("reg_addr_bytes") is not None \
+                and _num(first["reg_addr_bytes"]) != _num(vals["reg_addr_bytes"]):
+            diffs.append(f"reg_addr_bytes: first {first['reg_addr_bytes']!r} vs second {vals['reg_addr_bytes']!r}")
+        fw, sw = bus_windows(first.get("windows")), bus_windows(vals.get("windows"))
+        if len(fw) != len(sw) or any(a[:2] != b[:2] or None in (a[2], b[2]) or not _same_address(a[2], b[2])
+                                     for a, b in zip(fw, sw)):
+            diffs.append(f"windows: first {first.get('windows')} vs second {vals.get('windows')}")
     elif k == "figure":
         # Only quantities with a unit are figure facts; bare numbers in a description are mostly
         # figure, table, pin or part numbers. Axis ticks and labels are read exactly, so overlap

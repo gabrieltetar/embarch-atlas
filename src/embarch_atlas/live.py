@@ -10,8 +10,13 @@ name unless the caller passes `allow_clear`, and a whole-peripheral read leaves 
 a field the SVD marks `readAction` (kept as access=rclr), and a reference-manual field that says it
 is cleared by reading another register ("cleared by reading the USART_RDR register").
 
+External parts' registers go through the board's shell instead: `shell()` runs one command on
+the console signal the role declares (Core's exchange route), and `reg_read <part>.<REG>` turns a
+register record into `i2c read` commands for the bus and address the devicetree gives, reads the
+part's `bus` record for its byte order and address windows, and decodes the bytes the same way.
+
 Off unless Core answers: `available()` asks `embarch-api status`, and the MCP server lists
-`reg_read` only when it does.
+`reg_read` and `shell` only when it does.
 """
 from __future__ import annotations
 
@@ -30,6 +35,18 @@ MAX_RANGES = 32
 GAP_WORDS = 8
 STATUS_TIMEOUT_S = 8
 READ_TIMEOUT_S = 90
+
+# Exchanges per external read: one per register (a 16-bit pair is two).
+MAX_EXCHANGES = 24
+EXCHANGE_TIMEOUT_MS = 3000
+DEFAULT_PROMPT = "uart:~$ "
+_CURSOR_RIGHT = re.compile(r"\x1b\[(\d+)C")
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# A part's own register or field text saying a read clears it ("cleared by reading ALERT_DIAG",
+# "does not reset until it is read", "reading 07h clears them").
+READ_CLEARS_TEXT = re.compile(
+    r"\b(?:clear\w*|reset\w*)\s+(?:\w+\s+){0,3}?(?:by|upon|on|after|when)\s+(?:a\s+|any\s+)?read"
+    r"|\buntil\s+(?:it\s+is\s+)?read\b|\breading\s+(?:\S+\s+){0,3}?clears\b", re.I)
 
 # "<REG.FIELD> is cleared by reading <REG>", in the wordings a reference manual uses.
 _TOK = r"(?:the\s+)?([A-Z][A-Za-z0-9]*_[A-Za-z0-9_]*[A-Za-z0-9])"
@@ -265,10 +282,26 @@ def _int(x) -> int | None:
         return None
 
 
+def _enum_key(k) -> int | None:
+    """An enum key as a number: "1", "0x1", "1h" (hex), "01b" (binary)."""
+    s = str(k).strip()
+    try:
+        if re.fullmatch(r"[0-9A-Fa-f]+h", s):
+            return int(s[:-1], 16)
+        if re.fullmatch(r"[01]+b", s):
+            return int(s[:-1], 2)
+        return int(s, 0)
+    except ValueError:
+        return None
+
+
 def _enum(f: dict, v: int) -> str:
+    """The enum name for `v`, whichever way the record keys it."""
     e = f.get("enum") or {}
-    text = e.get(str(v))
-    return re.sub(r"^B_0x[0-9A-Fa-f]+:\s*", "", text) if text else ""
+    if not isinstance(e, dict):
+        return ""
+    text = next((val for k, val in e.items() if _enum_key(k) == v), None)
+    return re.sub(r"^B_0x[0-9A-Fa-f]+:\s*", "", str(text)) if text else ""
 
 
 def _rng(f: dict) -> str:
@@ -318,16 +351,14 @@ def decode(reg: dict, v: int, fields: list[dict], all_fields: bool) -> list[str]
 def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None) -> str:
     """`PERIPH.REG` or a whole `PERIPH` read on the running board, decoded field by field."""
     svds = _docs_of_kind(atlas_dir, "svd")
-    if not svds:
-        return "src: none\n\nNo SVD in this atlas; reg_read decodes MCU registers only.\n"
-    svd = Svd(svds[0])
     head = target.partition(".")[0]
+    svd = Svd(svds[0]) if svds else None
+    if svd is None or _norm(head) not in svd.periphs():
+        return ext_reg_read(atlas_dir, target, allow_clear, role)
     try:
         periph, regs = svd.resolve(target)
     except LookupError as e:
-        hint = (" External parts' registers are read through the live shell, which is not built yet."
-                if head and _norm(head) not in svd.periphs() else "")
-        return f"src: none\n\n{e}.{hint}\n"
+        return f"src: none\n\n{e}.\n"
     clears = rm_clears(_docs_of_kind(atlas_dir, "reference-manual"))
     effects = {r["id"]: side_effects(r, svd.fields.get(r["id"], []), clears) for r in regs}
     guarded = [r for r in regs if effects[r["id"]]]
@@ -376,11 +407,330 @@ def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str 
     return "\n".join(out) + "\n"
 
 
+# --------------------------------------------------------------------------- the live shell
+
+def consoles(s: dict[str, Any], role: str) -> list[str]:
+    """The role's console signals: `[live] console` when set, else every direct signal of the role
+    that Core may write (bidirectional or host-to-dut), by name."""
+    out = call_api(s, ["list-signals"], STATUS_TIMEOUT_S).get("signals") or []
+    return sorted(x["name"] for x in out if x.get("origin_role") == role
+                  and x.get("direction") in ("bidirectional", "host-to-dut")
+                  and (x.get("route") or {}).get("kind") == "direct")
+
+
+def prompt_of(atlas_dir: Path) -> str:
+    """The shell prompt the pinned build was configured with, else Zephyr's default."""
+    from .query import current_atlas
+    try:
+        atlas = current_atlas(Path(atlas_dir), None)
+        sym = json.loads((atlas / "kconfig.json").read_text(encoding="utf-8"))["symbols"]["SHELL_PROMPT_UART"]
+        return sym.get("v") or DEFAULT_PROMPT
+    except (OSError, ValueError, KeyError, TypeError):
+        return DEFAULT_PROMPT
+
+
+def clean(text: str, command: str, prompt: str) -> str:
+    """The command's output alone: escape codes out (a cursor move kept as spaces), the echo and
+    everything before it dropped, the closing prompt dropped."""
+    t = _ANSI.sub("", _CURSOR_RIGHT.sub(lambda m: " " * int(m[1]), text)).replace("\r", "")
+    echo = t.find(command + "\n")
+    if echo >= 0:
+        t = t[echo + len(command) + 1:]
+    p = prompt.rstrip()
+    t = t.rstrip()
+    if p and t.endswith(p):
+        t = t[: -len(p)]
+    return t.rstrip("\n") + "\n"
+
+
+class Console:
+    """One role's shell, through Core: each `run` is one exchange (the port opened and closed)."""
+
+    def __init__(self, atlas_dir: Path, role: str | None = None):
+        from .project import load_config
+        self.s = settings(atlas_dir)
+        self.role = role or self.s["role"]
+        try:
+            pinned = ((load_config(atlas_dir).get("live") or {}).get("console"))
+        except FileNotFoundError:
+            pinned = None
+        self.names = [pinned] if pinned else consoles(self.s, self.role)
+        if not self.names:
+            raise LiveError(f"no console signal is declared for the role '{self.role}' (declare_signal, "
+                            "direction bidirectional, direct route), or set [live] console")
+        self.prompt = prompt_of(atlas_dir)
+        self.used: dict[str, Any] = {}
+
+    def run(self, command: str, timeout_ms: int = EXCHANGE_TIMEOUT_MS) -> str:
+        last = None
+        for name in self.names:
+            try:
+                ex = call_api(self.s, ["signal-exchange", "--name", name, "--write", command, "--until",
+                                       self.prompt, "--timeout-ms", str(timeout_ms)], READ_TIMEOUT_S)["exchange"]
+            except LiveError as e:   # declared but not enumerable now: try the next console
+                last = e
+                continue
+            self.used = {"signal": ex.get("signal"), "port": ex.get("port"), "prompt_seen": ex.get("until_seen")}
+            return clean(ex.get("text") or "", command, self.prompt)
+        raise last or LiveError("no console answered")
+
+    def src(self) -> str:
+        u = self.used
+        return f"live {self.role} shell via embarch-core (signal {u.get('signal')}, {u.get('port')})"
+
+
+def shell(atlas_dir: Path, command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
+    """One shell command on the role's console, its output with escape codes stripped."""
+    try:
+        con = Console(atlas_dir, role)
+        out = con.run(command, min(int(timeout_ms or EXCHANGE_TIMEOUT_MS), 10_000))
+    except LiveError as e:
+        return f"src: none\n\nThe command did not run: {e}\n"
+    tail = "" if con.used.get("prompt_seen") else (f"\n(no prompt within the timeout: the output may be cut; "
+                                                   "pass a longer timeout_ms)\n")
+    return f"src: {con.src()}\n\n{out}{tail}"
+
+
+# --------------------------------------------------------------------------- external registers
+
+def i2c_instances(atlas_dir: Path) -> list[dict]:
+    """Every I2C device the atlas's join tied to a part: node, labels, bus device, address, docs."""
+    from .query import current_atlas
+    atlas = current_atlas(Path(atlas_dir), None)
+    if atlas is None:
+        return []
+    try:
+        pins = json.loads((atlas / "pins.json").read_text(encoding="utf-8"))
+        nodes = json.loads((atlas / "dt.json").read_text(encoding="utf-8")).get("nodes") or {}
+    except (OSError, ValueError):
+        return []
+    part_docs = pins.get("part_docs") or {}
+    out = []
+    for bus in (pins.get("i2c") or {}).get("buses") or []:
+        for fam in bus.get("families") or []:
+            for dt in fam.get("dt") or []:
+                parts = [p for p in fam.get("parts") or [] if dt.get("reg") in (p.get("addrs") or [])]
+                docs = sorted({d for p in parts for d in part_docs.get(p.get("part"), [])})
+                node = dt.get("node") or ""
+                labels = (nodes.get(node) or {}).get("labels") or [] if isinstance(nodes, dict) else []
+                out.append({"node": node, "name": node.rsplit("/", 1)[-1], "labels": labels,
+                            "bus": bus.get("bus"), "bus_dev": str(bus.get("bus") or "").rsplit("/", 1)[-1],
+                            "addr": dt.get("reg"), "compat": fam.get("compat"),
+                            "refs": [p.get("part") for p in parts], "docs": docs})
+    return out
+
+
+def _instance(atlas_dir: Path, head: str) -> tuple[dict | None, str]:
+    """The I2C device `head` names (a DT label, a node name, or a part when it has one instance)."""
+    from .query import Atlas
+    insts = i2c_instances(atlas_dir)
+    h = head.lower()
+    exact = [i for i in insts if h in [x.lower() for x in i["labels"]] or h in (i["name"].lower(), i["node"].lower(),
+                                                                             i["name"].split("@")[0].lower())]
+    if len(exact) == 1:
+        return exact[0], ""
+    doc = Atlas(Path(atlas_dir)).find_doc(head)
+    mine = [i for i in insts if doc is not None and doc.name in i["docs"]]
+    if len(mine) == 1:
+        return mine[0], ""
+    pick = exact or mine
+    if pick:
+        rows = ", ".join(f"{(i['labels'] or [i['name']])[0]} ({i['bus_dev']} 0x{i['addr']:02X})" for i in pick)
+        return None, f"{head!r} is {len(pick)} devices on the board; name one by its DT label: {rows}"
+    if doc is not None:
+        return None, f"no I2C device of {doc.name} in this build's devicetree"
+    return None, f"no MCU peripheral, DT label or part named {head!r}"
+
+
+def _ext_regs(doc: Path, reg: str | None) -> list[list[dict]]:
+    """Registers of the part to read, each as its records: one, or an `_LSB` + `_MSB` pair."""
+    regs = [r for r in _jsonl(doc / "records" / "register.jsonl") if r.get("kind") == "register"]
+    if reg is None:
+        pairs: dict[str, dict] = {}
+        out = []
+        for r in sorted(regs, key=lambda r: _addr(r) or 0):
+            m = re.match(r"(.+)_(LSB|MSB)$", r.get("name") or "", re.I)
+            if m:
+                pairs.setdefault(m[1], {})[m[2].upper()] = r
+                if len(pairs[m[1]]) == 2:
+                    out.append([pairs[m[1]]["LSB"], pairs[m[1]]["MSB"]])
+            else:
+                out.append([r])
+        return out
+    rn = _norm(reg)
+    one = [r for r in regs if _norm(r.get("name")) == rn]
+    if one:
+        return [one[:1]]
+    lsb = [r for r in regs if _norm(r.get("name")) == rn + "lsb"]
+    msb = [r for r in regs if _norm(r.get("name")) == rn + "msb"]
+    if lsb and msb:
+        return [[lsb[0], msb[0]]]
+    names = ", ".join(sorted({re.sub(r"_(LSB|MSB)$", "", r.get("name") or "") for r in regs})[:60])
+    raise LookupError(f"no register {reg!r} in {doc.name}; it has: {names}")
+
+
+def _bus(doc: Path) -> dict:
+    for r in _jsonl(doc / "records" / "bus.jsonl"):
+        if r.get("kind") == "bus" and str(r.get("iface") or "").lower() in ("i2c", "smbus"):
+            return r
+    return {}
+
+
+def _route(bus: dict, inst: dict, reg_addr: int) -> tuple[int, int]:
+    """(bus address, register byte) for a register address, through the bus record's windows."""
+    for w in bus.get("windows") or []:
+        lo, hi = _int(w.get("from")), _int(w.get("to"))
+        if lo is not None and hi is not None and lo <= reg_addr <= hi:
+            return _int(w.get("addr")), reg_addr - (_int(w.get("base")) if w.get("base") else lo)
+    return inst["addr"], reg_addr
+
+
+def _ext_effects(doc: Path, recs: list[dict]) -> list[str]:
+    ids = {r.get("id") for r in recs}
+    why = []
+    by_cite: dict[str, list[str]] = {}
+    for f in _jsonl(doc / "records" / "field.jsonl"):
+        if f.get("reg") not in ids:
+            continue
+        text = " ".join(str(f.get(k) or "") for k in ("desc", "q"))
+        if "clr" in str(f.get("access") or "") or READ_CLEARS_TEXT.search(text):
+            by_cite.setdefault(f"{f.get('doc')} p{f.get('p')}", []).append(str(f.get("name")))
+    why += [f"{', '.join(names)} {'clears' if len(names) == 1 else 'clear'} on the read ({cite})"
+            for cite, names in by_cite.items()]
+    for r in recs:
+        if READ_CLEARS_TEXT.search(" ".join(str(r.get(k) or "") for k in ("desc", "q", "summary"))):
+            why.append(f"the register's text says a read clears it ({r.get('doc')} p{r.get('p')})")
+    for r in _jsonl(doc / "records" / "rule.jsonl") + _jsonl(doc / "records" / "quirk.jsonl"):
+        named = ids & set(r.get("refs") or []) or r.get("reg") in ids
+        if named and READ_CLEARS_TEXT.search(" ".join(str(r.get(k) or "") for k in ("text", "q"))):
+            why.append(f"{r.get('id')} ({r.get('doc')} p{r.get('p')})")
+    return list(dict.fromkeys(why))
+
+
+_HEX_LINE = re.compile(r"^[0-9A-Fa-f]{8}:\s+((?:[0-9a-f]{2}\s+)+)", re.M)
+
+
+def _parse_read(out: str, n: int) -> list[int]:
+    if n == 1:
+        m = re.search(r"Output:\s*0x([0-9a-fA-F]+)", out)
+        if m:
+            return [int(m[1], 16)]
+    data = [int(b, 16) for line in _HEX_LINE.findall(out) for b in line.split()]
+    if len(data) >= n:
+        return data[:n]
+    raise LiveError(out.strip().splitlines()[-1] if out.strip() else "no answer from the shell")
+
+
+def _device_state(con: Console, inst: dict) -> str:
+    try:
+        out = con.run("device list")
+    except LiveError:
+        return ""
+    m = re.search(r"^- " + re.escape(inst["name"]) + r" \(([^)]*)\)", out, re.M)
+    return m[1] if m else ""
+
+
+def _ext_decode(recs: list[dict], v: int, fields_of: dict[str, list[dict]], label: str,
+                all_fields: bool) -> list[str]:
+    """One register or an LSB/MSB pair as one value, decoded like an MCU register."""
+    if len(recs) == 1:
+        r = dict(recs[0])
+        fields = fields_of.get(r.get("id"), [])
+    else:
+        lsb, msb = recs
+        name = re.sub(r"_(LSB|MSB)$", "", lsb.get("name") or "", flags=re.I)
+        rl, rm_ = _int(lsb.get("reset")), _int(msb.get("reset"))
+        r = {"name": name, "addr": f"{lsb.get('addr')}+{msb.get('addr')}", "width": 16,
+             "reset": f"0x{(rm_ << 8) | rl:04X}" if rl is not None and rm_ is not None else None}
+        fields = fields_of.get(lsb.get("id"), []) + [dict(f, bits=[b + 8 for b in f.get("bits") or []])
+                                                       for f in fields_of.get(msb.get("id"), [])]
+        fields.sort(key=lambda f: -((f.get("bits") or [0])[0]))
+    r["id"] = f"x.reg.{label}.{r.get('name')}"
+    return decode(r, v, fields, all_fields)
+
+
+def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None) -> str:
+    """`<label or part>.<REG>`, or a whole small part, read with `i2c read` on the board's shell."""
+    from .query import Atlas
+    head, _, reg = target.partition(".")
+    inst, why = _instance(atlas_dir, head)
+    if inst is None:
+        return f"src: none\n\n{why}.\n"
+    doc = next((Path(atlas_dir) / "docs" / d for d in inst["docs"] if (Path(atlas_dir) / "docs" / d / "records").is_dir()), None)
+    if doc is None:
+        return f"src: none\n\nNo document with register records for {inst['node']} ({', '.join(inst['refs'])}).\n"
+    try:
+        groups = _ext_regs(doc, reg or None)
+    except LookupError as e:
+        return f"src: none\n\n{e}.\n"
+    if len(groups) > MAX_EXCHANGES:
+        return (f"src: none\n\n{doc.name} has {len(groups)} registers; a whole-part read takes at most "
+                f"{MAX_EXCHANGES} (one shell command each). Ask for registers by name.\n")
+    bus = _bus(doc)
+    if any(int(r.get("width") or 8) > 8 for g in groups for r in g) and bus.get("byte_order") not in ("lsb-first", "msb-first"):
+        return (f"src: none\n\n{doc.name} has multi-byte registers but no `bus` record that states their byte order "
+                "on the bus. Add one (datasheet procedure, step 5) before reading them.\n")
+    effects = {id(g): _ext_effects(doc, g) for g in groups}
+    single = bool(reg)
+    if single and effects[id(groups[0])] and not allow_clear:
+        return ("src: none\n\nRefused: reading this register changes the part.\n- "
+                + "; ".join(effects[id(groups[0])]) + "\nCall again with allow_clear=true if clearing it is the point.\n")
+    label = (inst["labels"] or [inst["name"]])[0]
+    fields_of: dict[str, list[dict]] = {}
+    for f in _jsonl(doc / "records" / "field.jsonl"):
+        fields_of.setdefault(f.get("reg"), []).append(f)
+    try:
+        con = Console(atlas_dir, role)
+    except LiveError as e:
+        return f"src: none\n\nThe read failed: {e}\n"
+    rab = int(bus.get("reg_addr_bytes") or 1)
+    out, skipped = [], []
+    for g in groups:
+        if effects[id(g)] and not allow_clear:
+            skipped.append((g, effects[id(g)]))
+            continue
+        vals = []
+        try:
+            for r in g:
+                a = _int(r.get("addr"))
+                dev, byte = _route(bus, inst, a)
+                n = max(1, int(r.get("width") or 8) // 8)
+                cmd = (f"i2c read_byte {inst['bus_dev']} 0x{dev:02X} 0x{byte:0{2 * rab}X}" if n == 1 else
+                       f"i2c read {inst['bus_dev']} 0x{dev:02X} 0x{byte:0{2 * rab}X} {n:x}")
+                data = _parse_read(con.run(cmd), n)
+                order = data if bus.get("byte_order") == "lsb-first" else list(reversed(data))
+                vals.append(sum(b << (8 * i) for i, b in enumerate(order)))
+        except LiveError as e:
+            state = _device_state(con, inst)
+            hint = f"; the board lists {inst['name']} as ({state})" if state else ""
+            return (f"src: {con.src()}\n\nThe read of {label}.{g[0].get('name')} failed: {e}{hint}. "
+                    f"Nothing answered at 0x{dev:02X} on {inst['bus_dev']}.\n")
+        v = vals[0] if len(vals) == 1 else (vals[1] << 8) | vals[0]
+        out += _ext_decode(g, v, fields_of, label, all_fields=single)
+        if effects[id(g)]:
+            out.append("  ! this read cleared: " + "; ".join(effects[id(g)]))
+    head_line = (f"src: {con.src()}; {label} = {inst['node']} at 0x{inst['addr']:02X} on {inst['bus_dev']}"
+                 f" ({', '.join(inst['refs'])}); decoded with {doc.name}")
+    lines = [head_line, ""] + out
+    if skipped:
+        lines += ["", "Not read (reading changes the part; allow_clear=true reads them):"]
+        lines += [f"- {re.sub(r'_(LSB|MSB)$', '', g[0].get('name') or '')}: " + "; ".join(w) for g, w in skipped]
+    if not single:
+        lines += ["", "`*` marks a field not at its reset value; ask for <label>.<REG> for every field."]
+    return "\n".join(lines) + "\n"
+
+
 # --------------------------------------------------------------------------- cli
 
 def _cmd_reg_read(args) -> int:
     from . import common
     print(reg_read(common.atlas_dir(args.atlas_dir), args.target, args.allow_clear, args.role), end="")
+    return 0
+
+
+def _cmd_shell(args) -> int:
+    from . import common
+    print(shell(common.atlas_dir(args.atlas_dir), " ".join(args.command), args.role, args.timeout_ms), end="")
     return 0
 
 
@@ -394,3 +744,8 @@ def register(sub, groups) -> None:
                    help="read a register even though reading it clears something")
     p.add_argument("--role", help="the enrolled role to read from (default [live] role, else dut)")
     p.set_defaults(func=_cmd_reg_read)
+    p = g.add_parser("shell", help="one command on the board's shell, through embarch-core")
+    p.add_argument("command", nargs="+")
+    p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")
+    p.add_argument("--timeout-ms", type=int)
+    p.set_defaults(func=_cmd_shell)

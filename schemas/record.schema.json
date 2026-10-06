@@ -31,7 +31,8 @@
         "passthrough",
         "requirement",
         "conflict",
-        "check"
+        "check",
+        "bus"
       ]
     },
     "doc": {
@@ -338,6 +339,21 @@
             ]
           }
         }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "bus"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/bus"
       }
     }
   ],
@@ -1106,6 +1122,79 @@
           "expr",
           "expect",
           "why"
+        ]
+      }
+    },
+    "bus": {
+      "description": "how a host reads the part's registers over its serial interface: one record per interface (`<part>.bus.<iface>`). byte_order is the order a multi-byte register's bytes come off the bus; windows, when the part answers at more than one bus address, map every register range to the address that serves it",
+      "properties": {
+        "iface": {
+          "description": "i2c, smbus, spi or 1-wire",
+          "type": "string",
+          "minLength": 1
+        },
+        "byte_order": {
+          "description": "of a multi-byte register on the bus",
+          "enum": [
+            "lsb-first",
+            "msb-first"
+          ]
+        },
+        "reg_addr_bytes": {
+          "description": "register-address (pointer) bytes the host sends before the data",
+          "type": "integer",
+          "minimum": 0
+        },
+        "windows": {
+          "description": "every register range with the bus address that serves it; the byte sent is the register address minus base (default from)",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "from",
+              "to",
+              "addr"
+            ],
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "addr": {
+                "description": "7-bit bus address, hex",
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "protocol": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "iface",
+        "byte_order"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "iface",
+          "byte_order",
+          "reg_addr_bytes",
+          "windows"
         ]
       }
     }

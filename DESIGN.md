@@ -171,6 +171,7 @@ Kinds and their own fields:
 | `figure` | `fig`, `caption`, `what` (equations: `src: equation`) |
 | `strap` | `pin`, `condition`, `value` (address or mode straps; a fixed address has condition `fixed`) |
 | `passthrough` | `from_pin`, `to_pin`, `when` (transparent-part map: switches, shunts, buffers) |
+| `bus` | `iface`, `byte_order` (lsb-first, msb-first), `reg_addr_bytes`, `windows` ([{from, to, addr, base}]: register ranges per bus address, for a part with more than one) |
 | `check` | `expr`, `expect`, `why` (an invariant the checker evaluates) |
 | `requirement` | `rid`, `text`, `fw_relevant`, `modality` (shall, should, may, nice-to-have), `priority`, `order` (PRD) |
 | `conflict` | `refs`, `sources` (`"<doc> <loc>: <says>"`), `text` |
@@ -378,8 +379,22 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   when the SVD marks a field `readAction` (access `rclr`) or the reference manual's field text says
   reading it clears something ("cleared by reading the USART_RDR register", matched by a few
   wordings over `rm_regs.json`). `allow_clear=true` reads it and says what the read cleared.
+- **The live shell.** `shell <command>` runs one command on the role's console: the direct,
+  writable signal the role declares (`[live] console` pins one), through Core's exchange route, the
+  port opened and closed per command. The answer is the command's output alone: escape codes out,
+  the echo and the closing prompt (the pinned build's `CONFIG_SHELL_PROMPT_UART`) dropped.
+- **External registers.** `reg_read <DT label>.<REG>` (or `<part>.<REG>` when the part has one
+  device on the board) finds the device in the join's I2C table (bus, address, part, document),
+  the register in the part's records, and its `bus` record, and runs the shell's `i2c read_byte`
+  (8-bit registers, and an `_LSB`/`_MSB` pair as two bytes) or `i2c read` (a wider register, its
+  bytes in the `byte_order` stated). `windows` send a register outside the part's own range to the
+  address that serves it. A wide register with no `bus` record is refused: the byte order is a
+  datasheet fact, not a default. The read-to-clear guard reads the part's own records: `rclr`
+  access, or field, register or rule text saying a read clears it. A device that does not answer
+  gets the state the board's `device list` gives it (`off` when its power domain is suspended).
+  A whole part is read when it has at most 24 registers, one shell command each.
 - Off unless Core answers: the MCP server asks `embarch-api status` once at start and lists
-  `reg_read` only then. External parts' registers wait for the live shell.
+  `reg_read` and `shell` only then.
 
 ## `atlas.toml`
 
@@ -410,6 +425,7 @@ extra_args = []                      # extra `west build` arguments
 
 [live]                               # optional: the live module
 api = "embarch-api"                  # the embarch-api binary
+console = "<signal>"                 # optional: the console signal (default: the role's direct writable one)
 api_config = "<fw>/embarch/embarch.toml"  # its config (this is the default)
 role = "dut"                         # the enrolled role reg_read reads from
 ```
@@ -444,7 +460,8 @@ An atlas id is `<target>@<commit12>`.
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump: stop if documents or schematics changed, build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts; the previous atlas's backlog is counted), the diff written into the new atlas |
 | `q <lookup>` | `query` | the twelve lookups (same answers as the MCP tools) |
-| `live reg-read <PERIPH[.REG]> [--allow-clear] [--role R]` | `live` | a register or peripheral read on the board through embarch-core, decoded |
+| `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
+| `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `mcp` | `mcp_server` | the twelve lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ## What an LLM step may and may not do

@@ -35,6 +35,9 @@ GOOD = [
      "prov": "deterministic"},
     {"id": "demo-sw.pt.S1", "kind": "passthrough", "doc": "demo-sw@1", "p": 2, "src": "text", "q": "x",
      "from_pin": "A1", "to_pin": "B1", "when": "EN high"},
+    {"id": "demo-gauge.bus.i2c", "kind": "bus", "doc": "demo-gauge@A", "p": [12], "src": "text",
+     "q": "multibyte values are ordered least significant byte first", "iface": "i2c", "byte_order": "lsb-first",
+     "reg_addr_bytes": 1, "windows": [{"from": "0x100", "to": "0x1FF", "addr": "0x0B", "base": "0x100"}]}
 ]
 
 

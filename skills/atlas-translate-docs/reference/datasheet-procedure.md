@@ -131,6 +131,7 @@ Ids are native names, never ordinals, so they survive a revision that moves page
 | strap | `<part>.strap.<PIN>.<slug>` | `demo-conv.strap.MODE.r_6k19` |
 | check | `<part>.check.<slug>` | `demo-switch.check.thermal_pd` |
 | conflict | `<part>.conflict.<slug>` | `demo-conv.conflict.fscl_min` |
+| bus | `<part>.bus.<iface>` | `demo-gauge.bus.i2c` |
 
 `<part>` is the part of `doc_id` before the `@`.
 
@@ -173,6 +174,14 @@ Field notes:
   node, bootstrap, an internal regulator bypassed to a capacitor). A row that says none of these
   gets no `flow`; never infer one from the pin's name. Ground and signal pins get none.
 - **strap**: address or mode straps (a resistor table on a MODE pin): `pin`, `condition`, `value`.
+- **bus**: one per serial interface with registers wider than a byte, or with more than one bus
+  address: `iface` (`i2c`, `smbus`, `spi`), `byte_order` of a multi-byte register on the bus
+  (`lsb-first` or `msb-first`, from the sentence or the frame figure that shows it),
+  `reg_addr_bytes` (pointer bytes before the data), and, when the part answers at more than one
+  address, `windows`: every register range with the 7-bit address that serves it (`from`, `to`,
+  `addr`, `base` when the byte sent is not `register - from`). Convert a printed 8-bit address and
+  say so in `note`. The live module reads registers with it, so a wrong byte order decodes every
+  wide register wrong; a page that does not state the order gets no record.
 - **rule** with `steps`: `q` is a list in step order, one verbatim quote per step that has one, and
   `p` every page a step came from. Numbers in `steps` and `text` are not column-checked, so each must
   be on a cited page or tagged.

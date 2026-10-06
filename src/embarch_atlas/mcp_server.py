@@ -123,11 +123,20 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         @server.tool()
         def reg_read(target: str, allow_clear: bool = False, role: str | None = None) -> str:
             """Live: an MCU register (`PERIPH.REG`, e.g. RCC.APBENR1) or a whole peripheral (`UCPD1`) read on
-            the running board through embarch-core and decoded field by field against the SVD; `*` marks a
+            the running board through embarch-core and decoded field by field against the SVD; or an external
+            part's register (`<DT label>.<REG>`, e.g. vbus_sense.VBUS, or `<part>.<REG>` when it has one
+            instance) read with the board shell's `i2c read`, decoded against its datasheet. `*` marks a
             field not at its reset value. A running core is halted for the read (about 20 ms over a J-Link) and let run
             again. A register whose read clears something (a FIFO data register, a read-to-clear flag) is
             refused, or left out of a peripheral read, unless allow_clear=true."""
             return live_mod.reg_read(atlas_dir, target, allow_clear, role)
+
+        @server.tool()
+        def shell(command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
+            """Live: one command on the board's shell (the console signal the role declares), through
+            embarch-core; returns its output with escape codes stripped. Free text: a command can change the
+            board's state. timeout_ms (default 3000, max 10000) bounds the wait for the prompt."""
+            return live_mod.shell(atlas_dir, command, role, timeout_ms)
 
     return server
 

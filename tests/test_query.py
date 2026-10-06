@@ -226,7 +226,7 @@ def test_mcp_server_lists_seven_tools_and_answers(atlas_dir):
     tools = asyncio.run(server.list_tools())
     assert sorted(t.name for t in tools) == sorted(query.TOOLS)
     live_tools = asyncio.run(build_server(atlas_dir, live=True).list_tools())
-    assert sorted(t.name for t in live_tools) == sorted([*query.TOOLS, "reg_read"])
+    assert sorted(t.name for t in live_tools) == sorted([*query.TOOLS, "reg_read", "shell"])
     res = asyncio.run(server.call_tool("pin_trace", {"pin_or_net": "PB9"}))
     text = json.dumps(res.model_dump() if hasattr(res, "model_dump") else res, default=str)
     assert "SDA_1" in text
