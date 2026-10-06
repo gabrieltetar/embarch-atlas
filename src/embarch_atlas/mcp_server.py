@@ -132,6 +132,14 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             return live_mod.reg_read(atlas_dir, target, allow_clear, role)
 
         @server.tool()
+        def live_stacks(build: str | None = None, role: str | None = None) -> str:
+            """Live: every thread's stack peak on the board (`kernel thread stacks` over the shell), joined to
+            its stack symbol, the line that defined it and the *_STACK_SIZE option (inference) once a few flash
+            words read through embarch-core show the board runs that build; `!` marks 90 % and above.
+            `build`: the build dir the board runs; default the atlas's pinned build."""
+            return live_mod.live_stacks(atlas_dir, build, role)
+
+        @server.tool()
         def shell(command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
             """Live: one command on the board's shell (the console signal the role declares), through
             embarch-core; returns its output with escape codes stripped. Free text: a command can change the

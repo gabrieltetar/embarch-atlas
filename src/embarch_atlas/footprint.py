@@ -29,7 +29,7 @@ from .common import read_json, write_json
 
 SEC_RE = re.compile(r"^\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+2\*\*\d+")
 NM_RE = re.compile(r"^([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+(\w)\s+(\S+)(?:\t(.*):(\d+))?\s*$")
-STACK_NAME = re.compile(r"(^_k_thread_stack_|stacks?$|stack_area)", re.I)
+STACK_NAME = re.compile(r"(^_k_thread_stack_|stacks?$|stack_area|_stk$)", re.I)
 TOP = 25
 
 
@@ -242,18 +242,18 @@ def _dir(path: str) -> str:
     return re.sub(r":\d+$", "", path).rsplit("/", 1)[0]
 
 
-def stacks_answer(img: dict, dotconfig: dict[str, str], ksyms: dict | None = None) -> str:
+def stack_rows(img: dict, dotconfig: dict[str, str], ksyms: dict | None = None) -> list[dict]:
+    """Every thread stack symbol in noinit, largest first, each with the *_STACK_SIZE options it most
+    likely comes from (`opts`, and `how` they were matched: an inference)."""
     find = _section_of(img)
     rows = []
     for s in img["symbols"]:
         sec = find(s["a"])
         if not sec or "noinit" not in sec["name"] or not STACK_NAME.search(s["n"]):
             continue
-        rows.append(s)
+        rows.append(dict(s))
     rows.sort(key=lambda s: (-s["s"], s["n"]))
-    cfg = {k: int(v, 0) for k, v in dotconfig.items() if k.endswith("STACK_SIZE") and re.fullmatch(r"(0x)?[0-9a-fA-F]+", v)}
-    used: set[str] = set()
-    lines = [f"{len(rows)} stacks, {sum(s['s'] for s in rows)} B in noinit (sizes include alignment)", ""]
+    cfg = stack_options(dotconfig)
     for s in rows:
         sdir = _dir(s["f"]) if s["f"] else None
         same = [k for k, v in cfg.items() if v == s["s"]]
@@ -266,6 +266,21 @@ def stacks_answer(img: dict, dotconfig: dict[str, str], ksyms: dict | None = Non
             match, how = [k for k in match if k in named], "defined beside it, name word"
         elif not match:
             match, how = named, "name word"
+        s["opts"], s["how"] = match, how
+    return rows
+
+
+def stack_options(dotconfig: dict[str, str]) -> dict[str, int]:
+    return {k: int(v, 0) for k, v in dotconfig.items() if k.endswith("STACK_SIZE") and re.fullmatch(r"(0x)?[0-9a-fA-F]+", v)}
+
+
+def stacks_answer(img: dict, dotconfig: dict[str, str], ksyms: dict | None = None) -> str:
+    rows = stack_rows(img, dotconfig, ksyms)
+    cfg = stack_options(dotconfig)
+    used: set[str] = set()
+    lines = [f"{len(rows)} stacks, {sum(s['s'] for s in rows)} B in noinit (sizes include alignment)", ""]
+    for s in rows:
+        match, how = s["opts"], s["how"]
         used.update(match)
         where = f"{s['f']}:{s['l']}" if s["f"] else "(no debug file)"
         lines.append(f"  {s['s']:>6} B  {s['n']:<34} {where}"
@@ -274,7 +289,7 @@ def stacks_answer(img: dict, dotconfig: dict[str, str], ksyms: dict | None = Non
     if rest:
         lines += ["", "other *_STACK_SIZE options in .config: "
                   + ", ".join(f"CONFIG_{k}={cfg[k]}" for k in rest)]
-    lines += ["", "Live high-water marks: `kernel thread stacks` on the board"
+    lines += ["", "Live high-water marks: `live_stacks` (or `kernel thread stacks` on the board)"
               + (" (CONFIG_THREAD_STACK_INFO=y in this build)" if dotconfig.get("THREAD_STACK_INFO") == "y" else "")]
     return "\n".join(lines)
 

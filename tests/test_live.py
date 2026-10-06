@@ -363,3 +363,64 @@ def test_read_clear_wordings_of_a_part():
     no = ["cleared by a system reset", "This bit can be read any time.", "set after all conversions complete"]
     assert all(live.READ_CLEARS_TEXT.search(t) for t in yes)
     assert not any(live.READ_CLEARS_TEXT.search(t) for t in no)
+
+
+# ---------------------------------------------------------------- live stacks
+
+STACKS_OUT = """0x20000b48 link_tx                          (real size 1024):\tunused  292\tusage  732 / 1024 (71 %)
+0x20000c00 link_rx                          (real size 1024):\tunused   28\tusage  996 / 1024 (97 %)
+0x20001998 usb@40005c00                     (real size 1024):\tunused  700\tusage  324 / 1024 (31 %)
+0x200034a0 idle                             (real size  256):\tunused  168\tusage   88 /  256 (34 %)
+0x20008938 IRQ 00                           (real size 2048):\tunused 1716\tusage  332 / 2048 (16 %)
+"""
+
+
+def tiny_elf(path: Path, paddr: int, payload: bytes) -> None:
+    """An ELF32 LE with one PT_LOAD segment of `payload` at `paddr`."""
+    import struct
+    ehdr = b"\x7fELF" + bytes([1, 1, 1]) + bytes(9) + struct.pack("<HHIIIIIHHHHHH", 2, 40, 1, 0, 52, 0, 0, 52, 32, 1, 0, 0, 0)
+    phdr = struct.pack("<IIIIIIII", 1, 84, paddr, paddr, len(payload), len(payload), 5, 4)
+    path.write_bytes(ehdr + phdr + payload)
+
+
+def test_thread_rows_are_parsed():
+    rows = live.parse_thread_stacks(STACKS_OUT)
+    assert [r["name"] for r in rows] == ["link_tx", "link_rx", "usb@40005c00", "idle", "IRQ 00"]
+    assert rows[1] == {"addr": 0x20000C00, "name": "link_rx", "size": 1024, "unused": 28, "used": 996, "pct": 97}
+
+
+def test_the_image_check_compares_three_places_of_flash(tmp_path):
+    payload = bytes(range(256)) * 4
+    elf = tmp_path / "z.elf"
+    tiny_elf(elf, 0x0800_0000, payload)
+    segs = live.elf_segments(elf)
+    assert segs == [(0x0800_0000, 84, 1024)]
+    assert live.probe_ranges(segs) == [(0x0800_0000, 16), (0x0800_0200, 16), (0x0800_03C0, 16)]
+    words = {0x0800_0000 + i: int.from_bytes(payload[i:i + 4], "little") for i in range(0, 1024, 4)}
+    ad = make(tmp_path, words)
+    s = live.settings(ad)
+    assert live.image_check(s, "dut", elf) == (True, "flash matches the ELF at 3 places")
+    words[0x0800_0204] ^= 1
+    (ad / "memory.json").write_text(json.dumps({f"0x{k:08X}": v for k, v in words.items()}))
+    assert live.image_check(s, "dut", elf) == (False, "flash differs from the ELF at 1 of 3 places")
+
+
+def test_threads_join_their_stacks_by_definition_then_name_never_by_size_alone():
+    img = {"symbols": [
+        {"a": 0x20000B00, "s": 0x100, "n": "_k_thread_obj_link_tx"},
+        {"a": 0x20000C00, "s": 0x100, "n": "_k_thread_obj_link_rx"},
+        {"a": 0x200016A8, "s": 0x3F8, "n": "udc169_priv"},
+        {"a": 0x20003400, "s": 0x100, "n": "z_idle_threads"},
+        {"a": 0x20008900, "s": 0x100, "n": "_kernel"}]}
+    rows = [{"n": "_k_thread_stack_link_tx", "s": 1024, "f": "fw:src/link.c", "l": 10, "opts": []},
+            {"n": "_k_thread_stack_link_rx", "s": 1024, "f": "fw:src/link.c", "l": 12, "opts": []},
+            {"n": "udc169_thr_stk", "s": 1024, "f": "zephyr:udc.c", "l": 9, "opts": ["UDC_STACK_SIZE"]},
+            {"n": "z_main_stack", "s": 1024, "f": "zephyr:init.c", "l": 55, "opts": ["MAIN_STACK_SIZE"]},
+            {"n": "z_idle_stacks", "s": 256, "f": "zephyr:init.c", "l": 62, "opts": []},
+            {"n": "z_interrupt_stacks", "s": 2048, "f": "zephyr:init.c", "l": 149, "opts": ["ISR_STACK_SIZE"]}]
+    out = {j["name"]: j for j in live.join_stacks(live.parse_thread_stacks(STACKS_OUT), img, rows)}
+    assert out["link_rx"]["stack"]["n"] == "_k_thread_stack_link_rx" and out["link_rx"]["how"] == "K_THREAD_DEFINE"
+    assert out["usb@40005c00"]["stack"]["n"] == "udc169_thr_stk"          # via the thread object's name
+    assert out["idle"]["stack"]["n"] == "z_idle_stacks"
+    assert out["IRQ 00"]["stack"]["n"] == "z_interrupt_stacks"            # irq ~ interrupt
+    assert all(j["stack"] is None or j["stack"]["n"] != "z_main_stack" for j in out.values())

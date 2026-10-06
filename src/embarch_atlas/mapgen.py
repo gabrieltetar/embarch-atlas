@@ -68,7 +68,8 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
          "register, pin_trace, net_trace, mismatch_report, config, dt_node, footprint, stacks), or the same as "
          "`embarch-atlas q <verb>`. Live, when embarch-core answers: `reg_read PERIPH[.REG]` (MCU, core halted about "
          "20 ms) or `<DT label>.<REG>` (an external part, `i2c read` on the shell) reads a register on the board and "
-         "decodes it; `shell <command>` runs a shell command; `embarch-atlas live ...`.", ""]
+         "decodes it; `shell <command>` runs a shell command; `live_stacks` gives each thread's stack peak; "
+         "`embarch-atlas live ...`.", ""]
     c = pins.get("counts", {})
     L += ["## Files", "",
           f"- [{rel}/pins.md]({rel}/pins.md): every MCU pin -> net -> far end -> DT use -> driver; I2C identity; DT values "

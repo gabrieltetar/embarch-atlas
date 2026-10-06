@@ -720,6 +720,162 @@ def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: 
     return "\n".join(lines) + "\n"
 
 
+# --------------------------------------------------------------------------- live stacks
+
+THREAD_ROW = re.compile(r"^\s*(0x[0-9a-fA-F]+)\s+(.*?)\s*\(real size\s+(\d+)\):\s*unused\s+(\d+)\s+usage\s+(\d+)"
+                        r"\s*/\s*(\d+)\s*\(\s*(\d+)\s*%\)", re.M)
+# Words that name the same thing in a thread's name and its stack symbol.
+_ALIAS = {"irq": "interrupt", "isr": "interrupt", "sysworkq": "work", "workq": "work"}
+PROBE_WORDS = 16
+HOT_PCT = 90
+
+
+def parse_thread_stacks(out: str) -> list[dict]:
+    """`kernel thread stacks` rows: the thread's address, name, size, unused, used, percent."""
+    return [{"addr": int(m[1], 16), "name": m[2].strip(), "size": int(m[3]), "unused": int(m[4]),
+             "used": int(m[5]), "pct": int(m[7])} for m in THREAD_ROW.finditer(out)]
+
+
+def elf_segments(elf: Path) -> list[tuple[int, int, int]]:
+    """(load address, file offset, file size) of every PT_LOAD segment with bytes: what flashing
+    writes. ELF32 little-endian, the Cortex-M case."""
+    import struct
+    data = elf.read_bytes()
+    if data[:4] != b"\x7fELF" or data[4] != 1 or data[5] != 1:
+        raise ValueError(f"{elf} is not a 32-bit little-endian ELF")
+    phoff, = struct.unpack_from("<I", data, 28)
+    phentsize, phnum = struct.unpack_from("<HH", data, 42)
+    out = []
+    for i in range(phnum):
+        ptype, off, _vaddr, paddr, filesz = struct.unpack_from("<IIIII", data, phoff + i * phentsize)
+        if ptype == 1 and filesz:
+            out.append((paddr, off, filesz))
+    return sorted(out)
+
+
+def probe_ranges(segs: list[tuple[int, int, int]], words: int = PROBE_WORDS) -> list[tuple[int, int]]:
+    """Three places of the image to compare with the board's flash: the start (the vector table),
+    the middle and the end of the largest segment."""
+    paddr, _off, size = max(segs, key=lambda s: s[2])
+    n = min(words, size // 4)
+    starts = {paddr, (paddr + size // 2) & ~3, (paddr + size - 4 * n) & ~3}
+    return [(a, n) for a in sorted(starts)]
+
+
+def image_check(s: dict[str, Any], role: str, elf: Path) -> tuple[bool, str]:
+    """Whether the board's flash holds this ELF's image, at the probe ranges (one halted read)."""
+    data = elf.read_bytes()
+    segs = elf_segments(elf)
+    ranges = probe_ranges(segs)
+    read = core_read(s, ranges, role)
+    board = word_map(read)
+    differ = 0
+    for addr, n in ranges:
+        for i in range(n):
+            a = addr + 4 * i
+            seg = next((x for x in segs if x[0] <= a < x[0] + x[2]), None)
+            if seg is None:
+                continue
+            want = int.from_bytes(data[seg[1] + a - seg[0]: seg[1] + a - seg[0] + 4], "little")
+            if board.get(a) != want:
+                differ += 1
+                break
+    total = len(ranges)
+    return differ == 0, (f"flash matches the ELF at {total} places" if differ == 0
+                         else f"flash differs from the ELF at {differ} of {total} places")
+
+
+def _thread_words(name: str) -> set[str]:
+    from .footprint import _words
+    w = _words(name)
+    return w | {_ALIAS[x] for x in w if x in _ALIAS}
+
+
+def join_stacks(live: list[dict], img: dict, rows: list[dict]) -> list[dict]:
+    """Each live thread with the stack symbol it most likely runs on: the thread object at its
+    address names it (K_THREAD_DEFINE pairs `_k_thread_obj_X` with `_k_thread_stack_X`), else a
+    stack of the same size sharing a name word with the thread or its object. No pairing by size
+    alone: a free stack of the right size is as often the main thread's, which has returned."""
+    syms = sorted((s for s in img["symbols"] if s.get("s")), key=lambda s: s["a"])
+
+    def holder(a: int) -> dict | None:
+        return next((s for s in syms if s["a"] <= a < s["a"] + s["s"]), None)
+
+    taken: set[str] = set()
+    out = []
+    for th in sorted(live, key=lambda x: -x["pct"]):
+        obj = holder(th["addr"])
+        obj_n = obj["n"] if obj else ""
+        fits = [r for r in rows if r["n"] not in taken and th["size"] <= r["s"] <= th["size"] + 64]
+        pick, how = None, ""
+        m = re.match(r"_k_thread_obj_(.+)", obj_n)
+        if m:
+            pick = next((r for r in fits if r["n"] == f"_k_thread_stack_{m[1]}"), None)
+            how = "K_THREAD_DEFINE" if pick else ""
+        if pick is None:
+            words = _thread_words(th["name"]) | _thread_words(obj_n)
+            scored = sorted(((len(words & _thread_words(r["n"])), r["n"], r) for r in fits), key=lambda x: (-x[0], x[1]))
+            if scored and scored[0][0] and (len(scored) == 1 or scored[1][0] < scored[0][0]):
+                pick, how = scored[0][2], "same size, name word"
+        out.append({**th, "obj": obj_n, "stack": pick, "how": how})
+        if pick:
+            taken.add(pick["n"])
+    return out
+
+
+def live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = None) -> str:
+    """Every thread's stack peak on the board (`kernel thread stacks`), joined to the stack symbol,
+    its defining line and the *_STACK_SIZE option, once the board is shown to run that build."""
+    from . import buildq, footprint as F
+    from .query import Atlas
+    try:
+        con = Console(atlas_dir, role)
+        out = con.run("kernel thread stacks", 5000)
+    except LiveError as e:
+        return f"src: none\n\nThe command did not run: {e}\n"
+    live = parse_thread_stacks(out)
+    if not live:
+        return (f"src: {con.src()}\n\nNo thread rows in the answer (CONFIG_THREAD_STACK_INFO and the kernel shell "
+                f"are needed):\n{out}")
+    join_note, rows, img = "", [], None
+    try:
+        src = buildq.source(Atlas(Path(atlas_dir)), build)
+        img = buildq._image(src)
+        same, why = image_check(con.s, con.role, src.elf)
+        if same:
+            src.load_kconfig()
+            rows = F.stack_rows(img, F.dotconfig_of(src.dotconfig), (src.kconfig or {}).get("symbols"))
+            join_note = f" + {src.label} zephyr.elf ({why})"
+        else:
+            join_note = (f"; not joined to {src.label}: {why}, so the board runs another build. Pass build=<dir> "
+                         "of the image it runs")
+    except (LookupError, FileNotFoundError, OSError, ValueError, RuntimeError, LiveError,
+            subprocess.CalledProcessError) as e:
+        join_note = f"; not joined to an ELF: {e}"
+    joined = join_stacks(live, img, rows) if rows else [dict(th, obj="", stack=None, how="") for th in
+                                                         sorted(live, key=lambda x: -x["pct"])]
+    lines = [f"src: {con.src()}{join_note}", "",
+             f"{'thread':<28} {'size':>5} {'peak':>5} {'%':>4}  stack symbol, defined at, option (inference)"]
+    for th in joined:
+        name = th["name"] or (th["obj"] or f"0x{th['addr']:08x}")
+        st = th["stack"]
+        tail = ""
+        if st:
+            where = f"{st['f']}:{st['l']}" if st.get("f") else "(no debug file)"
+            opt = f"  ~ CONFIG_{', CONFIG_'.join(st['opts'])}" if st.get("opts") else ""
+            tail = f"{st['n']} {where}{opt}" + (f" [{th['how']}]" if th["how"] else "")
+        elif th.get("obj"):
+            tail = f"(no stack symbol paired; thread object in {th['obj']})"
+        mark = "!" if th["pct"] >= HOT_PCT else " "
+        lines.append(f"{mark}{name:<27} {th['size']:>5} {th['used']:>5} {th['pct']:>3}%  {tail}".rstrip())
+    hot = [th for th in joined if th["pct"] >= HOT_PCT]
+    if hot:
+        lines += ["", f"`!` at or above {HOT_PCT} %: " + ", ".join(
+            f"{th['name'] or th['obj']} ({th['unused'] if 'unused' in th else th['size'] - th['used']} B left)" for th in hot)
+            + ". A peak is the most used since boot; a path not yet run can go higher."]
+    return "\n".join(lines) + "\n"
+
+
 # --------------------------------------------------------------------------- cli
 
 def _cmd_reg_read(args) -> int:
@@ -744,6 +900,10 @@ def register(sub, groups) -> None:
                    help="read a register even though reading it clears something")
     p.add_argument("--role", help="the enrolled role to read from (default [live] role, else dut)")
     p.set_defaults(func=_cmd_reg_read)
+    p = g.add_parser("stacks", help="every thread's stack peak on the board, joined to its stack symbol and option")
+    p.add_argument("--build", help="the build dir the board runs (default: the atlas's pinned build)")
+    p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")
+    p.set_defaults(func=lambda a: print(live_stacks(common.atlas_dir(a.atlas_dir), a.build, a.role), end="") or 0)
     p = g.add_parser("shell", help="one command on the board's shell, through embarch-core")
     p.add_argument("command", nargs="+")
     p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")

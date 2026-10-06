@@ -393,8 +393,16 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   access, or field, register or rule text saying a read clears it. A device that does not answer
   gets the state the board's `device list` gives it (`off` when its power domain is suspended).
   A whole part is read when it has at most 24 registers, one shell command each.
+- **Live stacks.** `live_stacks` runs `kernel thread stacks` and joins each thread to its stack
+  symbol, the line that defined it and the `*_STACK_SIZE` option (the static `stacks` pairing).
+  The join needs the ELF the board runs: 16 words at the start, middle and end of the image's
+  largest load segment are read through Core (one halted read) and compared with the ELF; on a
+  mismatch the peaks are shown unjoined and the answer asks for the build dir. A thread pairs with
+  its stack by K_THREAD_DEFINE's `_k_thread_obj_X` / `_k_thread_stack_X`, else by a name word
+  shared by the stack and the thread or the symbol holding the thread object, never by size alone
+  (a free stack of the right size is as often the returned main thread's). `!` marks 90 %.
 - Off unless Core answers: the MCP server asks `embarch-api status` once at start and lists
-  `reg_read` and `shell` only then.
+  `reg_read`, `shell` and `live_stacks` only then.
 
 ## `atlas.toml`
 
@@ -462,6 +470,7 @@ An atlas id is `<target>@<commit12>`.
 | `q <lookup>` | `query` | the twelve lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
+| `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
 | `mcp` | `mcp_server` | the twelve lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ## What an LLM step may and may not do
