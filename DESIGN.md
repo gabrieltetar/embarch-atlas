@@ -230,6 +230,9 @@ value anchors only when that record is on a page the line cites. Rendered struct
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
   (https://code.claude.com/docs/en/mcp.md), so its 7 tools skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.
+- Every tool, the live ones included, declares `readOnlyHint`: Claude Code refuses an MCP
+  tool without it in plan mode. `shell` carries it too although a command can change the
+  board's state; Core's hardware lock serializes the live calls Claude Code then runs in parallel.
 - `init` writes both files and adds them to the fw repo's `.git/info/exclude`, so no
   tracked file changes.
 
