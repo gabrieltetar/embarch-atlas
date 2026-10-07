@@ -40,6 +40,9 @@ READ_TIMEOUT_S = 90
 MAX_EXCHANGES = 24
 EXCHANGE_TIMEOUT_MS = 3000
 DEFAULT_PROMPT = "uart:~$ "
+# Core waits this long for a console port that is gone (a USB console re-enumerating after a
+# reset) before an exchange fails; it costs nothing when the port is there.
+PORT_WAIT_MS = 10_000
 _CURSOR_RIGHT = re.compile(r"\x1b\[(\d+)C")
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 # A part's own register or field text saying a read clears it ("cleared by reading ALERT_DIAG",
@@ -466,7 +469,8 @@ class Console:
         for name in self.names:
             try:
                 ex = call_api(self.s, ["signal-exchange", "--name", name, "--write", command, "--until",
-                                       self.prompt, "--timeout-ms", str(timeout_ms)], READ_TIMEOUT_S)["exchange"]
+                                       self.prompt, "--timeout-ms", str(timeout_ms),
+                                       "--port-wait-ms", str(PORT_WAIT_MS)], READ_TIMEOUT_S)["exchange"]
             except LiveError as e:   # declared but not enumerable now: try the next console
                 last = e
                 continue
