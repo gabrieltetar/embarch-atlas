@@ -34,3 +34,20 @@ def test_only_what_the_previous_atlas_did_not_owe_is_batched(tmp_path, monkeypat
     assert (out["diff"], out["backlog"], out["frozen"]) == (2, 1, 5)
     batched = {it["id"] for b in read_json(new / "second_look_batches.json") for it in b["items"]}
     assert batched == {"c", "d"}
+
+
+def test_carried_verdicts_are_joined_again_so_the_report_counts_them(tmp_path, monkeypatch):
+    from embarch_atlas import build as B, join as J, update as U
+    ad = tmp_path / "atlas"
+    new = ad / "atlases" / "core@b"
+    new.mkdir(parents=True)
+    calls = []
+    monkeypatch.setattr(B, "target_config", lambda ad_, target: {})
+    monkeypatch.setattr(B, "run_build", lambda ad_, cfg, commit, log=print: new)
+    monkeypatch.setattr(U, "previous_atlas", lambda *a, **k: None)
+    monkeypatch.setattr(J, "run", lambda ad_, atlas, log=print: calls.append("join"))
+    monkeypatch.setattr(U, "rm_todo", lambda ad_, atlas: None)
+    monkeypatch.setattr(U, "second_look_diff", lambda ad_, atlas, prev: calls.append("carry") or
+                        {"frozen": 3, "carried": 3, "queued": 0, "diff": 0, "backlog": 0, "batches": 0, "prev_queue": False})
+    assert U.run(ad, "core", "HEAD", log=lambda *_: None) == 0
+    assert calls == ["join", "carry", "join"]

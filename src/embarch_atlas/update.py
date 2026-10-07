@@ -108,6 +108,10 @@ def run(ad: Path, target: str, commit: str = "HEAD", log=print) -> int:
     J.run(ad, atlas, log=log)
     rm = rm_todo(ad, atlas)
     sl = second_look_diff(ad, atlas, prev)
+    if sl["carried"]:
+        # The queue needs the join (which facts the atlas uses); the verdicts it carried over need
+        # a join to count in the mismatch report and the MAP.
+        J.run(ad, atlas, log=lambda *_: None)
     if prev:
         text = D.render(D.diff(prev, atlas))
         write_text(atlas / f"diff-from-{prev.name}.md", text)
