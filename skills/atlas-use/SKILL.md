@@ -12,9 +12,10 @@ PDFs whole, and never answer a hardware question from memory.
 ## The protocol: MAP → card → section → page
 
 1. **MAP** (`embarch/atlas/MAP.md`, usually already in context). It names the atlas
-   (target + commit), the parts on the board with their doc ids and card paths, the MCU
-   and the peripherals in use, the boards and their interfaces, and where the pin map and
-   the mismatch report are. If its first lines say it is **stale** (HEAD moved past the
+   (target + commit), the parts on the board with their doc ids and card paths, the
+   documents tied to no part (standards, specifications, the PRD), the MCU and the
+   peripherals in use, the boards and their interfaces, and where the pin map and the
+   mismatch report are. If its first lines say it is **stale** (HEAD moved past the
    atlas's commit), say so in your answer and suggest `/atlas-update`.
 2. **Card** (`docs/<doc_id>/card.md`, ≤ 1.5K tokens). The part's role, key limits,
    register summary, the **quirks**, and a section index.

@@ -2,9 +2,10 @@
 
 llms.txt-shaped: what the atlas is pinned to, the protocol line, where the
 pin map and the checks are, the MCU and the peripherals in use (with the RM
-chapters when a worklist exists), the boards and their interfaces, and the parts
-on the boards with their document ids and card paths. No timestamps: the stamp
-lives in atlas.json, so an unchanged atlas renders the same bytes.
+chapters when a worklist exists), the boards and their interfaces, the parts
+on the boards with their document ids and card paths, and the documents tied to
+no part (standards, specifications, the PRD). No timestamps: the stamp lives in
+atlas.json, so an unchanged atlas renders the same bytes.
 
 When the atlas's commit equals the fw repo's HEAD, `current.json` is updated and
 the MAP is copied to `<atlas_dir>/MAP.md`, the one stable path the session imports.
@@ -129,6 +130,18 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
     else:
         L.append("None translated yet (`/atlas-translate-docs`).")
     L.append("")
+    # documents tied to no board part: standards, specifications, the PRD
+    shown = {d for d, _, _ in mdocs} | {d for r in with_doc for d in r["docs"]}
+    other = [(d, v) for d, v in sorted((J.docs.docs if J else {}).items()) if d not in shown]
+    if other:
+        L += ["## Other documents", "", "Tied to no part on the boards (standards, specifications, the PRD).", "",
+              "| doc | kind | title | card |", "|---|---|---|---|"]
+        for d, v in other:
+            title = " ".join(str(v["doc"].get("title") or "-").split())
+            title = title if len(title) <= 80 else title[:77] + "..."
+            card = f"docs/{d}/card.md" if (v["dir"] / "card.md").is_file() else "(no card yet)"
+            L.append(f"| `{d}` | {v['doc'].get('kind') or 'doc'} | {title.replace('|', '/')} | {card} |")
+        L.append("")
     if without:
         show = without if max_parts is None else without[:max_parts]
         L += [f"## Active parts without a document ({len(without)})", "",

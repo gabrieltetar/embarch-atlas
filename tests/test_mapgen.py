@@ -73,3 +73,17 @@ def test_map_lists_declared_power_feeds(tmp_path):
         {"net": "S:3V3", "from": "M", "via": ["M:J1-8", "S:J1-1"], "only": True, "prov": "engineer-declared"}]})
     run_join(ad, atlas)
     assert "- S:3V3: fed only from M via M:J1-8 / S:J1-1 (engineer-declared)" in (atlas / "MAP.md").read_text()
+
+
+def test_map_lists_documents_tied_to_no_board_part(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    write_json(ad / "docs" / "demo-spec@r2" / "doc.json", {"doc_id": "demo-spec@r2", "kind": "standard", "pages": 40,
+                                                          "title": "Demo Bus Specification", "part": "demo-spec"})
+    (ad / "docs" / "demo-spec@r2" / "card.md").write_text("# card\n")
+    write_json(ad / "docs" / "demo-prd@1" / "doc.json", {"doc_id": "demo-prd@1", "kind": "prd", "pages": 9})
+    run_join(ad, atlas)
+    text = (atlas / "MAP.md").read_text()
+    other = text.split("## Other documents", 1)[1].split("\n## ", 1)[0]
+    assert "| `demo-spec@r2` | standard | Demo Bus Specification | docs/demo-spec@r2/card.md |" in other
+    assert "| `demo-prd@1` | prd | - | (no card yet) |" in other
+    assert "sns701@a" not in other                         # a part's document stays in the parts table

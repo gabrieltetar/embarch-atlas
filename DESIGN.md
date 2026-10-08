@@ -112,7 +112,8 @@ atlases/<target>@<commit12>/
   second_look_queue.jsonl       facts this atlas uses that still need a second look
   second_look.jsonl             second-look verdicts
   graph.json                    the whole atlas as one graph, for the embarch-ui Atlas tab (below)
-  MAP.md                        tier 0, <= 5K tokens, byte-stable
+  MAP.md                        tier 0, <= 5K tokens, byte-stable: the MCU, boards, parts with their
+                                documents, and the documents tied to no part (standards, the PRD)
 current.json                    which atlas matches the checkout (target, commit)
 MAP.md                          copy of the current atlas's MAP.md: the one stable path the session imports
 ```
