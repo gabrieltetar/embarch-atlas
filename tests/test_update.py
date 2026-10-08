@@ -143,3 +143,22 @@ def test_update_runs_once_the_changed_document_is_translated(tmp_path, monkeypat
     out = []
     assert update.run(ad, "core", "HEAD", log=out.append) == 0
     assert (new / f"diff-from-{prev.name}.md").is_file()
+
+
+def test_second_look_queue_diff_from_batches_what_update_would(tmp_path, monkeypatch, capsys):
+    from embarch_atlas import cli
+    prev = _atlas(tmp_path, "core@000000000001", "2026-10-01T00:00:00Z")
+    new = _atlas(tmp_path, "core@000000000002", "2026-10-02T00:00:00Z")
+    item = lambda i: {"id": i, "doc": "demo@1", "p": [1], "why": ["limit"], "ask": "x", "key": i, "priority": 1,
+                      "kind": "limit", "pdf": None, "src": "table"}
+    monkeypatch.setattr(S, "build_queue", lambda ad, atlas: ([item("a"), item("c"), item("d")], {
+        "frozen": 0, "frozen_keys": [], "atlas": atlas.name, "used_records": 3, "needs_look": 3, "queued": 3,
+        "by_reason": {}}))
+    monkeypatch.setattr(S, "carry_frozen", lambda ad, atlas, keys: 0)
+    args = ["--atlas-dir", str(tmp_path), "second-look", "queue", new.name, "--diff-from", prev.name]
+    assert cli.main(args) == 2                                   # no queue in prev: nothing to tell the diff by
+    write_jsonl(prev / "second_look_queue.jsonl", [{"id": "a"}, {"id": "b"}])
+    assert cli.main(args) == 0
+    batched = {it["id"] for b in read_json(new / "second_look_batches.json") for it in b["items"]}
+    assert batched == {"c", "d"}
+    assert "2 items new or changed since core@000000000001 (1 queued there already)" in capsys.readouterr().out

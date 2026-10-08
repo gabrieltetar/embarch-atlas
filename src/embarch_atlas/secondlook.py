@@ -236,6 +236,14 @@ def priority(why: list[str]) -> int:
     return (max(ws) if ws else 1) + 5 * max(0, len(why) - 1)
 
 
+def owed_by(prev: Path | None) -> set | None:
+    """The ids `prev`'s queue already held (its backlog); None when it has no queue to tell by."""
+    pq = prev / "second_look_queue.jsonl" if prev else None
+    if not pq or not pq.is_file():
+        return None
+    return {q.get("id") for q in read_jsonl(pq)}
+
+
 def batches(queue: list[dict], top: int, per_batch: int = 8) -> list[dict]:
     """The `top` highest-priority items, grouped by (document, pages) so one fresh subagent reads
     each page once. Order: the batch holding the highest priority first."""
@@ -323,7 +331,18 @@ def cmd_queue(args) -> int:
     q, st = build_queue(ad, atlas)
     write_jsonl(atlas / "second_look_queue.jsonl", q)
     carried = carry_frozen(ad, atlas, st["frozen_keys"])
-    if getattr(args, "top", None):
+    if getattr(args, "diff_from", None):
+        prev = resolve_atlas(ad, args.diff_from)
+        owed = owed_by(prev)
+        if owed is None:
+            print(f"second-look queue: {prev.name} has no second_look_queue.jsonl to tell the diff by", file=sys.stderr)
+            return 2
+        diff = [it for it in select(q, getattr(args, "why", None), getattr(args, "doc", None)) if it.get("id") not in owed]
+        bs = batches(diff, args.top or len(diff)) if diff else []
+        write_json(atlas / "second_look_batches.json", bs)
+        print(f"{len(diff)} items new or changed since {prev.name} ({len(q) - len(diff)} queued there already), "
+              f"{min(args.top or len(diff), len(diff))} in {len(bs)} page batches -> {atlas / 'second_look_batches.json'}")
+    elif getattr(args, "top", None):
         bs = batches(select(q, getattr(args, "why", None), getattr(args, "doc", None)), args.top)
         write_json(atlas / "second_look_batches.json", bs)
         print(f"top {min(args.top, len(q))} items in {len(bs)} page batches -> {atlas / 'second_look_batches.json'}")
@@ -821,9 +840,11 @@ def register(sub, groups) -> None:
     p.add_argument("atlas")
     p.add_argument("--top", type=int, help="also group the N highest-priority items into page batches "
                                            "(second_look_batches.json), one fresh subagent per batch")
-    p.add_argument("--why", help="with --top: only items whose reasons contain one of these (comma-separated, "
-                                 "e.g. llm-unverified,unit)")
-    p.add_argument("--doc", help="with --top: only these doc ids (comma-separated)")
+    p.add_argument("--diff-from", metavar="ATLAS", help="batch only the items that atlas's queue did not hold "
+                                                        "(new or changed facts), as `update` does; --top caps them")
+    p.add_argument("--why", help="with --top or --diff-from: only items whose reasons contain one of these "
+                                 "(comma-separated, e.g. llm-unverified,unit)")
+    p.add_argument("--doc", help="with --top or --diff-from: only these doc ids (comma-separated)")
     p.set_defaults(func=cmd_queue)
     p = g.add_parser("prompt", help="print the blind reader's instructions for one page batch")
     p.add_argument("atlas")

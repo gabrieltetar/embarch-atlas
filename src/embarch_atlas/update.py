@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from . import common
-from .common import read_json, read_jsonl, write_json, write_jsonl, write_text
+from .common import read_json, write_json, write_jsonl, write_text
 
 
 def previous_atlas(ad: Path, target: str, exclude: Path | None = None) -> Path | None:
@@ -195,11 +195,8 @@ def second_look_diff(ad: Path, atlas: Path, prev: Path | None) -> dict[str, Any]
     queue, st = S.build_queue(ad, atlas)
     write_jsonl(atlas / "second_look_queue.jsonl", queue)
     carried = S.carry_frozen(ad, atlas, st["frozen_keys"])
-    owed = set()
-    pq = prev / "second_look_queue.jsonl" if prev else None
-    if pq and pq.is_file():
-        owed = {q.get("id") for q in read_jsonl(pq)}
-    diff = [q for q in queue if q.get("id") not in owed]
+    owed = S.owed_by(prev)
+    diff = [q for q in queue if q.get("id") not in (owed or set())]
     bs = S.batches(diff, len(diff)) if diff else []
     write_json(atlas / "second_look_batches.json", bs)
     return {"frozen": st["frozen"], "carried": carried, "queued": len(queue), "diff": len(diff),

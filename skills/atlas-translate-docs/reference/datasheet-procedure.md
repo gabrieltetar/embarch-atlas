@@ -314,6 +314,9 @@ These settle cases the rules above leave open. They were each hit on a real data
   "clears on read when <condition>"`. Use `rclr` only when it always clears.
 - Register `width` usually comes from the summary table: cite that page and the register's own page
   (`p: [summary, own]`).
+- A record read from a table row whose `text` names a column header's values (a `requirement` from
+  a row of a table with `9V` and `15V` columns, "at 9V, 15V ...") fails N, because the numbers are
+  not in the row: quote the header line too, as a second `q` part (`q: ["<row>", "<header line>"]`).
 
 **Names**
 - Keep native names verbatim in `name`, spaces, commas and slashes included; the `id` uses the

@@ -27,7 +27,8 @@ Current state:
                     naming each; documents with no distillation are listed, not blocking
 - [ ] 5 RM          if it reports RM units to distil: /atlas-translate-docs rm-worklist <atlas>, then update again
 - [ ] 6 2nd look    the batches it wrote hold only the diff (new or changed facts): one blind subagent per batch,
-                    exactly as atlas-build step 5 (prompt, compare, record), then embarch-atlas join <atlas>
+                    exactly as atlas-build step 5 (prompt, compare, record), then embarch-atlas join <atlas>.
+                    After a plain build instead of update: embarch-atlas second-look queue <atlas> --diff-from <previous>
 - [ ] 7 report      diff-from-<previous>.md in the new atlas: what changed in firmware (pins, DT, drivers), in the
                     documents, in the board; new and resolved mismatch candidates; the backlog it did not batch
 ```
