@@ -166,11 +166,18 @@ def changes_since(ad: Path, prev: Path) -> tuple[list[dict], str]:
     return rows, basis
 
 
+READ_AS_IS = ("notes", "spreadsheet")       # kinds with no distillation: an agent reads the file itself
+
+
+def _undistilled(r: dict) -> bool:
+    return r["change"] != "removed" and not r["doc"] and r["kind"] not in ("schematic", *READ_AS_IS)
+
+
 def _change_line(r: dict) -> str:
     if r["change"] == "removed":
         return f"removed {r['file']}"
-    what = f"docs/{r['doc']}" if r["doc"] else ("netlist: schematic" if r["kind"] == "schematic" else
-                                                f"{r['kind'] or 'unknown kind'}, not distilled")
+    what = (f"docs/{r['doc']}" if r["doc"] else "netlist: schematic" if r["kind"] == "schematic" else
+            f"{r['kind']}, read as is" if r["kind"] in READ_AS_IS else f"{r['kind'] or 'unknown kind'}, not distilled")
     return f"{r['change']} {r['file']} ({what})"
 
 
@@ -235,7 +242,7 @@ def run(ad: Path, target: str, commit: str = "HEAD", log=print) -> int:
         write_text(atlas / f"diff-from-{prev.name}.md", text)
     log("")
     log(f"{atlas.name}: built and joined" + (f"; diff from {prev.name} in diff-from-{prev.name}.md" if prev else ""))
-    undistilled = [r["file"] for r in moved if r["change"] != "removed" and not r["doc"] and r["kind"] != "schematic"]
+    undistilled = [r["file"] for r in moved if _undistilled(r)]
     if undistilled:
         log(f"  new or changed, not distilled: {'; '.join(undistilled)}. /atlas-translate-docs <file> for any the "
             "firmware needs, then update again")

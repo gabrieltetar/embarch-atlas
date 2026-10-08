@@ -494,7 +494,8 @@ An atlas id is `<target>@<commit12>`.
 
 A new or changed document with no distillation, of any kind, does not stop it: `update` lists the
 documents added, changed or removed since the previous atlas (from that atlas's `source_files`,
-else the inventory's own diff) with the distillation each one has, and names the ones without.
+else the inventory's own diff) with the distillation each one has, and names the ones without
+(notes and spreadsheets have no distillation: an agent reads them as they are).
 
 ## What an LLM step may and may not do
 

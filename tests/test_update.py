@@ -120,6 +120,11 @@ def test_changes_since_reads_the_previous_join_file_list(tmp_path):
     assert basis == "core@000000000001's file list"
     assert [update._change_line(r) for r in rows] == [
         "added spec.pdf (other, not distilled)", f"changed SYN1234-2b.pdf (docs/{ds.DOC_ID})", "removed gone.pdf"]
+    write_json(prev / "inputs.json", {"source_files": {"SYN1234-2b.pdf": sha, "notes.md": "0" * 64}})
+    rows, _ = update.changes_since(ad, prev)
+    assert [update._change_line(r) for r in rows] == ["added spec.pdf (other, not distilled)",
+                                                      "changed notes.md (notes, read as is)"]
+    assert [r["file"] for r in rows if update._undistilled(r)] == ["spec.pdf"]
 
 
 def test_update_runs_once_the_changed_document_is_translated(tmp_path, monkeypatch):
