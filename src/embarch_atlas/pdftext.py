@@ -66,7 +66,7 @@ SOFT_HYPHEN = "\u00ad"
 OVERLINE = "\u0305"
 
 
-def normalize(s: str, pua: str = "map") -> str:
+def normalize(s: str, pua: str = "map", hyphen: str = "keep") -> str:
     """Comparison form: PUA glyphs mapped ("map") or dropped ("strip"), NFKC, no combining marks
     (overlines), one dash, straight quotes, collapsed whitespace, no space before , ; : ) ] or after
     ( [, lower case, and a word broken over a line rejoined.
@@ -74,8 +74,10 @@ def normalize(s: str, pua: str = "map") -> str:
     Both text sources break words the same two ways, and both are joined the same way: a soft
     hyphen (U+00AD, what PyMuPDF gives for a word-processor line break) is dropped with the line
     break after it ("cali\\xad\\nbration" -> "calibration"), and a hard hyphen at the end of a
-    line keeps the hyphen and loses the break ("auto-\\n retry" -> "auto-retry"). A soft hyphen
-    inside a line is invisible, so it is dropped too."""
+    line loses the break and, with `hyphen="keep"`, keeps the hyphen ("auto-\\n retry" ->
+    "auto-retry"); with `hyphen="drop"` it goes too ("re-\\n quested" -> "requested"). The text
+    layer cannot tell a hyphenated word from a compound broken at its own hyphen, so a page is
+    compared in both forms. A soft hyphen inside a line is invisible, so it is dropped too."""
     if pua == "map":
         s = map_pua(s)
     elif pua == "strip":
@@ -84,7 +86,7 @@ def normalize(s: str, pua: str = "map") -> str:
     s = unicodedata.normalize("NFKC", s)
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     s = s.translate(_DASHES).lower()
-    s = re.sub(r"(?<=[a-z])-[ \t]*\r?\n\s*(?=[a-z])", "-", s)
+    s = re.sub(r"(?<=[a-z])-[ \t]*\r?\n\s*(?=[a-z])", "" if hyphen == "drop" else "-", s)
     s = re.sub(r"\s+", " ", s).strip()
     s = re.sub(r" (?=[,;:)\]])|(?<=[(\[]) ", "", s)   # "100 ," == "100," once a glyph between them is gone
     return re.sub(r"(?<=[a-z])- (?=[a-z])", "-", s)

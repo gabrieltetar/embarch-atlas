@@ -379,7 +379,9 @@ These settle cases the rules above leave open. They were each hit on a real data
 - **Bit diagram vs field table disagreements** inside one register description: `doc regparse`
   writes them as `conflict` records.
 - **Footnote numbering that restarts per table**: cite the footnote of the table the row is in.
-- **Soft hyphens and hyphenated line breaks**: the checker joins them, so quote the word whole.
+- **Soft hyphens and hyphenated line breaks**: the checker joins them, so quote the word whole
+  ("requested" for `re-` / `quested`). A compound broken at its own hyphen is quoted with it
+  ("auto-retry"); the checker compares the page both ways.
 - **Two-column layouts**: `pdftotext -layout` can interleave columns; split a multi-line quote with
   `...` into parts that each sit on one line.
 - **Tables set sideways** (a pinout with one column per package, on a page turned 90°): the text layer

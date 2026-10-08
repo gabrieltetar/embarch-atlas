@@ -336,6 +336,40 @@ def test_k_row_not_found_is_a_counted_warning(doc, monkeypatch):
 
 # ---------------------------------------------------------------- A: quotes split with `...`
 
+def test_quote_spans_a_hyphenated_line_break_in_prose_lists_bullets_and_table_cells(tmp_path):
+    """A word broken at a line end with a hard hyphen is quoted whole (datasheet-procedure.md), and a
+    compound broken at its own hyphen is quoted with it. pdftotext -layout indents the continuation."""
+    docdir = tmp_path / "docs" / "demo-spec@1"
+    common.write_json(docdir / "doc.json", {"doc_id": "demo-spec@1", "pages": 1, "file": "x.pdf", "path": "none"})
+    (docdir / "pages").mkdir(parents=True)
+    (docdir / "pages" / "p001.txt").write_text(
+        "A frame whose length field is out of range is dis-\n"
+        "carded without a reply, and the receiver goes back to its auto-\n"
+        "retry state.\n"
+        "   3.    The maximum load current in boost mode Shall be as defined in Ta-\n"
+        "          ble 7.2.\n"
+        "     \u2022   The step size for the output current is 50 mA, and whenever a new limit is re-\n"
+        "          quested, the settling time is tLimSettle.\n"
+        "Parameter        Min      Max     Unit    Description\n"
+        "tHoldOff                  690     ms      Time from the last edge of the request to\n"
+        "                                          the output leaving the same SYN mode (see ZQ-\n"
+        "                                          RT).\n"
+        "A sink Shall Not request a change that exceeds iLimLoad-\n"
+        "Step.\n")
+    doc = check.DocText(docdir, use_pdf=False)
+    assert doc.has("out of range is discarded without a reply", 1)                        # prose
+    assert doc.has("goes back to its auto-retry state", 1)                                # a compound keeps it
+    assert doc.has("Shall be as defined in Table 7.2.", 1)                                # numbered list item
+    assert doc.has("whenever a new limit is requested, the settling time is tLimSettle", 1)   # bullet
+    assert doc.has("the output leaving the same SYN mode (see ZQRT)", 1)                  # table cell
+    assert doc.has("exceeds iLimLoadStep.", 1)                                            # a symbol, capitalised
+    assert doc.has("whenever a new limit is requested ... tLimSettle", 1)                 # parts across the join
+    assert not doc.has("whenever a new limit is re quested", 1)
+    assert check.record_checks(doc, {"id": "demo-spec.req.load-current", "kind": "requirement", "p": 1,
+                                     "src": "text", "q": "Shall be as defined in Table 7.2.",
+                                     "text": "x"})["A"] == "ok"
+
+
 def test_split_quote_parts_in_order_and_near(tmp_path):
     docdir = tmp_path / "docs" / "demo-prd@1"
     common.write_json(docdir / "doc.json", {"doc_id": "demo-prd@1", "pages": 1, "file": "x.pdf", "path": "none"})

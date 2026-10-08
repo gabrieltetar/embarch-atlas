@@ -157,6 +157,10 @@ def _parts_near(f: str, starts: list[int], parts: list[str]) -> bool:
 
 # ---------------------------------------------------------------- the text layer
 
+# Every comparison form of a page: glyph mode (pdftext.normalize) x a line-end hard hyphen kept or dropped.
+FORMS = tuple((mode, hy) for mode in ("map", "strip") for hy in ("keep", "drop"))
+
+
 class DocText:
     """Text layers of one document: pdftotext -layout (pages/), PyMuPDF (from the PDF, when it is
     still there and unchanged), and word boxes (pages/*.bbox.json, else the PDF)."""
@@ -197,17 +201,18 @@ class DocText:
                 texts.append(self.pdf[p - 1].get_text())
             fs = []
             for t in texts:
-                for mode in ("map", "strip"):
-                    f = normalize(t, mode)
+                for mode, hy in FORMS:
+                    f = normalize(t, mode, hy)
                     if f not in fs:
                         fs.append(f)
             self._forms[p] = tuple(fs)
         return self._forms[p]
 
     def line_forms(self, p: int) -> list[tuple[str, list[int]]]:
-        """(normalized page, offset where each non-blank source line starts in it) per text layer and
-        glyph mode. Offsets come from normalizing each prefix of lines, so they follow whatever
-        normalize() does across a line break (a rejoined hyphenation shifts them by a character at most)."""
+        """(normalized page, offset where each non-blank source line starts in it) per text layer,
+        glyph mode and hyphen form. Offsets come from normalizing each prefix of lines, so they follow
+        whatever normalize() does across a line break (a rejoined hyphenation shifts them by two
+        characters at most)."""
         if p not in self._lines:
             texts = [self.raw.get(p, "")]
             if self.pdf is not None and 1 <= p <= self.n:
@@ -215,14 +220,14 @@ class DocText:
             out: list[tuple[str, list[int]]] = []
             for t in texts:
                 lines = t.replace("\f", "").split("\n")
-                for mode in ("map", "strip"):
-                    f = normalize(t, mode)
+                for mode, hy in FORMS:
+                    f = normalize(t, mode, hy)
                     if any(f == x[0] for x in out):
                         continue
                     starts = []                 # blank lines are no lines: they do not count as a gap
                     for i, ln in enumerate(lines):
                         if ln.strip():
-                            n = len(normalize("\n".join(lines[:i]), mode)) if i else 0
+                            n = len(normalize("\n".join(lines[:i]), mode, hy)) if i else 0
                             starts.append(n + 1 if n else 0)
                     out.append((f, starts or [0]))
             self._lines[p] = out

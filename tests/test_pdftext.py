@@ -145,6 +145,9 @@ def test_normalize_soft_hyphen_and_line_break_hyphen():
     assert pdftext.normalize("sam\u00adpling") == "sampling"                   # invisible inside a line
     # a hard hyphen at a line end keeps the hyphen, whichever source the break came from
     assert pdftext.normalize("auto-  \n     retry") == pdftext.normalize("auto-retry") == "auto-retry"
+    # or, in the second form a page is compared in, drops it: the text layer cannot tell which it was
+    assert pdftext.normalize("re-  \n     quested", hyphen="drop") == "requested"
+    assert pdftext.normalize("auto-retry", hyphen="drop") == "auto-retry"          # inside a line it stays
     # so a quote typed across the break matches the page text
     page = pdftext.normalize("the host reads the tempera\u00ad\nture offset and the gain")
     assert pdftext.normalize("reads the temperature offset and the gain") in page
