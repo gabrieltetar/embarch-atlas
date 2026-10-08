@@ -122,6 +122,30 @@ def test_status_current_and_stale(tmp_path, capsys):
     assert "current" in out and "stale: commit differs from HEAD" in out and "working tree dirty" in out
 
 
+def test_an_atlas_joined_again_after_a_document_change_is_fresh(tmp_path):
+    fw = make_fw(tmp_path)
+    project.init(fw)
+    adir = fw / "embarch" / "atlas"
+    (adir / "atlas.toml").write_text((adir / "atlas.toml").read_text()
+                                     + '\n[[boards]]\nlabel = "M"\npdf = "main-board.pdf"\n')
+    head = git(fw, "rev-parse", "HEAD")
+    man = adir / "inventory" / "manifest.json"
+    common.write_json(man, {"documents": [{"file": "part.pdf", "sha256": "11"}]})
+    old = common.sources_fingerprint(man)
+    pdf_sha = common.sha256_file(fw / "embarch" / "hardware" / "main-board.pdf")
+    name = f"core@{head[:12]}"
+    stamp(adir, name, commit=head, sources=old, schematics={"M": "0" * 64})
+    common.write_json(man, {"documents": [{"file": "part.pdf", "sha256": "22"}]})
+    rows = {r["atlas"]: r for r in project.status(adir)["atlases"]}
+    assert rows[name]["stale"] == ["inventory/manifest.json changed", "board M PDF changed"]
+    # join recorded what it read (inputs.json): the build's stamp is never edited, the atlas is fresh
+    common.write_json(adir / "atlases" / name / "inputs.json",
+                      {"sources": common.sources_fingerprint(man), "schematics": {"M": pdf_sha}})
+    rows = {r["atlas"]: r for r in project.status(adir)["atlases"]}
+    assert rows[name]["stale"] == []
+    assert common.read_json(adir / "atlases" / name / "atlas.json")["sources"] == old
+
+
 def test_status_empty(tmp_path, capsys):
     fw = make_fw(tmp_path)
     project.init(fw)

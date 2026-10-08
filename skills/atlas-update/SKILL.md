@@ -22,7 +22,9 @@ Current state:
                     (per-page hashes: only changed pages go back to the LLM; frozen output of the rest is reused)
 - [ ] 3 schematics  if a board PDF changed: embarch-atlas schematic <pdf> --board <label>; diff the netlist; if a connector's nets changed, re-run embarch-atlas interfaces and ASK the engineer to re-confirm the mating rule
 - [ ] 4 bump        embarch-atlas update <target> <commit>
-                    (build, join, RM worklist, second-look queue, diff; it stops at step 2/3 work if a source changed)
+                    (build, join, RM worklist, second-look queue, diff). It stops while a translation is behind
+                    its source (a doc not re-prepped, frozen units on changed pages, a netlist from an older PDF),
+                    naming each; documents with no distillation are listed, not blocking
 - [ ] 5 RM          if it reports RM units to distil: /atlas-translate-docs rm-worklist <atlas>, then update again
 - [ ] 6 2nd look    the batches it wrote hold only the diff (new or changed facts): one blind subagent per batch,
                     exactly as atlas-build step 5 (prompt, compare, record), then embarch-atlas join <atlas>

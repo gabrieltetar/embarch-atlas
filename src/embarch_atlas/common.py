@@ -84,19 +84,35 @@ def verb_group(sub, groups: dict, name: str, help: str):
     return groups[name]
 
 
+def _manifest_docs(manifest_path: Path) -> list | None | bool:
+    """The manifest's document list; False when there is no readable manifest, None when it holds no list."""
+    if not manifest_path.is_file():
+        return False
+    try:
+        data = read_json(manifest_path)
+    except (OSError, ValueError):
+        return False
+    docs = data.get("documents") if isinstance(data, dict) else None
+    return docs if isinstance(docs, list) else None
+
+
+def source_files(manifest_path: Path) -> dict[str, str] | None:
+    """file -> sha256 of every document in the manifest; None without a readable document list."""
+    docs = _manifest_docs(manifest_path)
+    if not isinstance(docs, list):
+        return None
+    return {str(d.get("file") or d.get("path") or ""): str(d.get("sha256") or "") for d in docs}
+
+
 def sources_fingerprint(manifest_path: Path) -> str | None:
     """What an atlas depends on in the manifest: each document's name and content hash.
 
     Not the manifest file's bytes: a newer inventory tool that adds a field must not make
     every atlas stale when no document changed."""
-    if not manifest_path.is_file():
+    docs = _manifest_docs(manifest_path)
+    if docs is False:
         return None
-    try:
-        data = read_json(manifest_path)
-    except (OSError, ValueError):
-        return None
-    docs = data.get("documents") if isinstance(data, dict) else None
-    if not isinstance(docs, list):
+    if docs is None:
         return sha256_file(manifest_path)
     pairs = sorted((str(d.get("file") or d.get("path") or ""), str(d.get("sha256") or "")) for d in docs)
     return sha256_text("\n".join(f"{f}\t{h}" for f, h in pairs))

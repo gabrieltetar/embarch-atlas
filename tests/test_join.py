@@ -362,6 +362,13 @@ def test_join_snapshots_inputs(tmp_path):
     assert (atlas / "inputs" / "netlist_M.json").is_file()
     assert "sns701@a" in inp["docs"]
     assert json.loads((atlas / "pins.json").read_text())["interfaces"][0]["rule"] == "mirror"
+    # what the join read, for staleness: the manifest it saw and the PDF each netlist came from
+    assert inp["sources"] is None and inp["source_files"] is None          # no inventory in this project
+    assert set(inp["schematics"]) == {"M", "S"}
+    write_json(ad / "inventory" / "manifest.json", {"documents": [{"file": "a.pdf", "sha256": "11"}]})
+    run_join(ad, atlas)
+    inp = read_json(atlas / "inputs.json")
+    assert inp["source_files"] == {"a.pdf": "11"} and inp["sources"]
 
 
 def test_mcu_port_from_datasheet_pin_records(tmp_path):

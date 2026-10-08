@@ -285,6 +285,22 @@ def _current_schematic_shas(atlas_dir: Path, cfg: dict[str, Any]) -> dict[str, s
     return out
 
 
+def joined_stamp(atlas: Path, stamp: dict[str, Any]) -> dict[str, Any]:
+    """The stamp, with the documents and schematics the atlas's last `join` read (`inputs.json`) in
+    place of the build's: a join after a document or schematic change makes the atlas fresh again,
+    and `atlas.json` itself is never edited."""
+    try:
+        inp = common.read_json(atlas / "inputs.json")
+    except (OSError, ValueError):
+        return stamp
+    out = dict(stamp)
+    if "sources" in inp:
+        out["sources"] = inp["sources"]
+    if inp.get("schematics"):
+        out["schematics"] = {**(stamp.get("schematics") or {}), **inp["schematics"]}
+    return out
+
+
 def atlas_state(atlas_dir: Path, stamp: dict[str, Any], head: str | None,
                 manifest_sha: str | None, schematic_shas: dict[str, str | None]) -> list[str]:
     """Reasons an atlas is stale; empty when it is fresh."""
@@ -319,7 +335,7 @@ def status(atlas_dir: Path) -> dict[str, Any]:
     rows = []
     for stamp_path in sorted((atlas_dir / "atlases").glob("*/atlas.json")):
         try:
-            stamp = common.read_json(stamp_path)
+            stamp = joined_stamp(stamp_path.parent, common.read_json(stamp_path))
         except (OSError, ValueError) as e:
             rows.append({"atlas": stamp_path.parent.name, "error": str(e)})
             continue

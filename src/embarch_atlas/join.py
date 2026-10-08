@@ -28,7 +28,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
-from embarch_atlas.common import read_json, read_jsonl, sha256_file, write_json, write_text
+from embarch_atlas.common import (read_json, read_jsonl, sha256_file, source_files, sources_fingerprint, write_json,
+                                   write_text)
 
 GROUND_RE = re.compile(r"^(A|D|P|S|C)?GND\w*$|(^|_)(A|D|P|S)?GND(\d+)?(_\w+)?$|^VSS\w*$|^0V$", re.I)
 SUPPLY_RE = re.compile(r"^\+?\d+V\d*(_\w+)?$|^\+?\d+P\d+V?\w*$|^(A|D)?V(DD|CC|EE)\w*$|^V(BAT|SYS|IN|BUS|REF)$", re.I)
@@ -1064,7 +1065,7 @@ def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None =
     write_json(atlas / "pins.json", pins)
     write_text(atlas / "pins.md", render_pins_md(stamp, J.mcu, mpn, rows, interfaces, i2c, values))
     write_text(atlas / "pin_slice.txt", render_slice(stamp, rows))
-    snapshot_inputs(atlas, root, boards, J.docs, sysj)
+    snapshot_inputs(atlas, root, boards, J.docs, sysj, ad)
     report = mismatch.run(J, stamp, pins)
     mp = mapgen.run(ad, atlas, J, stamp, pins, report)
     g = graph.run(ad, atlas, J, stamp, pins, report, log=log)
@@ -1101,12 +1102,19 @@ def load_join(ad: Path, atlas: Path, stamp: dict, dt: dict, in_use: dict, boards
     return J, root, sysj
 
 
-def snapshot_inputs(atlas: Path, root: Path, boards: dict[str, Board], docs: Docs, sysj: Path) -> None:
-    """Copy what the join read, so the atlas stays comparable after the inputs move on."""
+def snapshot_inputs(atlas: Path, root: Path, boards: dict[str, Board], docs: Docs, sysj: Path, ad: Path) -> None:
+    """Copy what the join read, so the atlas stays comparable after the inputs move on.
+
+    `sources` (the manifest fingerprint), `source_files` and `schematics` (the board PDF each joined
+    netlist came from) say which documents this join saw; staleness reads them over the build's
+    stamp (`project.joined_stamp`), so an atlas joined again after a document change is fresh."""
     inp = atlas / "inputs"
     inp.mkdir(exist_ok=True)
     rec = {"netlists": {}, "system_json": sha256_file(sysj) if sysj.is_file() else None,
            "docs": {d: {"doc_sha256": (v["doc"].get("sha256")), "records": v["files"]} for d, v in sorted(docs.docs.items())}}
+    man = ad / "inventory" / "manifest.json"
+    rec["sources"], rec["source_files"] = sources_fingerprint(man), source_files(man)
+    rec["schematics"] = {lab: (b.nl.get("source") or {}).get("sha256") for lab, b in sorted(boards.items())}
     for lab in boards:
         src = root / lab / "netlist.json"
         shutil.copyfile(src, inp / f"netlist_{lab}.json")

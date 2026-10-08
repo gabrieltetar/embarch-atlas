@@ -3,8 +3,11 @@
 The deterministic half of the atlas-update skill as one command. Against the target's previous
 atlas it:
 
-1. stops when a document or a board schematic changed since then, naming them: that needs
-   `/atlas-translate-docs` first, an LLM step this command does not take;
+1. stops when a translation is behind its source, naming it: a `docs/<id>` prepped from an older
+   file, a distillation whose frozen units rest on changed pages (`doc thaw-check`), a board's
+   netlist made from an older PDF. Fixing that needs `/atlas-translate-docs` or `schematic`, steps
+   this command does not take. A new or changed document with no distillation does not stop it:
+   it is listed, with its kind, as added to or changed since the previous atlas;
 2. builds the new commit (an existing atlas for it is reused, never edited);
 3. joins it;
 4. writes the reference manual's worklist and counts the units still to distil;
@@ -42,17 +45,133 @@ def previous_atlas(ad: Path, target: str, exclude: Path | None = None) -> Path |
     return best[1] if best else None
 
 
-def source_changes(ad: Path, prev: Path) -> list[str]:
-    """What changed in the documents or the schematics since `prev` was built."""
-    from .project import _current_schematic_shas, atlas_state, load_config
+def _distillations(ad: Path) -> dict[str, dict]:
+    """doc_id -> doc.json of every `docs/<id>/` that `doc prep` wrote."""
+    out = {}
+    for f in sorted((ad / "docs").glob("*/doc.json")):
+        try:
+            out[f.parent.name] = read_json(f)
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def distillation_of(entry: dict, dists: dict[str, dict]) -> str | None:
+    """The `docs/<id>` made from a manifest file: the same doc_id, else the same content (a doc
+    prepped under another `--doc-id`), else the same file name (an older copy of the file)."""
+    if entry.get("doc_id") in dists:
+        return entry["doc_id"]
+    sha, name = entry.get("sha256"), Path(entry.get("file") or "").name
+    for d, meta in dists.items():
+        if sha and meta.get("sha256") == sha:
+            return d
+    for d, meta in dists.items():
+        if name and Path(meta.get("file") or "").name == name:
+            return d
+    return None
+
+
+def _manifest_entries(ad: Path) -> list[dict]:
+    man = ad / "inventory" / "manifest.json"
+    try:
+        docs = read_json(man).get("documents") if man.is_file() else None
+    except (OSError, ValueError, AttributeError):
+        docs = None
+    return [e for e in docs or [] if isinstance(e, dict) and "duplicate_of" not in e]
+
+
+def stale_translations(ad: Path) -> list[str]:
+    """Translations that exist but are behind their source: what stops an update.
+
+    - a `docs/<id>` whose doc.json hash is not the manifest file's (prepped from an older file);
+    - a distillation whose newest freeze has units resting on pages that changed (`doc thaw-check`);
+      the reference manual's units are the worklist's business (`rm_todo`), not this check's;
+    - a board whose `netlist.json` was made from another PDF than the one `atlas.toml` names.
+    A document with no distillation is not behind anything: `changes_since` lists it."""
+    from . import freeze as F
+    from .project import _current_schematic_shas, board_entries, load_config
+    why = []
+    dists = _distillations(ad)
+    for e in _manifest_entries(ad):
+        if e.get("kind") == "schematic":
+            continue
+        d = distillation_of(e, dists)
+        if d is None:
+            continue
+        meta = dists[d]
+        if meta.get("sha256") != e.get("sha256"):
+            why.append(f"docs/{d} was prepped from an older {e.get('file')}: embarch-atlas doc prep, then doc thaw-check")
+            continue
+        if meta.get("kind") == "reference-manual" or not meta.get("pages"):
+            continue
+        rep = F.thaw_check(ad, d)
+        if rep.get("entry") and rep["redo"]:
+            pages = sorted({p for r in rep["redo"] for p in r["changed"]})
+            why.append(f"docs/{d}: {len(rep['redo'])} distilled units rest on changed pages ({F._runs(pages)}): "
+                       "re-distil them, then doc check and doc freeze")
     try:
         cfg = load_config(ad)
     except FileNotFoundError:
         cfg = {}
-    manifest = common.sources_fingerprint(ad / "inventory" / "manifest.json")
-    sch = _current_schematic_shas(ad, cfg) if cfg else {}
-    return [w for w in atlas_state(ad, read_json(prev / "atlas.json"), None, manifest, sch)
-            if not w.startswith("commit")]
+    shas = _current_schematic_shas(ad, cfg) if cfg else {}
+    for b in board_entries(cfg):
+        nl, now = ad / "boards" / b["label"] / "netlist.json", shas.get(b["label"])
+        if now is None or not nl.is_file():
+            continue
+        try:
+            made_from = (read_json(nl).get("source") or {}).get("sha256")
+        except (OSError, ValueError):
+            made_from = None
+        if made_from != now:
+            why.append(f"board {b['label']}: netlist.json is from another PDF than {b.get('pdf')}: "
+                       f"embarch-atlas schematic {b.get('pdf')} --board {b['label']}")
+    return why
+
+
+def changes_since(ad: Path, prev: Path) -> tuple[list[dict], str]:
+    """The documents added, changed or removed since `prev` was joined: [{change, file, kind, doc}],
+    `doc` the `docs/<id>` made from the file (None: not distilled); and where the list came from.
+
+    `prev`'s own file list (`inputs.json` `source_files`, written by join) when it has one; else the
+    inventory's diff against the manifest before it, when the fingerprint moved since `prev`."""
+    from .project import joined_stamp
+    man = ad / "inventory" / "manifest.json"
+    now = common.source_files(man) or {}
+    try:
+        inp = read_json(prev / "inputs.json")
+    except (OSError, ValueError):
+        inp = {}
+    if isinstance(inp.get("source_files"), dict):
+        was = inp["source_files"]
+        moved = {"added": set(now) - set(was), "changed": {f for f in set(now) & set(was) if now[f] != was[f]},
+                 "removed": set(was) - set(now)}
+        basis = f"{prev.name}'s file list"
+    else:
+        if joined_stamp(prev, read_json(prev / "atlas.json")).get("sources") == common.sources_fingerprint(man):
+            return [], ""
+        try:
+            d = read_json(man).get("diff") or {}
+        except (OSError, ValueError, AttributeError):
+            d = {}
+        moved = {k: set(d.get(k) or []) for k in ("added", "changed", "removed")}
+        basis = f"the last inventory's diff ({prev.name} predates per-file lists)"
+    entries = {e.get("file"): e for e in _manifest_entries(ad)}
+    dists = _distillations(ad)
+    rows = []
+    for change in ("added", "changed", "removed"):
+        for f in sorted(moved[change]):
+            e = entries.get(f) or {}
+            rows.append({"change": change, "file": f, "kind": e.get("kind"),
+                         "doc": distillation_of(e, dists) if e and change != "removed" else None})
+    return rows, basis
+
+
+def _change_line(r: dict) -> str:
+    if r["change"] == "removed":
+        return f"removed {r['file']}"
+    what = f"docs/{r['doc']}" if r["doc"] else ("netlist: schematic" if r["kind"] == "schematic" else
+                                                f"{r['kind'] or 'unknown kind'}, not distilled")
+    return f"{r['change']} {r['file']} ({what})"
 
 
 def rm_todo(ad: Path, atlas: Path) -> dict[str, Any] | None:
@@ -92,12 +211,11 @@ def run(ad: Path, target: str, commit: str = "HEAD", log=print) -> int:
     from . import diff as D, join as J
     cfg = target_config(ad, target)
     prev = previous_atlas(ad, target)
-    if prev:
-        changed = source_changes(ad, prev)
-        if changed:
-            log(f"stopped: since {prev.name} " + "; ".join(changed) + ". Translate the changed documents "
-                "(/atlas-translate-docs) or re-run the schematic, then update again.")
-            return 2
+    behind = stale_translations(ad)
+    if behind:
+        log("stopped: " + "; ".join(behind) + ". Finish the translation (/atlas-translate-docs) or re-run the "
+            "schematic, then update again.")
+        return 2
     try:
         atlas = run_build(ad, cfg, commit, log=log)
     except BuildError as e:
@@ -105,6 +223,9 @@ def run(ad: Path, target: str, commit: str = "HEAD", log=print) -> int:
         return 1
     if prev and prev.resolve() == atlas.resolve():
         prev = previous_atlas(ad, target, exclude=atlas)
+    moved, basis = changes_since(ad, prev) if prev else ([], "")
+    if moved:
+        log(f"documents since {prev.name}, from {basis}: " + "; ".join(_change_line(r) for r in moved))
     J.run(ad, atlas, log=log)
     rm = rm_todo(ad, atlas)
     sl = second_look_diff(ad, atlas, prev)
@@ -117,6 +238,10 @@ def run(ad: Path, target: str, commit: str = "HEAD", log=print) -> int:
         write_text(atlas / f"diff-from-{prev.name}.md", text)
     log("")
     log(f"{atlas.name}: built and joined" + (f"; diff from {prev.name} in diff-from-{prev.name}.md" if prev else ""))
+    undistilled = [r["file"] for r in moved if r["change"] != "removed" and not r["doc"] and r["kind"] != "schematic"]
+    if undistilled:
+        log(f"  new or changed, not distilled: {'; '.join(undistilled)}. /atlas-translate-docs <file> for any the "
+            "firmware needs, then update again")
     if rm:
         log(f"  reference manual {rm['doc']}: {rm['frozen']}/{rm['units']} units frozen, {rm['todo_units']} to distil"
             + (" -> /atlas-translate-docs rm-worklist " + atlas.name if rm["todo_units"] else ""))

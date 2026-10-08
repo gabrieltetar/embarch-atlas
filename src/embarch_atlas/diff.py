@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from embarch_atlas.common import read_json, write_json, write_text
+from embarch_atlas.project import joined_stamp
 
 
 def _load(atlas: Path, name: str, default=None):
@@ -200,7 +201,7 @@ def diff_inputs(A: Path, B: Path) -> dict:
 
 
 def diff(A: Path, B: Path) -> dict:
-    sa, sb = read_json(A / "atlas.json"), read_json(B / "atlas.json")
+    sa, sb = joined_stamp(A, read_json(A / "atlas.json")), joined_stamp(B, read_json(B / "atlas.json"))
     return {
         "a": sa["id"], "b": sb["id"],
         "stamp": diff_stamps(sa, sb),

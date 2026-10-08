@@ -179,6 +179,8 @@ def frozen_entries(atlas: Path, doc_id: str) -> list[tuple[Path, dict]]:
     cache = Path(atlas) / "cache" / "llm"
     out = []
     for f in sorted(cache.glob("*.json")) if cache.is_dir() else []:
+        if f.name.startswith("sl-"):     # second-look verdicts, never a distillation
+            continue
         try:
             e = common.read_json(f)
         except (json.JSONDecodeError, OSError):

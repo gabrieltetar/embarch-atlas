@@ -96,7 +96,9 @@ atlases/<target>@<commit12>/
   atlas.json                    the stamp (below)
   build/                        edt.pickle, .config, compile_commands.json, zephyr.elf, zephyr.dts,
                                 zephyr.dts.d, zephyr_modules.txt, build_info.yml
-  inputs/, inputs.json          netlist and BOM snapshots the atlas was joined against (for diff)
+  inputs/, inputs.json          netlist and BOM snapshots the atlas was joined against (for diff); the
+                                manifest fingerprint and file list, and each netlist's source PDF hash,
+                                the join read (`sources`, `source_files`, `schematics`: for staleness)
   dt.json                       pins, devices, buses, IRQ/EXTI from the edt
   kconfig.json                  every Kconfig symbol: value, assigning fragment, depends on (met?),
                                 selected/implied by, the default that applies, where defined.
@@ -122,7 +124,9 @@ false` (a worktree is always clean), `west` (every project's path, revision and
 `head`), `sources` (sha256 of `inventory/manifest.json`), `schematics` (sha256 per
 board PDF), `build{...}` with the from-worktree evidence, `tool` (embarch-atlas
 version + git sha), `created` (UTC). An atlas is **stale** when HEAD or any source
-hash differs; it is never edited, only superseded.
+hash differs; it is never edited, only superseded. Documents and schematics are what
+`join` reads, so the hashes the last join recorded in `inputs.json` stand in for the
+build's: an atlas joined again after a document change is fresh.
 
 ### Building from the worktree
 
@@ -469,12 +473,27 @@ An atlas id is `<target>@<commit12>`.
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name; abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
-| `update <target> [commit]` | `update` | bump: stop if documents or schematics changed, build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts; the previous atlas's backlog is counted), the diff written into the new atlas |
+| `update <target> [commit]` | `update` | bump: stop while a translation is behind its source (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts; the previous atlas's backlog is counted), the diff written into the new atlas |
 | `q <lookup>` | `query` | the twelve lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
 | `mcp` | `mcp_server` | the twelve lookups as an MCP server over stdio, and `reg_read` when Core answers |
+
+### When `update` stops
+
+`update` stops only for a translation that exists and is behind its source, and names the fix:
+
+- a `docs/<id>` whose `doc.json` hash is not the manifest file's (`doc prep` has not run on the new
+  file). The distillation of a manifest file is `docs/<doc_id>`, else the one prepped from the same
+  content under another `--doc-id`, else the one prepped from a file of the same name;
+- a distillation whose newest freeze has units on pages that changed (`doc thaw-check`). The
+  reference manual's units are the worklist's, which `update` writes itself;
+- a board whose `netlist.json` was made from another PDF than the one `atlas.toml` names.
+
+A new or changed document with no distillation, of any kind, does not stop it: `update` lists the
+documents added, changed or removed since the previous atlas (from that atlas's `source_files`,
+else the inventory's own diff) with the distillation each one has, and names the ones without.
 
 ## What an LLM step may and may not do
 
