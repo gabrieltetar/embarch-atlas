@@ -317,6 +317,30 @@ def test_k_plus_minus_percent_expression_wrapped_unit_stacked_row(tmp_path):
     assert "typ" in _k(doc, dict(tdeb, typ=19, q="RL = 100, VOUT = 5 V ms 18"))["disagree"]
 
 
+PAST_PAGE = [
+    (40, 60, "Parameter"), (200, 60, "Min Value"), (260, 60, "Nom Value"), (320, 60, "Max Value"),
+    (400, 60, "Unit"), (440, 60, "Description"),
+    (40, 76, "tONA"), (330, 76, "275"), (400, 76, "ms"), (440, 76, "Turn-on time, in its column"),
+    (40, 92, "tONB"), (360, 92, "275"), (400, 92, "ms"), (440, 92, "Turn-on time, printed right of Max"),
+    (40, 108, "tONC"), (200, 108, "12"), (360, 108, "30"), (400, 108, "ms"), (440, 108, "Settling time"),
+    (40, 124, "tOND"), (400, 124, "ms"), (440, 124, "Wait 5 ms"),
+]
+
+
+def test_k_a_value_past_the_last_column_and_a_row_with_no_column_value(tmp_path):
+    doc = check.DocText(_table_doc(tmp_path, [PAST_PAGE]))
+    t = lambda sym, q, **kw: dict(_lim(f"ec.{sym}", q, 1, group="ec", unit="ms", **kw), kind="timing")
+    assert _k(doc, t("tONA", "tONA 275 ms", max=275)) == "ok"
+    # printed between the Max column and the Unit header: the last value column's
+    assert _k(doc, t("tONB", "tONB 275 ms", max=275)) == "ok"
+    assert _k(doc, t("tONB", "tONB 275 ms", typ=275)) == {
+        "disagree": {"max": {"record": None, "columns": 275.0}}}
+    assert _k(doc, t("tONC", "tONC 12 30 ms", min=12, max=30)) == "ok"
+    # a cell the reader could not place is not a disagreement: no column value at all is not checkable
+    assert _k(doc, t("tOND", "tOND ms Wait 5 ms", max=5)) == "not checkable: no-column-value"
+    assert _k(doc, t("tONC", "tONC 12 30 ms", min=12, typ=20, max=30)) == "ok"   # typ: N's business, not K's
+
+
 def test_k_row_not_found_is_a_counted_warning(doc, monkeypatch):
     _, docdir = doc
     # the row of IQ is not in the word bands (as when the two text layers split a row differently)

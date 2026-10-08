@@ -245,7 +245,7 @@ fails. What the letters mean and what to do:
 | V | the record does not validate | the field name or type the message names |
 | A | `not-found` / `wrong-page: quote found on pN` / `no-quote` | re-read the page and copy the line; fix `p`. A quote that the text layer really lacks means the fact is from a picture: `src: figure` |
 | N | a value is not a number of its quote | quote the numbers line, or fix the value |
-| K | the independent column assignment disagrees | a column slip or wrong unit: re-read the row |
+| K | the independent column assignment disagrees | a column slip or wrong unit: re-read the row. A value the reader places in no column is not compared (a row with none is a `no-column-value` warning); one printed between the last value column and the Unit header counts as that column's |
 | C | a number of `cond` is not on the cited page | fix the condition, or cite the page it is on |
 | U | unit does not fit the symbol, or is not on the page | keep the printed unit; tag a conversion |
 | O | min > typ or typ > max | usually a column slip |

@@ -365,6 +365,10 @@ class DocText:
                 return {"status": "cell-unparsed"}
         else:
             left = min(hdr.values()) - 30
+            # a value printed right of the last value column, before the Unit header, is that column's
+            last = max(hdr, key=lambda k: hdr[k])
+            unit_left = min((w[0] for w in hws if w[4].upper() in ("UNIT", "UNITS") and w[0] > hdr[last]),
+                            default=None)
             seen: dict[str, list] = {}
             for w in words:
                 xc = (w[0] + w[2]) / 2
@@ -372,7 +376,8 @@ class DocText:
                 if c is None:
                     continue
                 col = min(hdr, key=lambda k: abs(hdr[k] - xc))
-                if abs(hdr[col] - xc) < 28:
+                if abs(hdr[col] - xc) < 28 or (col == last and unit_left is not None
+                                               and hdr[col] < xc < unit_left and xc - hdr[col] < PAST_LAST):
                     seen.setdefault(col, []).append(c[0])
                     pct |= c[1]
             for col, vs in seen.items():
@@ -413,9 +418,11 @@ class DocText:
 
 
 ROW_SPAN = 12.0      # points: stacked lines of one table row
+PAST_LAST = 60.0     # points: how far right of the last value header a value still belongs to it
 # K statuses where the row is on the page but K could not read it: warnings, counted per document
 K_WARN = {"row-not-found": "row not found", "row-ambiguous": "row ambiguous (two stacked lines, one column)",
-          "cell-unparsed": "row with an unreadable VALUE cell"}
+          "cell-unparsed": "row with an unreadable VALUE cell",
+          "no-column-value": "row with no value under a value column"}
 UNIT_SPAN = 16.0     # points: a unit cell wrapped over the row's neighbouring lines
 VALUE_HDR = ("VALUE", "VALUES")
 # A value cell; a footnote marker glued to it (`3000(4)`, `1.7(1)`) is not part of the number.
@@ -486,7 +493,11 @@ def _pm_string(v: str) -> float | None:
 
 
 def compare_columns(rec: dict, det: dict) -> dict:
-    """{key: {"record", "columns"}} where the record and the independent column reading disagree."""
+    """{key: {"record", "columns"}} where the record and the independent column reading disagree.
+
+    A key the reading has no value for is not compared: the reader could not place a cell there,
+    which says nothing about the record (N still finds its number in the quote). A record that puts
+    a value in the wrong column still disagrees, under the key the reading did find it in."""
     diff: dict[str, Any] = {}
     if "single" in det:
         nums = [float(rec[k]) for k in NUMERIC_KEYS if isnum(rec.get(k))]
@@ -500,6 +511,8 @@ def compare_columns(rec: dict, det: dict) -> dict:
         return diff
     for k in NUMERIC_KEYS:
         lv, dv = rec.get(k), det.get(k)
+        if dv is None:
+            continue
         if isinstance(lv, str):
             pm = _pm_string(lv)
             if pm is None:
@@ -508,12 +521,10 @@ def compare_columns(rec: dict, det: dict) -> dict:
                 continue
             diff[k] = {"record": lv, "columns": _show(dv)}
             continue
-        if lv is None and dv is None:
-            continue
         if isinstance(dv, tuple):             # `±X` under TYP: a magnitude
             if lv is not None and math.isclose(float(lv), dv[1], rel_tol=1e-9):
                 continue
-        elif dv != "expr" and lv is not None and dv is not None and math.isclose(float(lv), dv, rel_tol=1e-9):
+        elif dv != "expr" and lv is not None and math.isclose(float(lv), dv, rel_tol=1e-9):
             continue
         diff[k] = {"record": lv, "columns": _show(dv)}
     return diff
@@ -604,7 +615,9 @@ def record_checks(doc: DocText, rec: dict) -> dict:
     if kind in ("limit", "timing") and rec.get("group") in K_GROUPS and rec.get("src") == "table" and qs \
             and (numv or pm_strings):
         c = doc.columns(rec)
-        if c["status"] == "ok":
+        if c["status"] == "ok" and not c["det"]:
+            out["K"] = "not checkable: no-column-value"
+        elif c["status"] == "ok":
             diff = compare_columns(rec, c["det"])
             if c.get("unit") and rec.get("unit") and c["unit"] not in _unit_forms(rec["unit"]):
                 diff["unit"] = {"record": rec["unit"], "columns": c["unit"]}
