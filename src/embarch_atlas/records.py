@@ -154,11 +154,11 @@ def records_dir(docdir: Path) -> Path:
 
 class RawLine(dict):
     """An empty stand-in for a record-file line that parses as JSON but is not an object. Checks see
-    `{}`; `save_records` writes `value` back as it was (DESIGN.md principle 4: nothing is deleted)."""
+    `{}`; `save_records` writes `text` back verbatim (DESIGN.md principle 4: nothing is deleted)."""
 
-    def __init__(self, value: Any, line: int):
+    def __init__(self, text: str, line: int):
         super().__init__()
-        self.value = value
+        self.text = text
         self.line = line
 
 
@@ -169,8 +169,8 @@ def load_records(docdir: Path) -> list[tuple[str, dict]]:
     if not rdir.is_dir():
         return out
     for path in sorted(rdir.glob("*.jsonl")):
-        for n, rec in common.read_jsonl_numbered(path):
-            out.append((path.name, rec if isinstance(rec, dict) else RawLine(rec, n)))
+        for n, text, rec in common.read_jsonl_lines(path):
+            out.append((path.name, rec if isinstance(rec, dict) else RawLine(text, n)))
     return out
 
 
@@ -186,7 +186,8 @@ def save_records(docdir: Path, pairs: list[tuple[str, dict]]) -> list[str]:
     written = []
     for name, recs in by_file.items():
         path = records_dir(docdir) / name
-        new = "".join(json.dumps(r.value if isinstance(r, RawLine) else r, sort_keys=True, ensure_ascii=False) + "\n" for r in recs)
+        new = "".join((r.text if isinstance(r, RawLine) else json.dumps(r, sort_keys=True, ensure_ascii=False)) + "\n"
+                      for r in recs)
         if not path.exists() or path.read_text(encoding="utf-8") != new:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(new, encoding="utf-8")

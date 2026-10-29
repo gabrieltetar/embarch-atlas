@@ -48,16 +48,22 @@ def write_jsonl(path: Path, rows: Iterable[dict]) -> None:
             f.write(json.dumps(row, sort_keys=True, ensure_ascii=False) + "\n")
 
 
-def read_jsonl_numbered(path: Path) -> Iterator[tuple[int, Any]]:
-    """(1-based line number, parsed value) for every non-blank line."""
-    with open(path, encoding="utf-8") as f:
+def read_jsonl_lines(path: Path) -> Iterator[tuple[int, str, Any]]:
+    """(1-based line number, the line as read without its newline, parsed value) for every non-blank line."""
+    with open(path, encoding="utf-8", newline="") as f:
         for n, line in enumerate(f, 1):
-            line = line.strip()
-            if line:
+            text = line.rstrip("\r\n")
+            if text.strip():
                 try:
-                    yield n, json.loads(line)
+                    yield n, text, json.loads(text)
                 except json.JSONDecodeError as e:
                     raise ValueError(f"{path}:{n}: {e}") from e
+
+
+def read_jsonl_numbered(path: Path) -> Iterator[tuple[int, Any]]:
+    """(1-based line number, parsed value) for every non-blank line."""
+    for n, _, v in read_jsonl_lines(path):
+        yield n, v
 
 
 def read_jsonl(path: Path) -> Iterator[dict]:

@@ -725,10 +725,10 @@ def test_non_object_line_survives_a_save_and_is_reported(doc):
     ch["prov"] = "llm-verified"                          # claimed without a pass: check must rewrite it
     R.save_records(docdir, pairs)
     after = path.read_text(encoding="utf-8").splitlines()
-    assert after[1] == "[1, 2, 3]" and after[-1] == '"stray"' and len(after) == len(lines)
+    assert after[1] == "[1, 2,   3]" and after[-1] == '"stray"' and len(after) == len(lines)
     rep = check.run_check(docdir)
     assert "zz-regs.jsonl" in rep["files_written"]
     out = path.read_text(encoding="utf-8").splitlines()
-    assert out[1] == "[1, 2, 3]" and out[-1] == '"stray"' and len(out) == len(lines)
+    assert out[1] == "[1, 2,   3]" and out[-1] == '"stray"' and len(out) == len(lines)
     msgs = [i for x in rep["records"] for i in x["issues"] if i.startswith("V:") and "not a JSON object" in i]
     assert any("zz-regs.jsonl:2:" in m for m in msgs) and any(f"zz-regs.jsonl:{len(lines)}:" in m for m in msgs)
