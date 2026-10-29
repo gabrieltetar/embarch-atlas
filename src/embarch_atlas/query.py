@@ -194,7 +194,7 @@ def _missing(what: str, hint: str) -> str:
 # --------------------------------------------------------------------------- the thirteen
 
 @_stamped
-def part_card(a: Atlas, part: str, board: str | None = None) -> str:
+def part_card(a: Atlas, part: str, board: str | None = None, offset: int = 0) -> str:
     """The part's card.md; with `board`, the refs of that part on the boards and their nets."""
     d = a.find_doc(part)
     if not d:
@@ -207,7 +207,7 @@ def part_card(a: Atlas, part: str, board: str | None = None) -> str:
         # "all" (and "" from the CLI) is every board; anything else is a board label
         every = board.strip().lower() in ("", "all")
         out += "\n## On the boards\n\n" + _bindings(a, d.name, None if every else board)
-    return _cap(out, "part_card")
+    return _cap(out, "part_card", offset)
 
 
 def _pdf_extra(a: Atlas, d: Path) -> str:
@@ -237,7 +237,7 @@ def _pin_key(p: str):
 
 
 @_stamped
-def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str:
+def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2, offset: int = 0) -> str:
     """Outline rows: id | title | pages | tokens | tier-2 file (when distilled)."""
     d = a.find_doc(doc)
     if not d:
@@ -246,7 +246,7 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
     if not rows:
         toc_md = d / "toc.md"
         return _cap(_header(f"{d.name} toc") + (toc_md.read_text(encoding="utf-8") if toc_md.is_file() else "(no outline)\n"),
-                    "doc_toc")
+                    "doc_toc", offset)
     base = None
     if under:
         found = _toc_find(rows, under)
@@ -260,7 +260,7 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
         if len(found) > 1:
             listed = "\n".join(f"{r['id']} | {r['title']} | p{r['start']}" for r in found)
             return _cap(_header(f"{d.name} toc", extra=f"under={under!r} matches={len(found)}")
-                        + f"{len(found)} sections match {under!r}; pass one id as `under`:\n{listed}\n", "doc_toc")
+                        + f"{len(found)} sections match {under!r}; pass one id as `under`:\n{listed}\n", "doc_toc", offset)
         base = found[0]
     files = {p.stem for p in (d / "s").glob("*.md")} if (d / "s").is_dir() else set()
     toc = _json(d / "toc.json")
@@ -282,7 +282,7 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
             pages = f"p{r['start']}" + (f"-{r['end']}" if r["end"] != r["start"] else "")
             out.append(f"{'  ' * (r['level'] - lo)}{r['id']} | {r['title']} | {pages} | {r['tokens']} tok"
                        + (f" | {held}" if held else ""))
-    return _cap(_header(f"{d.name} toc" + (f" under {base['id']}" if base else "")) + "\n".join(out) + "\n", "doc_toc")
+    return _cap(_header(f"{d.name} toc" + (f" under {base['id']}" if base else "")) + "\n".join(out) + "\n", "doc_toc", offset)
 
 
 def _nearest_titles(rows: list[dict], under: str, k: int = 5) -> list[dict]:
@@ -359,7 +359,7 @@ def doc_section(a: Atlas, doc: str, section: str | None = None, page: int | None
     if not files and not (section and _toc_rows(d)):
         return _missing(f"distilled sections of {d.name}", "Not translated yet: run /atlas-translate-docs.")
     if not section:
-        return _cap(_header(f"{d.name} sections") + "\n".join(f"- s/{f.name}" for f in files) + "\n", "doc_section")
+        return _cap(_header(f"{d.name} sections") + "\n".join(f"- s/{f.name}" for f in files) + "\n", "doc_section", offset)
     want = _norm(section)
     rows = {r["id"]: r for r in _toc_rows(d)}
     title = _norm((rows.get(section) or {}).get("title", ""))
@@ -581,7 +581,7 @@ def _query_part(a: Atlas, terms: list[str]) -> tuple[Path | None, set[str]]:
 
 @_stamped
 def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = None,
-              limit: int | None = None) -> str:
+              limit: int | None = None, offset: int = 0) -> str:
     """Lines of facts.txt, and of the distilled prose (`kind=prose`), ranked lexically (BM25)
     across every document, each with its cite. A query term naming one part narrows the search to
     it, as `part` does. With no `limit`, shows
@@ -640,7 +640,7 @@ def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = 
     if limit is None and len(hits) < len(scored):
         body += (f"\n({len(scored) - len(hits)} more hits, each under {FIND_FACT_FLOOR:g} of the top score or past "
                  f"the first {FIND_FACT_LIMIT}; pass `limit` to list them)")
-    return _cap(head + body + "\n", "find_fact")
+    return _cap(head + body + "\n", "find_fact", offset)
 
 
 def _reg_cands(a: Atlas, hn: str, rn: str, head_doc: str) -> list[tuple[Path, dict]]:
@@ -713,7 +713,7 @@ def _byte_value(v: Any) -> int | None:
     return n if 0 <= n <= 0xFF else None
 
 
-def _register_pair(a: Atlas, reg: str, msb: tuple[Path, dict], lsb: tuple[Path, dict], field: str | None) -> str:
+def _register_pair(a: Atlas, reg: str, msb: tuple[Path, dict], lsb: tuple[Path, dict], field: str | None, offset: int = 0) -> str:
     """A 16-bit register a datasheet tables as two bytes (`<REG>_MSB` + `<REG>_LSB`), shown as one:
     MSB fields move up to bits 15:8, and the reset is joined when both bytes state one."""
     d, m = msb
@@ -736,11 +736,11 @@ def _register_pair(a: Atlas, reg: str, msb: tuple[Path, dict], lsb: tuple[Path, 
            f"{reg}: {m.get('name')} addr={m.get('addr')} is bits 15:8, {l.get('name')} addr={l.get('addr')} is bits 7:0",
            f"width=16 reset={reset} access={access} cite={_cite(m)}; {_cite(l)}", ""]
     out += [_field_line(f) for f in fields]
-    return _cap("\n".join(out + _reg_tail(a, related, ids)) + "\n", "register")
+    return _cap("\n".join(out + _reg_tail(a, related, ids)) + "\n", "register", offset)
 
 
 @_stamped
-def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
+def register_lookup(a: Atlas, target: str, field: str | None = None, offset: int = 0) -> str:
     """A register (MCU `PERIPH.REG` or external `part.REG`) with its fields, rules and conflicts.
     A name a datasheet splits into `<REG>_MSB` and `<REG>_LSB` returns both as one 16-bit view."""
     head, _, reg = target.partition(".")
@@ -753,7 +753,7 @@ def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
     if not cands:
         msb, lsb = _reg_cands(a, hn, rn + "msb", head_doc), _reg_cands(a, hn, rn + "lsb", head_doc)
         if msb and lsb and msb[0][0] == lsb[0][0]:
-            return _register_pair(a, reg, msb[0], lsb[0], field)
+            return _register_pair(a, reg, msb[0], lsb[0], field, offset)
         al = _cmsis_alias(a, head, reg)
         if al:
             cands = [al]
@@ -772,7 +772,7 @@ def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
     out += _reg_tail(a, related, [rid])
     if len(cands) > 1:
         out += ["", "Also named " + reg + " in: " + ", ".join(sorted({c[0].name for c in cands[1:]}))]
-    return _cap("\n".join(out) + "\n", "register")
+    return _cap("\n".join(out) + "\n", "register", offset)
 
 
 def _cmsis_alias(a: Atlas, head: str, member: str) -> tuple[Path, dict] | None:
@@ -835,7 +835,7 @@ def _codecheck_refs(a: Atlas, rid: str | None) -> list[str]:
 
 
 @_stamped
-def pin_trace(a: Atlas, query: str, board: str | None = None) -> str:
+def pin_trace(a: Atlas, query: str, board: str | None = None, offset: int = 0) -> str:
     """One chain per line: MCU pin -> net -> far ends -> DT use -> driver, with provenance per hop."""
     if not a.atlas:
         return _missing("atlas", "Run /atlas-build first.")
@@ -859,7 +859,7 @@ def pin_trace(a: Atlas, query: str, board: str | None = None) -> str:
         dt = "; ".join(_dt(u) for u in (p.get("dt") or [])) or "not in DT"
         num = p.get("num") or p.get("number") or ""
         out.append(f"pin {num} {p.get('port') or p.get('name')} net={p.get('net')} -> {far} || DT: {dt}")
-    return _cap("\n".join(out) + "\n", "pin_trace")
+    return _cap("\n".join(out) + "\n", "pin_trace", offset)
 
 
 def _far(f: dict) -> str:
@@ -908,7 +908,7 @@ def _build_src(a: Atlas, build: str | None, query: str, fn):
 
 
 @_stamped
-def config(a: Atlas, symbol: str, build: str | None = None) -> str:
+def config(a: Atlas, symbol: str, build: str | None = None, offset: int = 0) -> str:
     """A Kconfig symbol (CONFIG_X or X; `*` lists matches): its value, the fragment that set it, its
     depends on and whether it is met, who selects or implies it, the default that applies, where it
     is defined. From the pinned build, or the build dir `build` names."""
@@ -916,11 +916,11 @@ def config(a: Atlas, symbol: str, build: str | None = None) -> str:
     src, body = _build_src(a, build, symbol, buildq.config_answer)
     if src is None:
         return body
-    return _cap(_header(f"{src.label} kconfig", extra=f"query={symbol!r}") + body + "\n", "config")
+    return _cap(_header(f"{src.label} kconfig", extra=f"query={symbol!r}") + body + "\n", "config", offset)
 
 
 @_stamped
-def dt_node(a: Atlas, node: str, build: str | None = None) -> str:
+def dt_node(a: Atlas, node: str, build: str | None = None, offset: int = 0) -> str:
     """A devicetree node by path, label, alias, chosen name or compatible: status, binding, the
     driver compiled for it, whether its device is in the ELF, every property with the file:line
     that set it, its pins and children. From the pinned build, or the build dir `build` names."""
@@ -928,11 +928,11 @@ def dt_node(a: Atlas, node: str, build: str | None = None) -> str:
     src, body = _build_src(a, build, node, buildq.dt_answer)
     if src is None:
         return body
-    return _cap(_header(f"{src.label} devicetree", extra=f"query={node!r}") + body + "\n", "dt_node")
+    return _cap(_header(f"{src.label} devicetree", extra=f"query={node!r}") + body + "\n", "dt_node", offset)
 
 
 @_stamped
-def footprint(a: Atlas, build: str | None = None, vs: str | None = None, by: str = "dir") -> str:
+def footprint(a: Atlas, build: str | None = None, vs: str | None = None, by: str = "dir", offset: int = 0) -> str:
     """Flash image and RAM against the flash, SRAM and code partition the devicetree gives, then the
     largest contributors `by` dir, file or symbol; with `vs` (a build dir, or "pinned"), the change
     against that build instead. From the pinned build, or the build dir `build` names."""
@@ -944,11 +944,11 @@ def footprint(a: Atlas, build: str | None = None, vs: str | None = None, by: str
     except (LookupError, FileNotFoundError, OSError, RuntimeError, subprocess.CalledProcessError) as e:
         return f"src: none\n\n{e}\n"
     return _cap(_header(f"{src.label} zephyr.elf", extra=f"by={by}" + (f" vs={vs!r}" if vs else "")) + body + "\n",
-                "footprint")
+                "footprint", offset)
 
 
 @_stamped
-def stacks(a: Atlas, build: str | None = None) -> str:
+def stacks(a: Atlas, build: str | None = None, offset: int = 0) -> str:
     """Every thread stack in the image: size, symbol, the line that defined it, the *_STACK_SIZE option
     it most likely comes from (by inference). Static sizes only; high-water marks are live."""
     from . import buildq
@@ -957,7 +957,7 @@ def stacks(a: Atlas, build: str | None = None) -> str:
         body = buildq.stacks_answer(src)
     except (LookupError, FileNotFoundError, OSError, RuntimeError, subprocess.CalledProcessError) as e:
         return f"src: none\n\n{e}\n"
-    return _cap(_header(f"{src.label} zephyr.elf") + body + "\n", "stacks")
+    return _cap(_header(f"{src.label} zephyr.elf") + body + "\n", "stacks", offset)
 
 
 @_stamped
@@ -1016,22 +1016,22 @@ def register(sub, groups) -> None:
         p.add_argument("--atlas", help="atlas id (default: current)")
         p.set_defaults(func=lambda ns, fn=fn: _run(ns, fn))
 
-    add("part_card", part_card, (["part"], {}), (["--board"], {"nargs": "?", "const": "all"}))
-    add("doc_toc", doc_toc, (["doc"], {}), (["--under"], {}), (["--depth"], {"type": int, "default": 2}))
+    add("part_card", part_card, (["part"], {}), (["--board"], {"nargs": "?", "const": "all"}), (["--offset"], {"type": int, "default": 0}))
+    add("doc_toc", doc_toc, (["doc"], {}), (["--under"], {}), (["--depth"], {"type": int, "default": 2}), (["--offset"], {"type": int, "default": 0}))
     add("doc_section", doc_section, (["doc"], {}), (["--section"], {}), (["--page"], {"type": int}),
         (["--tier"], {"choices": ["distilled", "text"], "default": "distilled"}), (["--offset"], {"type": int, "default": 0}))
-    add("find_fact", find_fact, (["query"], {"nargs": "+"}), (["--part"], {}), (["--kind"], {}), (["--limit"], {"type": int}))
+    add("find_fact", find_fact, (["query"], {"nargs": "+"}), (["--part"], {}), (["--kind"], {}), (["--limit"], {"type": int}), (["--offset"], {"type": int, "default": 0}))
     add("find_text", find_text, (["doc"], {}), (["pattern"], {}), (["--section"], {}),
         (["--context"], {"type": int, "default": 2}), (["--offset"], {"type": int, "default": 0}))
-    add("register", register_lookup, (["target"], {}), (["--field"], {}))
-    add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}))
+    add("register", register_lookup, (["target"], {}), (["--field"], {}), (["--offset"], {"type": int, "default": 0}))
+    add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
     add("net_trace", net_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
-    add("config", config, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}))
-    add("dt_node", dt_node, (["node"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}))
+    add("config", config, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
+    add("dt_node", dt_node, (["node"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
     add("footprint", footprint, (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
         (["--vs"], {"help": "compare against this build dir, or `pinned`"}),
-        (["--by"], {"choices": ["dir", "file", "symbol"], "default": "dir"}))
-    add("stacks", stacks, (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}))
+        (["--by"], {"choices": ["dir", "file", "symbol"], "default": "dir"}), (["--offset"], {"type": int, "default": 0}))
+    add("stacks", stacks, (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
     add("mismatch_report", mismatch_report, (["--scope"], {}), (["--cls"], {}), (["--offset"], {"type": int, "default": 0}))
 
 

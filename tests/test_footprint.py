@@ -126,3 +126,11 @@ def test_footprint_and_stacks_through_query(atlas_dir):
     st = query.stacks(a)
     assert "z_main_stack" in st and "CONFIG_MAIN_STACK_SIZE" in st
     assert query.footprint(a, build="nowhere").startswith("src: none")
+
+
+def test_footprint_and_stacks_page_to_the_uncut_answer(atlas_dir, monkeypatch):
+    from paging_synth import assert_exact
+
+    a = query.Atlas(atlas_dir)
+    assert_exact(monkeypatch, "footprint", lambda o: query.footprint(a, offset=o))
+    assert_exact(monkeypatch, "stacks", lambda o: query.stacks(a, offset=o))

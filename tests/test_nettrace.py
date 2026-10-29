@@ -86,3 +86,10 @@ def test_net_trace_part_pin_by_name_part_view_and_near_names(atlas_dir):
 def test_pin_trace_miss_points_to_net_trace(atlas_dir):
     out = query.pin_trace(query.Atlas(atlas_dir), "V3_FILT")
     assert out.startswith("src: none") and "net_trace" in out
+
+
+def test_net_trace_pages_to_the_uncut_answer(atlas_dir, monkeypatch):
+    from paging_synth import assert_exact
+
+    a = query.Atlas(atlas_dir)
+    assert_exact(monkeypatch, "net_trace", lambda o: query.net_trace(a, "A:V3", offset=o))

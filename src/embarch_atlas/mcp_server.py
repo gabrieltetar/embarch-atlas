@@ -29,7 +29,8 @@ INSTRUCTIONS = (
     "Use it before answering any hardware question. Protocol: MAP.md (already in context) "
     "-> part_card -> doc_section (find_fact, then find_text for page text) -> Read the PDF page to verify. Every answer starts with a "
     "`src:` line: cite it. prov=llm-unverified and figure facts are leads, not truth. "
-    "Mismatches are candidates for the engineer, never facts."
+    "Mismatches are candidates for the engineer, never facts. An answer that ends `truncated: call again with offset=N` "
+    "continues by calling the same tool again with that `offset`; every tool takes one."
 )
 
 
@@ -47,16 +48,16 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         return query.Atlas(atlas_dir, atlas)
 
     @server.tool(annotations=READ_ONLY)
-    def part_card(part: str, board: str | None = None) -> str:
+    def part_card(part: str, board: str | None = None, offset: int = 0) -> str:
         """A part's card (<=1.5K tokens): role, key limits, register summary, quirks, section index.
         `part` is an MPN, doc id or document number; `board` ("all" for every board, or one board's label) adds its refs and nets; omit it for the card alone."""
-        return query.part_card(view(), part, board)
+        return query.part_card(view(), part, board, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def doc_toc(doc: str, under: str | None = None, depth: int = 2) -> str:
+    def doc_toc(doc: str, under: str | None = None, depth: int = 2, offset: int = 0) -> str:
         """A document's outline: section id | title | pages | tokens | distilled file. `under` narrows to a section,
         by id, title, or a word of the title (the shallowest section holding it)."""
-        return query.doc_toc(view(), doc, under, depth)
+        return query.doc_toc(view(), doc, under, depth, offset)
 
     @server.tool(annotations=READ_ONLY)
     def doc_section(doc: str, section: str | None = None, page: int | None = None,
@@ -66,11 +67,11 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         return query.doc_section(view(), doc, section, page, tier, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def find_fact(query_text: str, part: str | None = None, kind: str | None = None, limit: int | None = None) -> str:
+    def find_fact(query_text: str, part: str | None = None, kind: str | None = None, limit: int | None = None, offset: int = 0) -> str:
         """Search every document's facts (one per line, with cite and provenance), ranked lexically.
         A part named in the query narrows to it, like `part`. Without `limit`: the best 10 above 0.4x the
         top score. `kind`: limit, timing, pin, rule, register, field, quirk, strap, requirement, conflict."""
-        return query.find_fact(view(), query_text, part, kind, limit)
+        return query.find_fact(view(), query_text, part, kind, limit, offset)
 
     @server.tool(annotations=READ_ONLY)  # appends to the atlas's usage log; changes no answer
     def find_text(doc: str, pattern: str, section: str | None = None, context: int = 2, offset: int = 0) -> str:
@@ -81,17 +82,17 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         return query.find_text(view(), doc, pattern, section, context, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def register(target: str, field: str | None = None) -> str:
+    def register(target: str, field: str | None = None, offset: int = 0) -> str:
         """A register with its fields, rules, quirks, SVD/RM conflicts and firmware references.
         `target` is `PERIPH.REG` for the MCU (I2C1.TIMINGR) or `<part>.<REG>` for an external part; a register
         split into `<REG>_MSB`/`_LSB` bytes is also found by `<REG>`, as one 16-bit view."""
-        return query.register_lookup(view(), target, field)
+        return query.register_lookup(view(), target, field, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def pin_trace(pin_or_net: str, board: str | None = None) -> str:
+    def pin_trace(pin_or_net: str, board: str | None = None, offset: int = 0) -> str:
         """MCU pin -> net -> far-end part pins (through connectors) -> DT use -> driver, one line per pin.
         Accepts an MCU port (PB9), a net name, or a board-qualified part pin (A:U3-6)."""
-        return query.pin_trace(view(), pin_or_net, board)
+        return query.pin_trace(view(), pin_or_net, board, offset)
 
     @server.tool(annotations=READ_ONLY)
     def net_trace(net_or_pin: str, board: str | None = None, offset: int = 0) -> str:
@@ -101,31 +102,31 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         return query.net_trace(view(), net_or_pin, board, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def config(symbol: str, build: str | None = None) -> str:
+    def config(symbol: str, build: str | None = None, offset: int = 0) -> str:
         """A Kconfig symbol (CONFIG_X or X; `USB_*` lists matches): value, the fragment that set it,
         depends on and whether it is met, selected/implied by, the default that applies, where defined.
         `build`: a build dir (absolute or relative to the fw repo); default the atlas's pinned build."""
-        return query.config(view(), symbol, build)
+        return query.config(view(), symbol, build, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def dt_node(node: str, build: str | None = None) -> str:
+    def dt_node(node: str, build: str | None = None, offset: int = 0) -> str:
         """A devicetree node by path, label, alias, chosen name or compatible: status, binding, the driver
         compiled for it, whether its device is in the ELF, each property with the file:line that set it,
         its pins, children. `build`: a build dir; default the atlas's pinned build."""
-        return query.dt_node(view(), node, build)
+        return query.dt_node(view(), node, build, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def footprint(build: str | None = None, vs: str | None = None, by: str = "dir") -> str:
+    def footprint(build: str | None = None, vs: str | None = None, by: str = "dir", offset: int = 0) -> str:
         """Flash image and RAM against the flash, SRAM and code partition (headroom left), then the largest
         contributors by dir, file or symbol; `vs` (a build dir, or "pinned") gives the change against that
         build instead. `build`: a build dir; default the atlas's pinned build."""
-        return query.footprint(view(), build, vs, by)
+        return query.footprint(view(), build, vs, by, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def stacks(build: str | None = None) -> str:
+    def stacks(build: str | None = None, offset: int = 0) -> str:
         """Every thread stack in the image: size, symbol, the line that defined it, and the *_STACK_SIZE
         option it most likely comes from (inference). Static sizes; high-water marks need the board."""
-        return query.stacks(view(), build)
+        return query.stacks(view(), build, offset)
 
     @server.tool(annotations=READ_ONLY)
     def mismatch_report(scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:

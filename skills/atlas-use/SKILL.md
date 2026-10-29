@@ -31,6 +31,11 @@ Board wiring is not in the datasheet docs. It is in `atlases/<id>/pins.md` (ever
 pin → net → far-end part pin → DT node → driver) and `boards/<label>/nets.md`,
 `parts.md`. Keys are board-qualified (`B:U3-12`, net `A:VBUS`).
 
+A lookup that is longer than its budget ends with `… truncated: call again with offset=N`.
+Call the same tool again with the same arguments and `offset=N` (`--offset N` on the `q` verb):
+every lookup takes it, and you get the rest of the body, not a repeat. Repeat until no
+truncation line remains; do not fall back to reading files by hand.
+
 ## Rules
 
 - **Cite every hardware fact** as `<doc_id> p<N>` (or `<board>:<ref>` for wiring).

@@ -296,7 +296,13 @@ size and defining line, and the `*_STACK_SIZE` option it most likely comes from,
 all four from the pinned build or a named build dir (`buildq.py`, `footprint.py`; a named build's
 extraction runs only while the workspace's `git describe` equals the build's `BUILD_VERSION`,
 else `config` gives the value and the fragment assignments only). Each answer starts with a `src:`
-line and is paged at a per-tool token budget with `next=<offset>`. Two doors call the
+line and is paged at a per-tool token budget with `next=<offset>`. Every lookup takes that
+`offset` (function, `q` verb and MCP tool alike; a test walks `TOOLS` and fails for one that
+does not), so a cut answer is always continuable. `offset` counts characters of the body, the
+text after the `src:` header's blank line; each page repeats the header and is cut on a line
+boundary (mid-line only for a line longer than the budget), so the pages' bodies, followed
+through `next=` until no truncation line remains, concatenate to the uncut body exactly once.
+Two doors call the
 same functions: `embarch-atlas q <verb>` and `embarch-atlas mcp` (stdio, `mcp>=2.2`,
 optional extra). Files stay the primary door: an agent's own `Read`/`Grep` reach
 them for free; the server carries what files cannot.

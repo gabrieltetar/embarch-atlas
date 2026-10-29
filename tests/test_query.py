@@ -434,3 +434,60 @@ def test_undistilled_and_missing_hints_name_find_text(text_atlas):
     assert "find_text doc=demo-spec@1 pattern=<words> section=2" in query.doc_section(a, "demo-spec@1", section="Link Policy")
     assert "find_text doc=demo-spec@1" in query.doc_section(a, "demo-spec@1", section="Nonesuch Thing")
     assert "find_text doc=demo-spec@1" in query.doc_toc(a, "demo-spec@1", under="Nonesuch Thing")
+
+
+# ---- every cut answer can be continued (atlas/018)
+
+def test_every_lookup_pages_to_the_uncut_answer(atlas_dir, monkeypatch):
+    from paging_synth import assert_exact
+
+    a = query.Atlas(atlas_dir)
+    (atlas_dir / "docs" / "demo-bb@A" / "s" / "long.md").write_text("".join(f"row {i} \u00b1\u2126 x\n" for i in range(40)))
+    calls = {
+        "part_card": lambda o: query.part_card(a, "DEMO-BB-QFN", board="all", offset=o),
+        "doc_toc": lambda o: query.doc_toc(a, "demo-bb@A", depth=2, offset=o),
+        "doc_section": lambda o: query.doc_section(a, "demo-bb@A", section="long", offset=o),
+        "find_fact": lambda o: query.find_fact(a, "reference voltage OVP threshold", offset=o),
+        "find_text": lambda o: query.find_text(a, "demo-bb@A", "MODE", offset=o),
+        "register": lambda o: query.register_lookup(a, "demo-bb.MODE", offset=o),
+        "pin_trace": lambda o: query.pin_trace(a, "PB9", offset=o),
+        "mismatch_report": lambda o: query.mismatch_report(a, offset=o),
+    }
+    for tool, call in calls.items():
+        assert_exact(monkeypatch, tool, call)
+
+
+def test_cut_never_splits_a_character_and_a_line_longer_than_the_budget_is_cut_hard(atlas_dir, monkeypatch):
+    from paging_synth import assert_exact
+
+    a = query.Atlas(atlas_dir)
+    (atlas_dir / "docs" / "demo-bb@A" / "s" / "long.md").write_text("\u00b1" * 90 + "\n" + "\u2126" * 30 + "\n")
+    assert_exact(monkeypatch, "doc_section", lambda o: query.doc_section(a, "demo-bb@A", section="long", offset=o))
+
+
+def test_every_tool_that_offers_an_offset_takes_one(atlas_dir):
+    """A tool's answer says `offset=N`, so its function, its `q` verb and its MCP tool must all take `offset`."""
+    import inspect
+
+    pytest.importorskip("mcp")
+    from embarch_atlas.mcp_server import build_server
+
+    assert set(query.BUDGET) == set(query.TOOLS)      # every lookup has a budget, so every one can be cut
+    mcp = {t.name: t for t in asyncio.run(build_server(atlas_dir, live=False).list_tools())}
+    assert set(mcp) == set(query.TOOLS)
+    for name, fn in query.TOOLS.items():
+        assert "offset" in inspect.signature(fn).parameters, name
+        assert "offset" in mcp[name].input_schema["properties"], name
+        assert "--offset" in _q_flags(name), name
+
+
+def _q_flags(verb: str) -> set[str]:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="verb")
+    groups: dict = {}
+    query.register(sub, groups)
+    q = sub.choices["q"]
+    (verbs,) = [x for x in q._actions if isinstance(x, argparse._SubParsersAction)]
+    return {o for x in verbs.choices[verb.replace("_", "-")]._actions for o in x.option_strings}

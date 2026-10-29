@@ -135,3 +135,12 @@ def test_named_build_off_workspace_falls_back_to_value(atlas_dir, tmp_path):
     assert out.startswith(f"src: build {b} (app ?, zephyr v9.9.0;")
     assert "CONFIG_SHELL=y" in out and "the build used Zephyr v9.9.0" in out
     assert f"(no {b}/zephyr/edt.pickle)" in query.dt_node(query.Atlas(atlas_dir), "conv0", build="build")
+
+
+def test_config_and_dt_node_page_to_the_uncut_answer(atlas_dir, monkeypatch):
+    from paging_synth import assert_exact
+
+    _kconfig_json(atlas_dir / "atlases" / "core@000000000003")
+    a = query.Atlas(atlas_dir)
+    assert_exact(monkeypatch, "config", lambda o: query.config(a, "S*", offset=o))
+    assert_exact(monkeypatch, "dt_node", lambda o: query.dt_node(a, "conv0", offset=o))
