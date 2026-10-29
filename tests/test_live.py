@@ -889,7 +889,7 @@ def _console_rig(tmp_path, monkeypatch, replies, consoles_toml=""):
 
 def test_a_silent_console_is_passed_over_for_the_one_that_answers(tmp_path, monkeypatch):
     ad, opened = _console_rig(tmp_path, monkeypatch, {
-        "a-bridge": {"text": "", "written": True},
+        "a-bridge": {"text": "", "written": True, "echo_seen": False},
         "b-cdc": {"text": "kernel uptime\r\nUptime: 5 ms\r\nuart:~$ ", "until_seen": True}})
     out = live.shell(ad, "kernel uptime")
     assert opened == ["a-bridge", "b-cdc"]
@@ -912,8 +912,15 @@ def test_a_lost_port_is_never_retried_on_the_next_console(tmp_path, monkeypatch)
     assert opened == ["a-bridge"] and code == 3
 
 
+def test_a_silent_reply_from_a_core_without_echo_seen_is_the_answer_on_any_console(tmp_path, monkeypatch):
+    ad, opened = _console_rig(tmp_path, monkeypatch, {
+        "a-bridge": {"text": ""}, "b-cdc": {"text": "x", "until_seen": True}})
+    out, code = live.shell_status(ad, "reset")
+    assert opened == ["a-bridge"] and code == 2 and "may have run" in out and "no byte came back" not in out
+
+
 def test_every_console_silent_answers_nothing_came_back(tmp_path, monkeypatch):
-    ad, opened = _console_rig(tmp_path, monkeypatch, {"a": {"text": ""}, "b": {"text": ""}})
+    ad, opened = _console_rig(tmp_path, monkeypatch, {"a": {"text": "", "echo_seen": False}, "b": {"text": "", "echo_seen": False}})
     out, code = live.shell_status(ad, "kernel uptime")
     assert opened == ["a", "b"] and code == 2 and "not even the echo" in out
 
@@ -930,7 +937,7 @@ def _known_build(monkeypatch, node, labels=()):
 
 def test_a_known_build_picks_the_console_its_shell_is_on_and_never_opens_the_bridge(tmp_path, monkeypatch):
     ad, opened = _console_rig(tmp_path, monkeypatch, {
-        "a-bridge": {"text": "", "written": True},
+        "a-bridge": {"text": "", "written": True, "echo_seen": False},
         "b-cdc": {"text": "kernel uptime\r\nUptime: 5 ms\r\nuart:~$ ", "until_seen": True}},
         '[live.consoles]\n"/soc/usb/cdc_acm_uart0" = "b-cdc"\n"/soc/serial@1000" = "a-bridge"\n')
     _known_build(monkeypatch, "/soc/usb/cdc_acm_uart0")
@@ -941,7 +948,7 @@ def test_a_known_build_picks_the_console_its_shell_is_on_and_never_opens_the_bri
 
 def test_consoles_map_by_label_and_an_unconfirmed_build_tries_them_in_turn(tmp_path, monkeypatch):
     ad, opened = _console_rig(tmp_path, monkeypatch, {
-        "a-bridge": {"text": "", "written": True},
+        "a-bridge": {"text": "", "written": True, "echo_seen": False},
         "b-cdc": {"text": "kernel uptime\r\nUptime: 5 ms\r\nuart:~$ ", "until_seen": True}},
         '[live.consoles]\ncdc = "b-cdc"\n')
     _known_build(monkeypatch, "/soc/usb/cdc_acm_uart0", ["cdc"])

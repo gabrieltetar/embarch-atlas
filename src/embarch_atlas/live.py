@@ -671,8 +671,11 @@ class Console:
                 e.may_have_written = True
                 raise
             self.used = {"signal": ex.get("signal"), "port": ex.get("port"), "prompt_seen": ex.get("until_seen")}
-            if not ex.get("text") and not ex.get("port_lost") and i + 1 < len(todo):
-                self.skipped.append(name)   # not even the echo came back: nothing ran there, try the next
+            if (not ex.get("text") and not ex.get("port_lost") and ex.get("echo_seen") is False
+                    and i + 1 < len(todo)):
+                # This Core said no echo and no byte came back: nothing was read, so nothing ran there.
+                # A Core that does not send `echo_seen` cannot say that, so its silence is an answer.
+                self.skipped.append(name)
                 continue
             return ex
         raise last or LiveError("no console answered")

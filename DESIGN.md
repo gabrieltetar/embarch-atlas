@@ -490,8 +490,9 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   and a `port_lost` is an answer, never a retry (a reply with no byte at all moves on only as the *Which console* rule says): the line may be on the wire, and a
   resend would run a state-changing command twice. The classification reads Core's error text, since
   embarch-api forwards no status code, so an error text nobody listed counts as "may have written"; an
-  older Core without the `written`/`port_lost`/`echo_seen` fields gets the same treatment (a silent
-  reply says "this Core did not say whether the line was written, so it may have run").
+  older Core without the `written`/`port_lost`/`echo_seen` fields gets the same treatment on every
+  console, the last or not (a silent reply is its answer and says "this Core did not say whether the
+  line was written, so it may have run"; it is never passed over, see *Which console*).
   **Which console.** `[live] consoles` maps a devicetree UART node (path, node name, or a label of it)
   to a signal. When it is set and no `[live] console` pins one, `Console` reads the build's
   `chosen` `zephyr,shell-uart` (`dt.json`; the pinned build, or `build=` on `live_stacks`) and, only
@@ -499,8 +500,15 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   in the `src:` line. A chosen node that maps to no signal answers "the image's shell is on `<node>`;
   no signal is declared for it" and tries nothing. When the build is not confirmed (or `consoles` is
   unset), the declared consoles are tried in name order, and `exchange` moves past one only when
-  not a byte came back (no echo, no `port_lost`): nothing written was read, so nothing ran. A reply of
-  any kind, including an error line, or a lost port, stops there. Presence of a signal never says which
+  Core says `echo_seen: false` and not a byte came back (no text, no `port_lost`): nothing written was
+  read, so nothing ran. That rests on the image's shell echoing what it reads (Zephyr's does by
+  default); for an image with echo off, silence proves nothing, and this rule would resend the line on
+  the next console even if it ran, so such an image should be pinned with `[live] console` or mapped
+  through `consoles` with its build confirmed. Whether any real image has echo off is not known here.
+  A Core that does not send `echo_seen` cannot make that claim, so its silence stops there as an answer,
+  on every console. Gating on `written` is no substitute: a USB-UART bridge takes every byte, so
+  `written` is true in exactly the case this rule exists for. A reply of any kind, including an error
+  line, or a lost port, stops there. Presence of a signal never says which
   console the image uses: a USB-UART bridge is powered by the host, not the DUT.
   **How the atlas knows `retval` is absent.** From the pinned build's `kconfig.json`
   (`CONFIG_SHELL_CMDS_RETURN_VALUE`: set to `n`, or missing from a kconfig.json that lists every
