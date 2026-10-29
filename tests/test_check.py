@@ -625,3 +625,86 @@ def test_g_reset_composition_the_document_contradicts_is_a_warning(doc):
 def test_md_bare_bit_strings_are_not_numbers():
     assert check._md_numbers("field resets compose to 0000000000010000, the heading says 00000000") == []
     assert check._md_numbers("the count is 10000100 cycles") == [10000100.0]       # no leading 0: a number
+
+
+# ---- a record of the wrong shape is reported, not a crash (atlas/017)
+
+def _wrong_shapes(v):
+    """Wrong-typed or wrong-length stand-ins for one field value."""
+    out = ["8", 7, None, [7], [1, 2, 3], {"x": 1}, "zz", ["8"], -1.5]
+    if isinstance(v, str):
+        out.append("0xZZ")
+    return [w for w in out if w != v]
+
+
+def _add_registers(docdir):
+    """One register with two fields: the kinds whose checks dereference bits, width, reg and reset."""
+    d = "syn1234@2b"
+    base = {"doc": d, "p": 2, "src": "table", "prov": "llm-unverified"}
+    R.save_file(docdir, "zz-regs.jsonl", [
+        {**base, "id": "syn1234.reg.CTL", "kind": "register", "name": "CTL", "addr": "0x00", "width": 8,
+         "reset": "0x05", "q": "CTL 00h"},
+        {**base, "id": "syn1234.reg.CTL.EN", "kind": "field", "reg": "syn1234.reg.CTL", "name": "EN",
+         "bits": [3, 0], "reset": "0b0101", "q": "3-0 EN"},
+        {**base, "id": "syn1234.reg.CTL.MODE", "kind": "field", "reg": "syn1234.reg.CTL", "name": "MODE",
+         "bits": [7, 4], "reset": "0b0000", "q": "7-4 MODE"}])
+
+
+def test_malformed_records_are_reported_not_raised(doc):
+    atlas, docdir = doc
+    _add_registers(docdir)
+    base = check.run_check(docdir, write=False, render=False)
+    pairs = R.load_records(docdir)
+    ok_ids = {r["id"] for _, r in pairs}
+    # (a) every field of every record, with each wrong shape: run_check must not raise
+    n = 0
+    for fname, rec in pairs:
+        for key in list(rec):
+            if key == "id":
+                continue
+            for bad in _wrong_shapes(rec[key]):
+                mutated = copy.deepcopy(rec)
+                mutated[key] = bad
+                rows = [(f, mutated if r is rec else r) for f, r in pairs]
+                for f in {f for f, _ in rows}:
+                    R.save_file(docdir, f, [r for g, r in rows if g == f])
+                rep = check.run_check(docdir, write=False, render=False)
+                mine = next(x for x in rep["records"] if x["id"] == rec["id"])
+                if R.validate(mutated):
+                    assert any(i.startswith("V:") for i in mine["issues"]), (rec["id"], key, bad)
+                n += 1
+    assert n > 100
+    for f in {f for f, _ in pairs}:
+        R.save_file(docdir, f, [r for g, r in pairs if g == f])
+    again = check.run_check(docdir, write=False, render=False)
+    assert again["summary"] == base["summary"] and ok_ids
+    
+
+
+def test_named_malformed_shapes_leave_other_records_untouched(doc):
+    atlas, docdir = doc
+    _add_registers(docdir)
+    base = check.run_check(docdir, write=False, render=False)
+    pairs = R.load_records(docdir)
+    fld = next(r for _, r in pairs if r.get("kind") == "field")
+    reg = next(r for _, r in pairs if r.get("kind") == "register")
+    lim = next(r for _, r in pairs if r.get("kind") not in ("field", "register") and "p" in r)
+    new = []
+    for i, (key, val, src) in enumerate([("bits", [7], fld), ("width", "8", reg), ("p", "8", lim),
+                                          ("reset", "0xZZ", reg), ("reg", None, fld)]):
+        r = copy.deepcopy(src)
+        r["id"] = f"bad.{i}.{src['id']}"
+        if val is None:
+            r.pop(key, None)
+        else:
+            r[key] = val
+        new.append(r)
+    R.save_file(docdir, "zz-bad.jsonl", new)
+    rep = check.run_check(docdir, write=False, render=False)
+    by = {x["id"]: x for x in rep["records"]}
+    for r, key in zip(new, ["bits", "width", "p", "reset", "reg"]):
+        x = by[r["id"]]
+        assert x["status"] == "failed" and x["checks"] == {}
+        assert any(i.startswith("V:") and r["id"] in i for i in x["issues"]), (key, x["issues"])
+    for x in base["records"]:
+        assert by[x["id"]] == x, x["id"]

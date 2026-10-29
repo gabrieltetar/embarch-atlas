@@ -1189,20 +1189,32 @@ def atlas_ids(docdir: Path) -> set[str]:
     return out
 
 
+def _key(v: Any) -> Any:
+    """A record id as a dict key: an id of the wrong type (a list) must not raise before validation reports it."""
+    return v if isinstance(v, (str, int, type(None))) else json.dumps(v, sort_keys=True, default=str)
+
+
 def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bool = True) -> dict:
     docdir = Path(docdir)
     doc = DocText(docdir, use_pdf=use_pdf)
     pairs = R.load_records(docdir)
-    recs = [r for _, r in pairs]
+    # Schema first: a record of the wrong shape is reported as `V:` and kept out of every check that
+    # assumes the schema's shapes (DESIGN.md principle 4: kept, marked llm-unverified, not a crash).
+    verrs = {i: R.validate(r) if isinstance(r, dict) else ["record is not an object"]
+             for i, (_, r) in enumerate(pairs)}
+    pairs = [(f, r if isinstance(r, dict) else {}) for f, r in pairs]
+    bad = {i for i, e in verrs.items() if e}
+    recs_all = [r for _, r in pairs]
+    recs = [r for i, (_, r) in enumerate(pairs) if i not in bad]
     results: list[dict] = []
     # R: ids unique, except deterministic/LLM twins
     seen: dict[str, list[dict]] = {}
-    for r in recs:
-        seen.setdefault(r.get("id"), []).append(r)
+    for r in recs_all:
+        seen.setdefault(_key(r.get("id")), []).append(r)
     dup = {i for i, rs in seen.items() if len(rs) > 1 and not (
         len(rs) == 2 and sum(1 for x in rs if x.get("prov") in R.DETERMINISTIC) == 1)}
     ids = set(seen)
-    if any(ref not in ids for r in recs for ref in r.get("refs") or []):
+    if any(ref not in ids for r in recs for ref in r.get("refs") or [] if isinstance(ref, str)):
         ids |= atlas_ids(docdir)       # only read the other documents when a ref needs them
     greg = check_registers(recs)
     verdict = greg.get("verdict", {})
@@ -1223,24 +1235,25 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     xs = check_invariants(by_id, checks)
     xmap = {x["id"]: x for x in xs}
     prov_changed = 0
-    for (fname, r) in pairs:
-        res = record_checks(doc, r) if r.get("kind") else {}
-        extra = [f"V: {e}" for e in R.validate(r)]
-        if r.get("id") in dup:
+    for i, (fname, r) in enumerate(pairs):
+        invalid = i in bad
+        res = record_checks(doc, r) if r.get("kind") and not invalid else {}
+        extra = [f"V: {e}" for e in verrs[i]]
+        if _key(r.get("id")) in dup:
             extra.append(f"R: duplicate id {r.get('id')}")
-        for ref in r.get("refs") or []:
+        for ref in ([] if invalid else r.get("refs") or []):
             if ref not in ids:
                 extra.append(f"R: ref {ref} resolves to no record in docs/")
         src = "deterministic" if r.get("prov") in R.DETERMINISTIC else "llm"
-        extra += struct_issue.get((r.get("id"), src), [])
-        twin = verdict.get(r.get("id")) if r.get("kind") in ("register", "field") else None
+        extra += struct_issue.get((_key(r.get("id")), src), [])
+        twin = verdict.get(r.get("id")) if r.get("kind") in ("register", "field") and not invalid else None
         if twin and twin.startswith("disagree"):
             extra.append(f"G: {twin}")
         if twin == "agree" and res.get("A") == "no-quote":
             res["A"] = "ok"  # a deterministic twin that agrees verifies structure without a quote
             res["A_by"] = "twin"
         if r.get("kind") == "check":
-            x = xmap.get(r["id"])
+            x = xmap.get(r.get("id"))
             if x and not x["ok"]:
                 extra.append(f"X: expect {x['expect']} got {x['got']}")
         status, issues = _status({k: v for k, v in res.items() if k != "A_by"}, r, extra)
