@@ -77,8 +77,13 @@ def pinned(a) -> Source:
         if kj.is_file():
             src.kconfig = read_json(kj)
         else:
-            src.kconfig_why = (f"{a.atlas.name} has no kconfig.json (built before it existed); the next "
-                               "/atlas-update writes one. Value and fragment assignments only")
+            why = (stamp.get("build") or {}).get("kconfig")
+            what = (f"its build did not write one ({why})" if isinstance(why, str) and why.startswith("not extracted")
+                    else "it was built before kconfig.json existed")
+            src.kconfig_why = (f"{a.atlas.name} has no kconfig.json: {what}. Recover without a rebuild: "
+                               f"`embarch-atlas kconfig-extract {a.atlas.name}` (needs the build dir and the "
+                               "workspace's Zephyr unchanged since the build; it says if not, and then only "
+                               "`build <target> --force` does it). Value and fragment assignments only")
 
     def load_dt():
         if dj.is_file():

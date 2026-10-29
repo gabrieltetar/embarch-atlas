@@ -1031,6 +1031,11 @@ def load_boards(ad: Path, labels: list[str], boards_dir: Path | None) -> dict[st
     return out
 
 
+def missing_boards(stamp: dict, boards: dict[str, Board]) -> list[str]:
+    """The stamp's declared schematic boards that no netlist was loaded for."""
+    return sorted(set(stamp.get("schematic_boards") or []) - set(boards))
+
+
 def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None = None,
         mcu_part: str | None = None, mcu_ref: str | None = None, log=print,
         straps_path: Path | None = None, bindings_path: Path | None = None) -> dict:
@@ -1065,7 +1070,7 @@ def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None =
     write_json(atlas / "pins.json", pins)
     write_text(atlas / "pins.md", render_pins_md(stamp, J.mcu, mpn, rows, interfaces, i2c, values))
     write_text(atlas / "pin_slice.txt", render_slice(stamp, rows))
-    snapshot_inputs(atlas, root, boards, J.docs, sysj, ad)
+    snapshot_inputs(atlas, root, boards, J.docs, sysj, ad, missing_boards(stamp, J.boards))
     report = mismatch.run(J, stamp, pins)
     try:                                          # the MAP's RM line reads the worklist of THIS atlas
         from embarch_atlas import update
@@ -1088,6 +1093,9 @@ def load_join(ad: Path, atlas: Path, stamp: dict, dt: dict, in_use: dict, boards
     boards = load_boards(ad, list(stamp.get("schematic_boards") or []), boards_dir)
     if not boards:
         log(f"join: no netlist.json under {root} for {stamp.get('schematic_boards') or 'any board'}; pin map skipped")
+    elif missing_boards(stamp, boards):
+        log(f"join: declared board(s) without a netlist, left out of the pin map, checks, MAP and graph: "
+            f"{', '.join(missing_boards(stamp, boards))} (embarch-atlas schematic <pdf> --board <label>, then join)")
     sysj = root / "system.json"
     interfaces = []
     if sysj.is_file():
@@ -1107,18 +1115,22 @@ def load_join(ad: Path, atlas: Path, stamp: dict, dt: dict, in_use: dict, boards
     return J, root, sysj
 
 
-def snapshot_inputs(atlas: Path, root: Path, boards: dict[str, Board], docs: Docs, sysj: Path, ad: Path) -> None:
+def snapshot_inputs(atlas: Path, root: Path, boards: dict[str, Board], docs: Docs, sysj: Path, ad: Path,
+                    missing: list[str] | None = None) -> None:
     """Copy what the join read, so the atlas stays comparable after the inputs move on.
 
     `sources` (the manifest fingerprint), `source_files` and `schematics` (the board PDF each joined
     netlist came from) say which documents this join saw; staleness reads them over the build's
-    stamp (`project.joined_stamp`), so an atlas joined again after a document change is fresh."""
+    stamp (`project.joined_stamp`), so an atlas joined again after a document change is fresh.
+    `missing_boards` names the declared boards that had no netlist: the atlas covers less than its
+    stamp claims, and `project.atlas_state` says so until a join finds them."""
     inp = atlas / "inputs"
     inp.mkdir(exist_ok=True)
     rec = {"netlists": {}, "system_json": sha256_file(sysj) if sysj.is_file() else None,
            "docs": {d: {"doc_sha256": (v["doc"].get("sha256")), "records": v["files"]} for d, v in sorted(docs.docs.items())}}
     man = ad / "inventory" / "manifest.json"
     rec["sources"], rec["source_files"] = sources_fingerprint(man), source_files(man)
+    rec["missing_boards"] = list(missing or [])
     rec["schematics"] = {lab: (b.nl.get("source") or {}).get("sha256") for lab, b in sorted(boards.items())}
     for lab in boards:
         src = root / lab / "netlist.json"

@@ -167,3 +167,16 @@ def test_second_look_queue_diff_from_batches_what_update_would(tmp_path, monkeyp
     batched = {it["id"] for b in read_json(new / "second_look_batches.json") for it in b["items"]}
     assert batched == {"c", "d"}
     assert "2 items new or changed since core@000000000001 (1 queued there already)" in capsys.readouterr().out
+
+
+def test_a_declared_board_with_no_netlist_does_not_stop_update(tmp_path):
+    """Stopping would block every firmware bump until a schematic that `update` cannot make is run;
+    the atlas says it does not cover the board (a stale reason) instead. DESIGN.md "When `update` stops"."""
+    ad = tmp_path / "atlas"
+    hw = tmp_path / "fw" / "hw"
+    hw.mkdir(parents=True)
+    (hw / "b.pdf").write_bytes(b"%PDF b")
+    ad.mkdir()
+    (ad / "atlas.toml").write_text(f'[project]\nfw = "{tmp_path / "fw"}"\nsources = "hw"\n\n'
+                                   '[[boards]]\nlabel = "B"\npdf = "b.pdf"\n')
+    assert update.stale_translations(ad) == []

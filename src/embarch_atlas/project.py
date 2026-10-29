@@ -298,6 +298,8 @@ def joined_stamp(atlas: Path, stamp: dict[str, Any]) -> dict[str, Any]:
         out["sources"] = inp["sources"]
     if inp.get("schematics"):
         out["schematics"] = {**(stamp.get("schematics") or {}), **inp["schematics"]}
+    if inp.get("missing_boards"):
+        out["missing_boards"] = list(inp["missing_boards"])
     return out
 
 
@@ -317,6 +319,9 @@ def atlas_state(atlas_dir: Path, stamp: dict[str, Any], head: str | None,
     for label, sha in sorted((stamp.get("schematics") or {}).items()):
         if label in schematic_shas and schematic_shas[label] != sha:
             why.append(f"board {label} PDF changed")
+    for label in stamp.get("missing_boards") or []:
+        why.append(f"board {label} is declared but has no netlist, so the atlas does not cover it "
+                   f"(embarch-atlas schematic <pdf> --board {label}, then join)")
     return why
 
 

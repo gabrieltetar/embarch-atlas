@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from embarch_atlas import kconfig as KC, query
-from embarch_atlas.common import write_json, write_text
+from embarch_atlas.common import read_json, write_json, write_text
 
 BUILD_INFO = """cmake:
   board:
@@ -144,3 +144,37 @@ def test_config_and_dt_node_page_to_the_uncut_answer(atlas_dir, monkeypatch):
     a = query.Atlas(atlas_dir)
     assert_exact(monkeypatch, "config", lambda o: query.config(a, "S*", offset=o))
     assert_exact(monkeypatch, "dt_node", lambda o: query.dt_node(a, "conv0", offset=o))
+
+
+def test_config_quotes_why_the_extraction_failed_and_names_a_recovery(atlas_dir):
+    at = atlas_dir / "atlases" / "core@000000000003"
+    st = read_json(at / "atlas.json")
+    st["build"]["kconfig"] = "not extracted: kconfiglib missing in the build's Python"
+    write_json(at / "atlas.json", st)
+    out = query.config(query.Atlas(atlas_dir), "CONFIG_FANCY")
+    assert "kconfiglib missing in the build's Python" in out
+    assert "embarch-atlas kconfig-extract core@000000000003" in out and "--force" in out
+    assert "the next /atlas-update writes one" not in out
+
+
+def test_kconfig_extract_writes_for_a_built_atlas_and_keeps_the_zephyr_guard(atlas_dir, monkeypatch):
+    from embarch_atlas import build
+    at = atlas_dir / "atlases" / "core@000000000003"
+    bdir = atlas_dir / ".work" / "build-core-000000000003"
+    write_text(bdir / "zephyr" / ".config", "CONFIG_GPIO=y\n")
+    st = read_json(at / "atlas.json")
+    st["build"]["dir"] = str(Path(".work") / "build-core-000000000003")
+    write_json(at / "atlas.json", st)
+    monkeypatch.setattr(KC, "workspace_mismatch", lambda z: "the build used Zephyr v1; zb is at v2 now")
+    monkeypatch.setattr(KC, "extract", lambda z, b: {"symbols": {"GPIO": {"v": "y"}}})
+    with pytest.raises(build.BuildError, match="v2 now.*--force"):
+        build.extract_kconfig(atlas_dir, at, log=lambda *a: None)
+    assert not (at / "kconfig.json").exists()
+    monkeypatch.setattr(KC, "workspace_mismatch", lambda z: None)
+    build.extract_kconfig(atlas_dir, at, log=lambda *a: None)
+    assert read_json(at / "kconfig.json")["symbols"]["GPIO"]["v"] == "y"
+    # build dir gone: no false route
+    (bdir / "zephyr" / ".config").unlink()
+    (at / "kconfig.json").unlink()
+    with pytest.raises(build.BuildError, match="is gone.*--force"):
+        build.extract_kconfig(atlas_dir, at, log=lambda *a: None)

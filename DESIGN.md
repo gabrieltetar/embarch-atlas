@@ -98,11 +98,14 @@ atlases/<target>@<commit12>/
                                 zephyr.dts.d, zephyr_modules.txt, build_info.yml
   inputs/, inputs.json          netlist and BOM snapshots the atlas was joined against (for diff); the
                                 manifest fingerprint and file list, and each netlist's source PDF hash,
-                                the join read (`sources`, `source_files`, `schematics`: for staleness)
+                                the join read (`sources`, `source_files`, `schematics`: for staleness;
+                                `missing_boards`: declared boards that had no netlist)
   dt.json                       pins, devices, buses, IRQ/EXTI from the edt
   kconfig.json                  every Kconfig symbol: value, assigning fragment, depends on (met?),
                                 selected/implied by, the default that applies, where defined.
-                                Written by `build` while the workspace's Zephyr is the build's
+                                Written by `build` while the workspace's Zephyr is the build's; for an
+                                atlas without one, `kconfig-extract <atlas>` writes it from the build dir
+                                under the same guard (the stamp's `build.kconfig` keeps the failure text)
   in_use.json                   peripherals: dt-okay / instantiated / touched-by-code
   pins.md, pins.json            pin/net map
   pin_slice.txt                 always-loadable slice (~1.5K tokens)
@@ -128,6 +131,17 @@ version + git sha), `created` (UTC). An atlas is **stale** when HEAD or any sour
 hash differs; it is never edited, only superseded. Documents and schematics are what
 `join` reads, so the hashes the last join recorded in `inputs.json` stand in for the
 build's: an atlas joined again after a document change is fresh.
+
+### A missing kconfig.json
+
+`build` writes `kconfig.json` while the workspace's Zephyr is the build's; if the extraction fails (the
+build's Python lacks kconfiglib, say) the stamp records `build.kconfig: "not extracted: <reason>"` and the
+build warns. `build` of that commit then says "already built", so the recovery is `embarch-atlas
+kconfig-extract <atlas>`: it reruns the extraction over the build dir the stamp names (`.work/build-*`),
+no worktree rebuild, refusing under the same `workspace_mismatch` guard. If the build dir is gone or the
+workspace's Zephyr moved, there is no safe route short of `build <target> --force` (a full rebuild), and
+the command says exactly that. `config` on such an atlas quotes the recorded reason and names the command.
+The stamp is not edited: `kconfig.json` existing is what `config` reads.
 
 ### Building from the worktree
 
@@ -551,6 +565,14 @@ An atlas id is `<target>@<commit12>`.
 - a distillation whose newest freeze has units on pages that changed (`doc thaw-check`). The
   reference manual's units are the worklist's, which `update` writes itself;
 - a board whose `netlist.json` was made from another PDF than the one `atlas.toml` names.
+
+A declared board with **no** netlist does not stop it. `update` cannot make the netlist (the schematic
+step is the engineer's, from a PDF), so stopping would block every firmware bump on a board that is not
+ready, and the next `update` would stop the same way. The atlas says it covers less instead: `join` logs
+the board, lists it in the MAP's boards section ("NO netlist"), and records `missing_boards` in
+`inputs.json`; `project.atlas_state` turns that into a stale reason, so `status`, the MAP's `> **Stale:**`
+line and every lookup's `src:` line carry it until a `join` finds the netlist (`stale.py` is unchanged).
+A netlist made from the wrong PDF still stops `update`, because that one is a wrong answer, not an absent one.
 
 A new or changed document with no distillation, of any kind, does not stop it: `update` lists the
 documents added, changed or removed since the previous atlas (from that atlas's `source_files`,

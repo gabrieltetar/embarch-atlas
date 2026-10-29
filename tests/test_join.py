@@ -412,3 +412,25 @@ def test_prop_to_pin_ignores_the_active_low_marker():
     assert join.prop_to_pin(J, "acme,x", "rdy-gpios", "X", "U9")[0] == "U9-6"
     assert join.prop_to_pin(J, "acme,x", "en-gpios", "X", "U9")[0] is None      # EN and EN-bar: ambiguous, not guessed
     assert join.plain_name("FB/INT-bar") == "FB/INT" and join.plain_name("CS#") == "CS"
+
+
+def test_a_declared_board_without_a_netlist_is_named_everywhere_the_session_reads(tmp_path):
+    from embarch_atlas import project, query
+    ad, atlas = make_project(tmp_path)
+    (ad / "boards" / "S" / "netlist.json").unlink()
+    logs = []
+    join.run(ad, atlas, log=logs.append)
+    assert any("without a netlist" in l and "S" in l for l in logs)
+    assert read_json(atlas / "inputs.json")["missing_boards"] == ["S"]
+    assert "S: declared in the stamp, NO netlist" in (atlas / "MAP.md").read_text(encoding="utf-8")
+    st = project.status(ad)
+    (row,) = [r for r in st["atlases"] if r["atlas"] == atlas.name]
+    assert any("board S is declared but has no netlist" in w for w in row["stale"])
+    out = query.mismatch_report(query.Atlas(ad))
+    assert "board S is declared but has no netlist" in out.split("\n", 1)[0]
+    # the netlist arrives and the join runs again: covered, and no reason
+    write_json(ad / "boards" / "S" / "netlist.json", sensor_board())
+    run_join(ad, atlas)
+    assert read_json(atlas / "inputs.json")["missing_boards"] == []
+    st = project.status(ad)
+    assert not any("no netlist" in w for r in st["atlases"] for w in r["stale"])

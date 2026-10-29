@@ -53,6 +53,10 @@ def _compress(names: list[str]) -> str:
     return ", ".join(out)
 
 
+def missing_boards_of(J, stamp: dict) -> list[str]:
+    return sorted(set(stamp.get("schematic_boards") or []) - set(J.boards))
+
+
 def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_parts: int | None = None) -> str:
     aid = stamp["id"]
     rel = f"atlases/{aid}"
@@ -113,6 +117,9 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
         via = f" via {' / '.join(f['via'])}" if f.get("via") else ""
         L.append(f"- {f['net']}: fed {'only ' if f.get('only') else ''}from {f.get('from', '?')}{via} "
                  f"({f.get('prov', 'engineer-declared')})")
+    for lab in (missing_boards_of(J, stamp) if J else []):
+        L.append(f"- {lab}: declared in the stamp, NO netlist: not in the pin map, checks or graph "
+                 f"(`embarch-atlas schematic <pdf> --board {lab}`, then `join`)")
     if J and not J.boards:
         L.append("- no netlist yet: `embarch-atlas schematic <pdf> --board <label>`")
     L.append("")

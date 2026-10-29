@@ -512,6 +512,47 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
     return out
 
 
+def extract_kconfig(ad: Path, atlas: Path, log=print) -> Path:
+    """Write `kconfig.json` for an atlas that has none, from the build dir it was built in: no worktree
+    rebuild. The guard `build` has stands: only while the workspace's Zephyr is the one the build used."""
+    from .dt import rel_bases
+    from . import kconfig as KC
+    kj = atlas / "kconfig.json"
+    if kj.is_file():
+        log(f"{atlas.name}: kconfig.json already exists")
+        return kj
+    stamp = read_json(atlas / "atlas.json")
+    d = (stamp.get("build") or {}).get("dir")
+    bdir = (ad / d) if d else None
+    try:
+        zdir = KC.zephyr_dir(bdir) if bdir else None
+    except FileNotFoundError:
+        zdir = None
+    if zdir is None:
+        raise BuildError(f"{atlas.name}: its build dir ({d or 'not recorded'}) is gone, so the Kconfig tree cannot be "
+                         "read again; only `build <target> --force` (a full rebuild) writes kconfig.json")
+    why = KC.workspace_mismatch(zdir)
+    if why:
+        raise BuildError(f"{atlas.name}: {why}; extracting now would describe a different Kconfig tree. "
+                         "Only `build <target> --force` (a full rebuild) writes kconfig.json")
+    try:
+        write_json(kj, KC.extract(zdir, rel_bases(stamp, ad)))
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
+        raise BuildError(f"{atlas.name}: kconfig extraction failed again: {str(e)[-300:]}") from e
+    log(f"{atlas.name}: wrote {kj}")
+    return kj
+
+
+def cmd_kconfig_extract(args) -> int:
+    ad = resolve_atlas_dir(args)
+    try:
+        extract_kconfig(ad, resolve_atlas(ad, args.atlas))
+    except BuildError as e:
+        print(f"kconfig-extract: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _cmake_tools(bdir: Path) -> dict:
     cc = bdir / "CMakeCache.txt"
     out = {}
@@ -559,3 +600,7 @@ def register(sub, groups) -> None:
     p.add_argument("--force", action="store_true", help="rebuild an existing atlas (development only)")
     add_config_flags(p)
     p.set_defaults(func=cmd_build)
+    p = sub.add_parser("kconfig-extract", help="write kconfig.json for an atlas that lacks it, from its build dir "
+                                               "(no rebuild; only while the workspace's Zephyr is the build's)")
+    p.add_argument("atlas", help="atlas id (<target>@<commit12>), its dir, or a target name (its current atlas)")
+    p.set_defaults(func=cmd_kconfig_extract)
