@@ -92,7 +92,10 @@ def _role(J: Join, board: str, key: str) -> tuple[str, dict | None, str | None]:
     """(pin name, datasheet pin record, doc id) for a part pin."""
     found = J.part_pin_record(board, key)
     name = J.part_pin_name(board, key) or J.boards[board].pin_name.get(key) or split_key(key)[1]
-    return (name, found[1], found[0]) if found else (name, None, None)
+    if found:
+        return name, found[1], found[0]
+    gen = J.generic_pin_record(board, key)       # the engineer's answer, only where no datasheet covers the part
+    return (gen["name"], gen, gen["doc"]) if gen else (name, None, None)
 
 
 def _cite(rec: dict, doc: str) -> str:
@@ -136,7 +139,7 @@ def members(J: Join, board: str, net: str) -> list[dict]:
         else:
             name, rec, doc = _role(J, board, p)
             it.update(kind="part", pin_name=name, rec=rec, doc=doc,
-                      documented=bool(J.part_docs.get((board, ref))))
+                      documented=bool(J.part_docs.get((board, ref))), generic=(board, ref) in J.generic)
         out.append(it)
     return out
 
@@ -190,7 +193,9 @@ def _member_lines(items: list[dict]) -> list[str]:
             elif it.get("documented"):
                 lines.append(f"  {pk}{name} {it.get('mpn') or ''}{dni} (no pin record for this pin)")
             else:
-                lines.append(f"  {pk}{name} {it.get('mpn') or ''}{dni} role unknown: no datasheet")
+                lines.append(f"  {pk}{name} {it.get('mpn') or ''}{dni} "
+                             + ("no role: the engineer's pin map for the generic card leaves this pin out"
+                                if it.get("generic") else "role unknown: no datasheet"))
     if caps:
         lines.append(f"  caps ({len(caps)}): " + ", ".join(caps))
     if tps:
@@ -221,17 +226,46 @@ def _dt_of(J: Join, port: str) -> str:
     return f" (DT {'; '.join(u['label'] + '.' + str(u['prop']) for u in uses)})" if uses else " (no DT use)"
 
 
+GENERIC_TAG = "[generic card, engineer-declared]"
+
+
+def _generic_drivers(J: Join, board: str, net: str, skip: str, depth: int = 0) -> list[str]:
+    """A net driven by a generic-card output (an inverter, a gate, a buffer): the part, and where each
+    of its inputs comes from, walked through chained generic parts. Only an engineer-answered part."""
+    out = []
+    for it in _fold(members(J, board, net)):
+        rec = it.get("rec") or {}
+        if it["kind"] != "part" or not it.get("generic") or rec.get("flow") != "source" or it["ref"] == skip:
+            continue
+        ins = []
+        for key in J.boards[board].pins(it["ref"]):
+            _, r2, _ = _role(J, board, key)
+            n2 = J.boards[board].net(key)
+            if not (r2 and r2.get("generic") and r2.get("flow") == "sink" and n2):
+                continue
+            ports = ", ".join(sorted({f"MCU {port}" + (f" via {' / '.join(path)}" if path else "") + _dt_of(J, port)
+                                      for port, path in J.mcu_ports_of(board, n2)}))
+            if not ports and depth < 3:
+                ports = "; ".join(_generic_drivers(J, board, n2, it["ref"], depth + 1))
+            ins.append(f"input {r2['name']} on {board}:{n2}: {ports or 'no MCU port on it'}")
+        out.append(f"driven by {_part_key(it)} {it.get('mpn') or ''} {it['pin_name']} {GENERIC_TAG} ("
+                   + (" | ".join(ins) or "no inputs mapped") + ")")
+    return out
+
+
 def _enables(J: Join, board: str, ref: str) -> list[str]:
     """Lines for the part's enable pins: datasheet pin names, the net each is on, what drives it."""
     out = []
     for key in J.boards[board].pins(ref):
         name, rec, _ = _role(J, board, key)
         toks = [t for t in re.split(r"[^a-z0-9]+", (rec or {}).get("name", "").lower()) if t]
-        if not rec or not any(ENABLE_TOKENS.match(t) for t in toks):
+        if not rec or not (rec.get("control") or any(ENABLE_TOKENS.match(t) for t in toks)):
             continue
         net = J.boards[board].net(key)
         src = ", ".join(sorted({f"MCU {port}" + (f" via {' / '.join(path)}" if path else "") + _dt_of(J, port)
                                 for port, path in J.mcu_ports_of(board, net)}))
+        if not src and net:
+            src = "; ".join(_generic_drivers(J, board, net, ref))
         if not src and net:
             found = []
             for it in _fold(members(J, board, net)):
@@ -271,15 +305,17 @@ def upstream(J: Join, nets: list[tuple[str, str]], hop: int = 0, seen=None, asks
              and (it["board"], it["ref"]) != came_from]
     for it in feeds:
         rec, b, ref = it["rec"], it["board"], it["ref"]
+        tag = f" {GENERIC_TAG}" if it.get("generic") else ""
         lines.append(f"{pad}  fed by {_part_key(it)} {it.get('mpn') or ''} {it['pin_name']} flow={rec['flow']} "
-                     f"({_cite(rec, it['doc'])})")
+                     f"({_cite(rec, it['doc'])}){tag}")
         for e in _enables(J, b, ref):
             lines.append(f"{pad}    {e}")
         ins: dict[tuple[str, str], str] = {}
         for key in J.boards[b].pins(ref):
             _, r2, _ = _role(J, b, key)
             n2 = J.boards[b].net(key)
-            if r2 and r2.get("flow") in ("sink", "bidir") and n2 and r2.get("name") != it["pin_name"]:
+            if (r2 and r2.get("flow") in ("sink", "bidir") and n2 and r2.get("name") != it["pin_name"]
+                    and not r2.get("control")):
                 ins.setdefault((b, n2), r2["name"])
         for (b2, n2), pname in ins.items():
             if (b2, n2) in seen:
@@ -289,7 +325,8 @@ def upstream(J: Join, nets: list[tuple[str, str]], hop: int = 0, seen=None, asks
             else:
                 lines.append(f"{pad}    input {pname}:")
                 lines += upstream(J, [(b2, n2)], hop + 1, seen, asks, came_from=(b, ref))
-    undocumented = [it for it in items if it["kind"] == "part" and not it.get("documented") and not it.get("dni")]
+    undocumented = [it for it in items if it["kind"] == "part" and not it.get("documented") and not it.get("dni")
+                    and not it.get("generic")]
     for it in undocumented:
         asks.setdefault(it.get("mpn") or "?", set()).add(f"{it['board']}:{it['ref']}")
     if feeds:
@@ -336,7 +373,9 @@ def answer(J: Join, query: str, board: str | None = None) -> tuple[str, str]:
         B = J.boards[b]
         docs = J.part_docs.get((b, ref))
         lines = [f"{b}:{ref} {B.mpn(ref) or ''} {B.value(ref) or ''}".rstrip() + (" DNI" if B.dni(ref) else "")
-                 + (f" datasheet {', '.join(docs)}" if docs else " no datasheet: role of every pin unknown"), ""]
+                 + (f" datasheet {', '.join(docs)}" if docs else
+                    f" no datasheet; pin roles from a generic card the engineer declared {GENERIC_TAG}"
+                    if (b, ref) in J.generic else " no datasheet: role of every pin unknown"), ""]
         for key in B.pins(ref):
             name, rec, doc = _role(J, b, key)
             role = " ".join(f"{f}={rec[f]}" for f in ("dir", "type", "flow") if rec and rec.get(f))
@@ -365,4 +404,24 @@ def answer(J: Join, query: str, board: str | None = None) -> tuple[str, str]:
         lines += ["", "## Datasheets needed (role unknown until the engineer supplies them; "
                   "inventory/missing.md has the links)"]
         lines += [f"- {mpn}: {', '.join(sorted(refs))}" for mpn, refs in sorted(asks.items())]
+    if J.answers_error:
+        lines += ["", f"inventory/answers.toml ignored: {J.answers_error}"]
     return src, "\n".join(lines)
+
+
+def walk_stops(J: Join) -> dict[str, int]:
+    """MPN -> how many upstream walks from a rail stop at it for want of a datasheet (one walk per
+    rail net that is not ground; each part number counted once per walk). A part with a datasheet or
+    an engineer-declared generic card is never counted."""
+    count: dict[str, int] = {}
+    done: set[tuple[str, str]] = set()
+    for b in sorted(J.boards):
+        for n in sorted(J.boards[b].nets):
+            if (b, n) in done or not J.is_rail(b, n) or J.is_ground(n):
+                continue
+            done.update((b2, n2) for b2, n2, _ in connected(J, [(b, n)]))
+            asks: dict[str, set[str]] = {}
+            upstream(J, [(b, n)], asks=asks)
+            for mpn in asks:
+                count[mpn] = count.get(mpn, 0) + 1
+    return count

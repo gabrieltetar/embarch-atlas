@@ -31,6 +31,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from . import answers as answersmod
 from . import common, interfaces, project
 
 ACTIVE = {"U", "Q", "D", "IC", "VR", "LED", "ZD", "TVS", "DS"}
@@ -188,6 +189,8 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
     boms = {b: common.read_json(atlas_dir / "boards" / b / "bom.json") for b in nls
             if (atlas_dir / "boards" / b / "bom.json").is_file()}
     index = coverage_index(manifest)
+    given = answersmod.load(atlas_dir)
+    walks = _walks(atlas_dir)
     mcu_part = ((cfg.get("mcu") or {}).get("part") or "").strip()
     mcu_refs = sorted((b, r) for b, nl in nls.items() for r, c in nl["components"].items()
                       if mcu_part and c.get("mpn") and norm(c["mpn"]).startswith(norm(mcu_part)))
@@ -207,6 +210,7 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
             if comp is None:
                 continue
             R = rows.setdefault(mpn, {"mpn": mpn, "refs": [], "category": cat, "tier": "unknown", "why": [],
+                                      "answer": answersmod.find(given, mpn), "walks": walks.get(mpn, 0),
                                       "description": e.get("description"), "links": set(), "dni": [],
                                       "covered_by": [d["file"] for d in covering_docs(mpn, index)]})
             if cat == "active":
@@ -244,12 +248,22 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
         mcu_docs["errata"] = [d["file"] for d, _ in index if d["kind"] == "errata"]
 
     def key(R):
-        return (TIER_ORDER.index(R["tier"]), -len(R["refs"]), R["mpn"])
+        return (-R["walks"], TIER_ORDER.index(R["tier"]), -len(R["refs"]), R["mpn"])
     ordered = sorted(rows.values(), key=key)
     return {"boards": sorted(nls), "mcu_part": mcu_part, "mcu_refs": [f"{b}:{r}" for b, r in mcu_refs],
             "mcu_mpns": sorted({nls[b]["components"][r]["mpn"] for b, r in mcu_refs}),
             "mcu_docs": mcu_docs, "rows": ordered,
             "mating": sorted({src for _, _, src in mated}), "manifest_docs": len(manifest.get("documents") or [])}
+
+
+def _walks(atlas_dir: Path) -> dict[str, int]:
+    """MPN -> net_trace walks (one per rail) that stop at it for want of a datasheet; {} when the boards
+    cannot be joined (no netlist)."""
+    from . import nettrace
+    try:
+        return nettrace.walk_stops(nettrace.load(atlas_dir, None, common.read_json))
+    except (OSError, ValueError, KeyError):
+        return {}
 
 
 def _nat(s: str) -> tuple:
@@ -284,9 +298,20 @@ def _why(R: dict[str, Any]) -> str:
 ANSWERS = "Supply it, mark it not needed, or accept a standard-function card?"
 
 
+def _answer_text(a: dict[str, Any]) -> str:
+    if a["answer"] == "not-needed":
+        return f"not needed: {a['why']}"
+    if a["answer"] == "supplied":
+        return "supplied; the file is not in the manifest yet (put it in the sources folder, run `embarch-atlas inventory`)"
+    pins = ", ".join(f"{k}={v}" for k, v in a["pins"].items())
+    return f"generic card {a['function']} (engineer-declared; pins {pins})"
+
+
 def render_md(a: dict[str, Any]) -> str:
     rows = a["rows"]
-    missing = [R for R in rows if not R["covered_by"]]
+    no_doc = [R for R in rows if not R["covered_by"]]
+    answered = [R for R in no_doc if R["answer"]]
+    missing = [R for R in no_doc if not R["answer"]]
     act = [R for R in missing if R["category"] == "active"]
     act_vis = [R for R in act if R["tier"] in ("mcu", "direct", "via-series", "cross-board")]
     act_rest = [R for R in act if R not in act_vis]
@@ -294,6 +319,7 @@ def render_md(a: dict[str, Any]) -> str:
     other_vis = [R for R in other if R["tier"] in ("direct", "via-series", "cross-board")]
     covered = [R for R in rows if R["covered_by"]]
     n_act = sum(1 for R in rows if R["category"] == "active")
+    n_ans = sum(1 for R in answered if R["category"] == "active")
     mcu = ", ".join(a["mcu_refs"]) or "not found"
     L = ["# Missing documents: questions for the engineer", "",
          f"From boards {', '.join(a['boards'])} (`boards/*/bom.json`, the schematic's own component parameters) against "
@@ -309,9 +335,15 @@ def render_md(a: dict[str, Any]) -> str:
          "shares a signal net with an MCU pin; **via-series** = one series resistor, bead or net tie away; "
          "**cross-board** = reaches an MCU net through a board-to-board connector. Supply nets never count.",
          "",
-         f"**{n_act} active part numbers (U/Q/D) on the boards; {n_act - len(act)} have a document; {len(act)} missing, "
-         f"{len(act_vis)} of them firmware-visible.** Other parts without a document: {len(other)} "
-         f"({len(other_vis)} firmware-visible).", ""]
+         f"**{n_act} active part numbers (U/Q/D) on the boards; {n_act - len(act) - n_ans} have a document; "
+         f"{len(act)} missing, {len(act_vis)} of them firmware-visible.** "
+         + (f"{n_ans} more are answered in `inventory/answers.toml` (listed below). " if n_ans else "")
+         + f"Other parts without a document: {len(other)} ({len(other_vis)} firmware-visible).",
+         "",
+         "Open questions are ordered by how many `net_trace` walks (one per rail, upstream) stop at the part for "
+         "want of its datasheet, then by firmware visibility. Answer one with `embarch-atlas missing --answer "
+         "<MPN> supplied | not-needed --why <text> | standard-function <function> --pins <PART_PIN=CARD_PIN,...>`; "
+         f"functions: {', '.join(answersmod.CARDS)}.", ""]
     q = 0
 
     def item(R):
@@ -320,7 +352,8 @@ def render_md(a: dict[str, Any]) -> str:
         dni = f" Not fitted in this print: {_refs(R['dni'], 4)}." if R["dni"] else ""
         desc = f" \"{R['description']}\"." if R.get("description") else ""
         link = f" Link in the schematic's parameters (not fetched): {R['links'][0]}" if R["links"] else ""
-        return (f"Q{q}. **{R['mpn']}** x{len(R['refs'])} ({_refs(R['refs'])}): {_why(R)}.{desc}{dni} {ANSWERS}"
+        stops = (f" Stops {R['walks']} net_trace walk{'s' if R['walks'] != 1 else ''}." if R["walks"] else "")
+        return (f"Q{q}. **{R['mpn']}** x{len(R['refs'])} ({_refs(R['refs'])}): {_why(R)}.{stops}{desc}{dni} {ANSWERS}"
                 + (f"\n    {link.strip()}" if link else ""))
 
     L += ["## MCU documents", ""]
@@ -350,6 +383,12 @@ def render_md(a: dict[str, Any]) -> str:
           "firmware mode means.", ""] + [item(R) for R in act_rest] + [""]
     L += [f"## Other parts without a document ({len(other)})", "",
           "Connectors, crystals, switches and the like; lower priority.", ""] + [item(R) for R in other] + [""]
+    if answered:
+        L += [f"## Answered ({len(answered)})", "",
+              "The engineer's answers (`inventory/answers.toml`). A generic card is a function template, "
+              "engineer-declared, never a limit or a timing.", ""]
+        L += [f"- **{R['mpn']}** x{len(R['refs'])} ({_refs(R['refs'], 4)}): {_answer_text(R['answer'])}" for R in answered]
+        L.append("")
     L += [f"## Covered ({len(covered)})", "", "| MPN | refs | tier | document |", "|---|---|---|---|"]
     for R in covered:
         L.append(f"| {R['mpn']} | {_refs(R['refs'], 4)} | {R['tier']} | {', '.join(R['covered_by'])} |")
@@ -364,26 +403,34 @@ def run(atlas_dir: Path) -> dict[str, Any]:
 
 def _cmd(args) -> int:
     adir = common.atlas_dir(args.atlas_dir)
+    if args.answer:
+        return answersmod._cmd_answer(args, adir)
     try:
         a = run(adir)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         print(f"missing: {e}", file=sys.stderr)
         return 2
     rows = a["rows"]
     act = [R for R in rows if R["category"] == "active"]
-    miss = [R for R in act if not R["covered_by"]]
+    miss = [R for R in act if not R["covered_by"] and not R["answer"]]
     vis = [R for R in miss if R["tier"] in ("mcu", "direct", "via-series", "cross-board")]
     tiers = defaultdict(int)
     for R in vis:
         tiers[R["tier"]] += 1
-    other = [R for R in rows if R["category"] != "active" and not R["covered_by"]]
+    other = [R for R in rows if R["category"] != "active" and not R["covered_by"] and not R["answer"]]
+    n_ans = sum(1 for R in rows if not R["covered_by"] and R["answer"])
     print(f"MCU {', '.join(a['mcu_refs']) or 'not found'}; {len(act)} active MPNs, {len(miss)} without a document, "
           f"{len(vis)} firmware-visible ({', '.join(f'{v} {k}' for k, v in sorted(tiers.items()))}); "
-          f"{len(other)} other parts without a document; errata {'present' if a['mcu_docs']['errata'] else 'MISSING'} "
+          f"{len(other)} other parts without a document; {n_ans} answered; errata {'present' if a['mcu_docs']['errata'] else 'MISSING'} "
           f"-> {adir / 'inventory' / 'missing.md'}")
     return 0
 
 
 def register(sub, groups) -> None:
     p = sub.add_parser("missing", help="missing-documents questions from the BOM vs the manifest (inventory/missing.md)")
+    p.add_argument("--answer", nargs="+", metavar="ARG",
+                   help="record an answer instead of writing missing.md: MPN supplied | MPN not-needed --why TEXT | "
+                        "MPN standard-function FUNCTION --pins 1=G,2=S,3=D")
+    p.add_argument("--why", help="with `not-needed`: why the part needs no document")
+    p.add_argument("--pins", help="with `standard-function`: the part's pin number or name = the card's pin, comma separated")
     p.set_defaults(func=_cmd)

@@ -28,6 +28,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
+from embarch_atlas import answers
 from embarch_atlas.common import (read_json, read_jsonl, sha256_file, source_files, sources_fingerprint, write_json,
                                    write_text)
 
@@ -360,6 +361,20 @@ class Join:
                 ds = docs.for_mpn(b.mpn(ref))
                 if ds:
                     self.part_docs[(b.label, ref)] = ds
+        # generic cards: only an MPN the engineer answered `standard-function`, only where no datasheet covers it
+        self.generic: dict[tuple[str, str], dict[str, dict]] = {}
+        self.answers_error: str | None = None
+        try:
+            ans = answers.load(ad)
+        except ValueError as e:
+            ans, self.answers_error = {}, str(e)
+        for b in boards.values():
+            for ref, c in b.comps.items():
+                a = answers.find(ans, b.mpn(ref))
+                if a and a["answer"] == "standard-function" and (b.label, ref) not in self.part_docs:
+                    recs = answers.pin_records(a, c)
+                    if recs:
+                        self.generic[(b.label, ref)] = recs
         self.uses_by_pin: dict[str, list[dict]] = collections.defaultdict(list)
         for u in dt.get("uses", []):
             if u.get("pin") and not u.get("soc_defined"):
@@ -414,6 +429,11 @@ class Join:
                 if str(num) in [str(x) for x in pins] or (name and r.get("name") == name):
                     return d, r
         return None
+
+    def generic_pin_record(self, board: str, key: str) -> dict | None:
+        """The engineer-declared generic-card record for a part pin, or None (never for a documented part)."""
+        ref, num = split_key(key)
+        return self.generic.get((board, ref), {}).get(num)
 
     def pins_named(self, board: str, ref: str, name: str) -> list[str]:
         want = pin_norm(name)

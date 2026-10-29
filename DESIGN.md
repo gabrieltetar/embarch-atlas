@@ -59,7 +59,7 @@ inventory/
   manifest.json, manifest.md    every source file: kind, doc_id, parts, doc no., rev, date, pages,
                                 sha256, per-page hashes, text-layer coverage, net_info; diff vs previous
   missing.md                    questions for the engineer: missing datasheets, errata, declarations
-  answers.toml                  the engineer's answers to missing.md (not built yet)
+  answers.toml                  the engineer's answers to missing.md (`missing --answer`; below)
 docs/<doc_id>/                  one per datasheet / RM / PRD / SVD, board-independent
   doc.json                      identity (file, sha256, kind, part, doc_no, rev, pages)
   toc.md, toc.json              outline: section id | title | pages | tier-2 file | tokens
@@ -301,7 +301,8 @@ that `mcu vote --header` recorded in the RM doc's `vote*.json`: no recorded head
 `pin_trace` (MCU pins, from `pins.json`), `net_trace` (any net, part pin or part on any board,
 read from the netlists through the join at query time: members across connector mates, then
 what feeds the net from datasheet pin records with `flow` only, the feeding parts' enables and
-their MCU port or pull, and the datasheets still needed), `mismatch_report`, `config` (a
+their MCU port or pull, and the datasheets still needed; a part the engineer answered with a generic
+card is walked through and its hop marked `[generic card, engineer-declared]`), `mismatch_report`, `config` (a
 Kconfig symbol, or a `*` pattern) and `dt_node` (a node by path, label, alias, chosen name or
 compatible), `footprint` (flash image and RAM from the ELF's sections, against the flash, SRAM
 and code partition the devicetree's chosen nodes give; the largest contributors by dir, file or
@@ -589,7 +590,7 @@ An atlas id is `<target>@<commit12>`.
 | `inventory` | `inventory` | manifest + per-page hashes + diff vs last |
 | `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md |
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
-| `missing` | `missing` | missing-documents questions from BOM vs manifest |
+| `missing [--answer <MPN> supplied \| not-needed --why <text> \| standard-function <fn> --pins <map>]` | `missing` | missing-documents questions from BOM vs manifest, open ones ranked by net_trace walks stopped; `--answer` records the engineer's answer in `answers.toml` |
 | `doc prep <pdf>` | `pdftext` | doc.json, pages/, toc, page classes |
 | `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; then checks A–T on the rest, writes checks.json, sets `prov` |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
@@ -666,8 +667,44 @@ fields change, or by a deliberate `CHECKED_VERSION` bump if a full re-look is wa
 unit key, the one whose recorded file hashes match the files on disk wins, then the newest; a
 newer freeze of the same files marks the older entry `superseded` (kept, never deleted).
 
+## Answers to missing.md and generic function cards
+
+`inventory/answers.toml` holds one table per part number (`[parts."<MPN>"]`), written by
+`embarch-atlas missing --answer <MPN> ...` (which rewrites the file, dropping hand-written comments) and
+read by `missing` and the join. `answer` is one of:
+
+- `supplied`: the engineer will put the file in the sources folder; `missing.md` lists it as answered
+  until the manifest covers the part (then it is simply covered);
+- `not-needed` with a `why` (required);
+- `standard-function` with a `function` and a `pins` map from the part's pin number or netlist pin name
+  to the card's pin (`{ "1" = "G", "2" = "S", "3" = "D" }`; several part pins may name one card pin, a
+  MOSFET's drain tab). The map must cover every non-optional pin of the card and is checked against the
+  pins of the parts that carry the MPN. A malformed file is reported (`missing` exits 2; `net_trace`
+  says it ignored the file) and never half-applied.
+
+A **generic card** is a function template in `answers.CARDS`: n-mosfet, p-mosfet, diode, schottky, tvs,
+thermistor, inverter, and, nand, buffer-oe, decoder-1of2. Each pin has `dir`, `type` and, where current or
+a signal passes, `flow` (a MOSFET's drain and source are `bidir`, its gate a `sink` marked `control`;
+logic inputs `sink`, outputs `source`; a TVS or thermistor has none). The join turns a card into
+datasheet-shaped pin records with `prov = engineer-declared`. A card states **no limit, timing or part
+fact** and is used only for an MPN the engineer answered with `standard-function`, only through that pin
+map (a function or pin map is never read from netlist names, decision 2026-10-06), and never over a
+datasheet: a part that gains a document stops using its card.
+
+`net_trace` treats a card's pin like a datasheet pin: a generic feed (a FET's channel, a diode's cathode,
+a gate's output) is walked and its line ends `[generic card, engineer-declared]`; a `control` pin is the
+part's enable, and a net driven by a generic logic output reads `driven by <part> Y [generic card,
+engineer-declared] (input A on <net>: MCU PA3 ...)`, chained up to three gates deep. An answered part is
+not under "Datasheets needed".
+
+`missing.md` ranks open questions by **walks stopped** (`nettrace.walk_stops`: one upstream walk per
+non-ground rail net, each MPN counted once per walk, a documented or answered part never counted), then by
+firmware visibility, and shows the count (`Stops N net_trace walks`). Answered items move to an
+"Answered" section. The count is a ranking aid over rail walks, not a coverage figure: a part reached only
+from a signal net is not counted. Not measured on a real board in this unit (a synthetic two-board
+fixture only).
+
 ## Not yet built (deliberately)
 
 A native EDA adapter, geometry as a fallback (without anchor
-words) and the vision rung of the schematic ladder, `inventory/answers.toml`, PRD → code
-trace links.
+words) and the vision rung of the schematic ladder, PRD → code trace links.

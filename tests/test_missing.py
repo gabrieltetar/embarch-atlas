@@ -98,7 +98,8 @@ def test_missing_md_asks_questions(tmp_path, capsys):
     md = (adir / "inventory" / "missing.md").read_text()
     assert "**7 active part numbers (U/Q/D) on the boards; 2 have a document; 5 missing, 3 of them firmware-visible.**" in md
     assert "Q1. **MCU errata sheet**" in md
-    assert "Q2. **FETZZ9** x2 (M:Q1, S:Q3): shares MCU net(s) SIG1 (M:U1)." in md
+    assert "Q3. **FETZZ9** x2 (M:Q1, S:Q3): shares MCU net(s) SIG1 (M:U1)." in md
+    assert "Q2. **GATE77Q** x1 (M:U3): one series part from MCU net(s) SIG2 (M:U1) via M:R1. Stops 1 net_trace walk." in md
     assert "Supply it, mark it not needed, or accept a standard-function card?" in md
     assert "Link in the schematic's parameters (not fetched): https://example.com/regul8.pdf" in md
     assert "download" not in md.lower()
