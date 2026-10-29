@@ -408,6 +408,34 @@ def decode(reg: dict, v: int, fields: list[dict], all_fields: bool) -> list[str]
     return out
 
 
+
+# --------------------------------------------------------------------------- the clock gate
+
+# STM32: a peripheral whose RCC enable bit is clear answers its debug read without error but not with
+# its registers. The enable field is `<PERIPH>EN` in some RCC register; these peripherals share one.
+CLOCK_EXCEPTIONS = {"VREFBUF": "SYSCFGEN", "COMP": "SYSCFGEN", "COMP1": "SYSCFGEN", "COMP2": "SYSCFGEN",
+                    "COMP3": "SYSCFGEN", "OPAMP": "SYSCFGEN", "OPAMP1": "SYSCFGEN", "OPAMP2": "SYSCFGEN"}
+# Blocks with no enable bit of their own (always clocked, or clocked with another block).
+NO_CLOCK_GATE = {"RCC", "EXTI", "IWDG", "NVIC", "SCB", "STK", "SCS", "MPU", "FPU", "NVIC_STIR", "RTC", "TAMP"}
+
+
+def clock_gate(svd: "Svd", periph: str) -> tuple[str, dict] | str | None:
+    """How to tell whether `periph` is clocked: (RCC register record, enable field record), the string
+    "none" for a block that has no gate of its own, or None when the SVD names no enable bit."""
+    rcc = [r for r in svd.regs if periph_of(r).upper() == "RCC"]
+    if not rcc:
+        return None
+    p = periph.upper()
+    if p in NO_CLOCK_GATE:
+        return "none"
+    want = _norm(CLOCK_EXCEPTIONS.get(p, p + "EN"))
+    for r in sorted(rcc, key=lambda r: (_addr(r), r.get("name", ""))):
+        for f in svd.fields.get(r["id"], []):
+            if _norm(f.get("name")) == want:
+                return r, f
+    return None
+
+
 # --------------------------------------------------------------------------- the tool
 
 def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None) -> str:
@@ -431,7 +459,10 @@ def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str 
                 + "\nCall again with allow_clear=true if clearing it is the point.\n")
     skip = set() if allow_clear else {_addr(r) & ~3 for r in guarded}
     to_read = [r for r in regs if (_addr(r) & ~3) not in skip]
-    ranges = plan(to_read, skip)
+    gate = clock_gate(svd, periph)
+    gate_reg = gate[0] if isinstance(gate, tuple) else None
+    extra = [gate_reg] if gate_reg is not None and (_addr(gate_reg) & ~3) not in {_addr(r) & ~3 for r in to_read} else []
+    ranges = plan(to_read + extra, skip)
     words_total = sum(n for _, n in ranges)
     if len(ranges) > MAX_RANGES or words_total > MAX_WORDS:
         return (f"src: none\n\n{periph} spans {words_total} words in {len(ranges)} ranges; one read takes at most "
@@ -450,6 +481,21 @@ def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str 
             else "core was already halted, left halted")
     out = [f"src: live {read.get('role')} {read.get('chip')} via embarch-core (probe {read.get('probe_serial')}), "
            f"{halt}; decoded with {svd.doc.name}", ""]
+    clock_off = False
+    if gate_reg is not None:
+        gv = reg_value(words, gate_reg)
+        label = f"RCC.{gate_reg.get('name')}.{gate[1].get('name')}"
+        if gv is None:
+            out += [f"clock state unknown ({label} not in the answer)", ""]
+        elif field_value(gv, gate[1]) == 0:
+            clock_off = True
+            out += [f"clock off ({label} = 0): these words are not the register's contents", ""]
+        else:
+            out += [f"clock on ({label} = 1)", ""]
+    elif gate == "none":
+        out += [f"{periph} has no clock enable bit of its own", ""]
+    else:
+        out += [f"clock state unknown (no enable bit for {periph} found in the SVD's RCC)", ""]
     seen_addr: dict[int, str] = {}
     for r in to_read:
         a = _addr(r)
@@ -461,13 +507,16 @@ def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str 
         if v is None:
             out.append(f"{periph}.{r.get('name')} @ {r.get('addr')}: not in the answer")
             continue
+        if clock_off:
+            out.append(f"{periph}.{r.get('name')} @ {r.get('addr')} = 0x{v:0{int(r.get('width') or 32) // 4}X}  (not decoded: clock off)")
+            continue
         out += decode(r, v, svd.fields.get(r["id"], []), all_fields=single)
         if effects[r["id"]]:
             out.append("  ! this read cleared: " + "; ".join(effects[r["id"]]))
     if guarded and not allow_clear:
         out += ["", "Not read (reading changes the target; allow_clear=true reads them):"]
         out += [f"- {r.get('name')}: " + "; ".join(effects[r["id"]]) for r in guarded]
-    if not single:
+    if not single and not clock_off:
         out += ["", "`*` marks a field not at its reset value; ask for PERIPH.REG for every field."]
     return "\n".join(out) + "\n"
 

@@ -770,3 +770,82 @@ def test_reg_read_cli_exits_non_zero_on_a_failed_read(tmp_path, capsys):
     ns = lambda t: argparse.Namespace(atlas_dir=str(ad), target=t, allow_clear=False, role=None)
     assert live._cmd_reg_read(ns("sense_vsys.VBUS")) == 1 and "Nothing answered" in capsys.readouterr().out
     assert live._cmd_reg_read(ns("nothing_here.REG")) == 1
+
+
+# ----------------------------------------------------------------------------- the clock gate
+
+RCC = 0x4002_1000
+
+
+def _rcc(ad: Path, enr1_bits: dict[str, int], enr2_bits: dict[str, int] | None = None) -> None:
+    def r(name, off):
+        return {"kind": "register", "id": f"demo.reg.RCC.{name}", "name": name, "addr": f"0x{RCC + off:08X}",
+                "reset": "0x00000000", "access": "rw", "width": 32, "doc": "demo-svd"}
+    fs = [field("APBENR1", n, b, b, periph="RCC") for n, b in enr1_bits.items()]
+    fs += [field("APBENR2", n, b, b, periph="RCC") for n, b in (enr2_bits or {}).items()]
+    _extend(ad, "demo-svd", [r("APBENR1", 0x3C), r("APBENR2", 0x40)], fs)
+
+
+def test_a_peripheral_whose_clock_is_off_says_so_and_marks_nothing_against_reset(tmp_path):
+    ad = make(tmp_path, {BASE + 0x0C: 0, RCC + 0x3C: 0x0000_0000})
+    _rcc(ad, {"UART1EN": 4})
+    out = live.reg_read(ad, "UART1")
+    assert "clock off (RCC.APBENR1.UART1EN = 0): these words are not the register's contents" in out
+    assert "at reset" not in out and "*" not in out and "reset 0x" not in out
+    one = live.reg_read(ad, "UART1.BRR")
+    assert "clock off (RCC.APBENR1.UART1EN = 0)" in one and "BRR[" not in one
+    assert ["0x4002103C", "1"] in calls(ad)[-1]       # the RCC word rode along in the same halted read
+
+
+def test_a_peripheral_whose_clock_is_on_decodes_as_before(tmp_path):
+    ad = make(tmp_path, {BASE + 0x0C: 0x0000_01A1, RCC + 0x3C: 0x10})
+    _rcc(ad, {"UART1EN": 4})
+    out = live.reg_read(ad, "UART1.BRR")
+    assert "clock on (RCC.APBENR1.UART1EN = 1)" in out
+    assert "* BRR[15:0] = 0x1a1 (reset 0x0)" in out
+
+
+def test_a_shared_enable_comes_from_the_exceptions_table_and_a_missing_one_is_unknown(tmp_path):
+    ad = make(tmp_path, {BASE + 0x0C: 1, RCC + 0x40: 0})
+    _rcc(ad, {}, {"SYSCFGEN": 0})
+    assert live.clock_gate(live.Svd(ad / "docs" / "demo-svd"), "VREFBUF")[1]["name"] == "SYSCFGEN"
+    out = live.reg_read(ad, "UART1.BRR")
+    assert "clock state unknown (no enable bit for UART1" in out and "BRR[15:0]" in out
+
+
+def test_no_rcc_in_the_svd_means_unknown_not_a_failure(tmp_path):
+    ad = make(tmp_path, {BASE + 0x0C: 0x1A1})
+    out = live.reg_read(ad, "UART1.BRR")
+    assert "clock state unknown" in out and "0x000001A1" in out
+
+
+# Peripheral names of a typical STM32 family SVD (names only; no vendor file is carried).
+SVD_PERIPHS = ["ADC", "CRC", "DAC", "DBG", "DMA1", "DMA2", "DMAMUX", "EXTI", "FLASH", "GPIOA", "GPIOB", "GPIOF",
+               "I2C1", "I2C2", "IWDG", "LPTIM1", "LPUART1", "PWR", "RCC", "RTC", "SPI1", "SPI2", "SYSCFG", "TAMP",
+               "TIM1", "TIM2", "TIM14", "TIM16", "UCPD1", "UCPD2", "USART1", "USART2", "USB", "VREFBUF", "WWDG",
+               "COMP", "OPAMP", "NVIC", "SCB", "STK"]
+ENABLE_FIELDS = ["ADCEN", "CRCEN", "DAC1EN", "DBGEN", "DMA1EN", "DMA2EN", "DMAMUXEN", "FLASHEN", "GPIOAEN", "GPIOBEN",
+                 "GPIOFEN", "I2C1EN", "I2C2EN", "LPTIM1EN", "LPUART1EN", "PWREN", "SPI1EN", "SPI2EN", "SYSCFGEN",
+                 "TIM1EN", "TIM2EN", "TIM14EN", "TIM16EN", "UCPD1EN", "UCPD2EN", "USART1EN", "USART2EN", "USBEN",
+                 "WWDGEN"]
+
+
+def test_every_peripheral_maps_to_an_enable_field_or_is_listed_unknown(tmp_path):
+    ad = make(tmp_path, {})
+    d = ad / "docs" / "demo-svd" / "records"
+    write_jsonl(d / "register.jsonl", [
+        {"kind": "register", "id": f"x.reg.RCC.ENR", "name": "ENR", "addr": f"0x{RCC:08X}", "doc": "demo-svd"}]
+        + [{"kind": "register", "id": f"x.reg.{p}.R", "name": "R", "addr": f"0x{0x4000_0000 + 0x400 * i:08X}",
+            "doc": "demo-svd"} for i, p in enumerate(SVD_PERIPHS) if p != "RCC"])
+    write_jsonl(d / "field.jsonl", [{"kind": "field", "id": f"x.reg.RCC.ENR.{n}", "reg": "x.reg.RCC.ENR", "name": n,
+                                    "bits": [i, i], "doc": "demo-svd"} for i, n in enumerate(ENABLE_FIELDS)])
+    svd = live.Svd(ad / "docs" / "demo-svd")
+    got = {p: live.clock_gate(svd, p) for p in SVD_PERIPHS}
+    # DAC is spelled DAC1EN in the field list on purpose: it must come out unknown, not guessed.
+    assert got["DAC"] is None
+    on_purpose = {p for p, g in got.items() if g == "none"}
+    assert on_purpose == {"RCC", "EXTI", "IWDG", "NVIC", "SCB", "STK", "RTC", "TAMP"}
+    unknown = {p for p, g in got.items() if g is None}
+    assert unknown == {"DAC"}
+    for p in set(SVD_PERIPHS) - on_purpose - unknown:
+        assert got[p][1]["name"] == live.CLOCK_EXCEPTIONS.get(p, p + "EN")

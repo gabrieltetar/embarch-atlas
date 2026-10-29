@@ -435,6 +435,18 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   answers with all of them. `reg_read PERIPH` reads the whole peripheral as one snapshot (one
   request, one halt, ranges merged across up to 8 reserved words) and shows only the fields that
   differ from reset. Bits set outside every field are flagged.
+- **Clock gate.** On STM32 a peripheral whose RCC enable bit is clear answers the debug read
+  without error but not with its registers. `reg_read` adds the RCC register holding the enable
+  field to the same halted read (`clock_gate`): the field is `<PERIPH>EN` in any RCC register of the
+  SVD (`UCPD2` -> `RCC.APBENR1.UCPD2EN`), with `CLOCK_EXCEPTIONS` for blocks that share one
+  (`VREFBUF`, `COMP*`, `OPAMP*` -> `SYSCFGEN`). Bit 0 answers "clock off (RCC.X.YEN = 0): these
+  words are not the register's contents", prints raw words and marks nothing against reset; bit 1
+  prints "clock on"; `NO_CLOCK_GATE` (`RCC`, `EXTI`, `IWDG`, `RTC`, `TAMP`, core blocks) says so on
+  purpose; any other peripheral says the clock state is unknown. Covered: STM32 families whose SVD
+  names the gate `<PERIPH>EN` (G0 measured by name only; the rule is assumed for the rest, and a
+  spelling it misses, e.g. `DAC` vs `DAC1EN`, answers unknown, never a guess). A part with no `RCC`
+  peripheral (non-STM32) answers "clock state unknown" and reads as before. Enable bits are not
+  verified on hardware (task atlas/013 debt).
 - **Read-to-clear guard.** A register is refused by name, and left out of a peripheral read,
   when the SVD marks a field `readAction` (access `rclr`) or the reference manual's field text says
   reading it clears something ("cleared by reading the USART_RDR register", matched by a few
