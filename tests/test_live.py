@@ -960,3 +960,32 @@ def test_a_shell_uart_with_no_declared_signal_says_so_and_tries_nothing(tmp_path
     out, code = live.shell_status(ad, "kernel uptime")
     assert opened == [] and code == 1
     assert "the image's shell is on `/soc/usb/cdc_acm_uart0`; no signal is declared for it" in out
+
+
+def test_a_read_at_the_range_limit_still_reads_when_the_clock_word_has_no_room(tmp_path):
+    ad = make(tmp_path, {})
+    wide = [{"kind": "register", "id": f"demo.reg.WIDE.R{i}", "name": f"R{i}", "addr": f"0x{0x4001_0000 + 0x100 * i:08X}",
+             "reset": "0x00000000", "access": "rw", "width": 32, "doc": "demo-svd"} for i in range(live.MAX_RANGES)]
+    _extend(ad, "demo-svd", wide, [])
+    _rcc(ad, {"WIDEEN": 4})                           # a gate exists, but one more range would cross the limit
+    out = live.reg_read(ad, "WIDE")
+    assert not out.startswith("src: none") and "spans" not in out
+    assert "clock state unknown (the read had no room for the enable word RCC.APBENR1.WIDEEN)" in out
+    assert len(calls(ad)[-1]) == live.MAX_RANGES and ["0x4002103C", "1"] not in calls(ad)[-1]
+    assert "not decoded" not in out and "clock off" not in out and "clock on" not in out
+    wide.append({**wide[0], "id": "demo.reg.WIDE.R99", "name": "R99", "addr": "0x40020000"})
+    _extend(ad, "demo-svd", wide[-1:], [])
+    assert "spans 33 words in 33 ranges" in live.reg_read(ad, "WIDE")     # the limit on the asked-for registers stands
+
+
+def test_an_enable_named_field_in_a_non_enable_rcc_register_is_not_the_clock_state(tmp_path):
+    ad = make(tmp_path, {BASE + 0x0C: 1, RCC + 0x20: 0, RCC + 0x3C: 0x10})
+    rcc_reg = {"kind": "register", "id": "demo.reg.RCC.BDCR", "name": "BDCR", "addr": f"0x{RCC + 0x20:08X}",
+               "reset": "0x00000000", "access": "rw", "width": 32, "doc": "demo-svd"}
+    sleep = {**rcc_reg, "id": "demo.reg.RCC.APBSMENR1", "name": "APBSMENR1", "addr": f"0x{RCC + 0x24:08X}"}
+    _rcc(ad, {"UART1EN": 4})
+    _extend(ad, "demo-svd", [rcc_reg, sleep],
+            [field("BDCR", "UART1EN", 4, 4, periph="RCC"), field("APBSMENR1", "UART1EN", 4, 4, periph="RCC")])
+    gate = live.clock_gate(live.Svd(ad / "docs" / "demo-svd"), "UART1")
+    assert gate[0]["name"] == "APBENR1"               # lowest address no longer wins when it is not an enable register
+    assert "clock on (RCC.APBENR1.UART1EN = 1)" in live.reg_read(ad, "UART1.BRR")

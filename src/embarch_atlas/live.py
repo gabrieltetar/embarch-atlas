@@ -421,12 +421,22 @@ CLOCK_EXCEPTIONS = {"VREFBUF": "SYSCFGEN",              # shares the SYSCFG cloc
 NO_CLOCK_GATE = {"RCC", "EXTI", "IWDG", "NVIC", "SCB", "STK", "SCS", "MPU", "FPU", "NVIC_STIR"}
 
 
+def is_clock_enable_reg(r: dict) -> bool:
+    """A register an SVD names as a peripheral clock enable (`AHBENR`, `APB1ENR1`, `C1_AHB4ENR`): its name
+    holds `ENR` and is not the sleep-mode (`*SMENR`) or low-power (`*LPENR`) twin, which carry the same field
+    names for a different purpose. Other RCC registers (`BDCR`, `CCIPR`) hold `<X>EN`-named bits that are not
+    the clock gate."""
+    n = str(r.get("name", "")).upper()
+    return "ENR" in n and "SMENR" not in n and "LPENR" not in n
+
+
 def clock_gate(svd: "Svd", periph: str) -> tuple[str, dict] | str | None:
     """How to tell whether `periph` is clocked: (RCC register record, enable field record), the string
     "none" for a block that has no gate of its own, or None when the SVD names no enable bit."""
     rcc = [r for r in svd.regs if periph_of(r).upper() == "RCC"]
     if not rcc:
         return None
+    rcc = [r for r in rcc if is_clock_enable_reg(r)]
     p = periph.upper()
     if p in NO_CLOCK_GATE:
         return "none"
@@ -466,6 +476,12 @@ def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str 
     extra = [gate_reg] if gate_reg is not None and (_addr(gate_reg) & ~3) not in {_addr(r) & ~3 for r in to_read} else []
     ranges = plan(to_read + extra, skip)
     words_total = sum(n for _, n in ranges)
+    no_room = False
+    if extra and (len(ranges) > MAX_RANGES or words_total > MAX_WORDS):
+        # the clock word is a diagnostic, not the thing asked for: read without it rather than refuse
+        extra, no_room = [], True
+        ranges = plan(to_read, skip)
+        words_total = sum(n for _, n in ranges)
     if len(ranges) > MAX_RANGES or words_total > MAX_WORDS:
         return (f"src: none\n\n{periph} spans {words_total} words in {len(ranges)} ranges; one read takes at most "
                 f"{MAX_WORDS} words in {MAX_RANGES} ranges. Ask for its registers by name.\n")
@@ -485,9 +501,11 @@ def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str 
            f"{halt}; decoded with {svd.doc.name}", ""]
     clock_off = False
     if gate_reg is not None:
-        gv = reg_value(words, gate_reg)
+        gv = None if no_room else reg_value(words, gate_reg)
         label = f"RCC.{gate_reg.get('name')}.{gate[1].get('name')}"
-        if gv is None:
+        if no_room:
+            out += [f"clock state unknown (the read had no room for the enable word {label})", ""]
+        elif gv is None:
             out += [f"clock state unknown ({label} not in the answer)", ""]
         elif field_value(gv, gate[1]) == 0:
             clock_off = True
