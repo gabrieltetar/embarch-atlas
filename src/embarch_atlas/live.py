@@ -667,24 +667,96 @@ def _route(bus: dict, inst: dict, reg_addr: int) -> tuple[int, int]:
     return inst["addr"], reg_addr
 
 
+_REG_REF = re.compile(r"\bREG0x([0-9A-Fa-f]+)\b")
+_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+
+
+def _clear_sentence(text: str) -> tuple[str, re.Match] | None:
+    """The sentence of `text` that says a read clears something, and its match."""
+    for sent in _SENTENCE.split(text):
+        m = READ_CLEARS_TEXT.search(sent)
+        if m:
+            return sent.strip(), m
+    return None
+
+
 def _ext_effects(doc: Path, recs: list[dict]) -> list[str]:
+    """Why reading `recs` (one register, or an LSB/MSB pair) changes the part. A clear-on-read
+    sentence is charged to the register it names when that is another one (a config bit saying
+    "STAT_COMP stays set until read" does not clear itself), and the reason quotes the sentence."""
     ids = {r.get("id") for r in recs}
-    why = []
+    regs = _jsonl(doc / "records" / "register.jsonl")
+    fields = _jsonl(doc / "records" / "field.jsonl")
+    reg_of_addr = {}
+    for r in regs:
+        a = _int(r.get("addr"))
+        if a is not None:
+            reg_of_addr.setdefault(a, r.get("id"))
+    named: dict[str, str] = {}            # an underscore name -> the register it belongs to
+    for r in regs:
+        short = re.sub(r"_(LSB|MSB)$", "", str(r.get("name") or ""), flags=re.I)
+        if "_" in short:
+            named[short] = r.get("id")
+    for f in fields:
+        if "_" in str(f.get("name") or ""):
+            named[str(f["name"])] = f.get("reg")
+
+    def target(sent: str, m: re.Match, own_reg: str, own_name: str) -> tuple[str | None, str | None]:
+        """(register id charged, field name charged) for a sentence found in `own_reg`'s text."""
+        other = []
+        for t in named:
+            if t != own_name and named[t] != own_reg and re.search(r"\b" + re.escape(t) + r"\b", sent):
+                other.append((m_pos(sent, t), t, named[t]))
+        for rm in _REG_REF.finditer(sent):
+            rid = reg_of_addr.get(int(rm[1], 16))
+            if rid and rid != own_reg:
+                other.append((rm.start(), next((str(r.get("name")) for r in regs if r.get("id") == rid), None), rid))
+        own_regname = next((str(r.get("name")) for r in regs if r.get("id") == own_reg), "")
+        own_short = re.sub(r"_(LSB|MSB)$", "", own_regname, flags=re.I)
+        if not other or (own_short and re.search(r"\b" + re.escape(own_short) + r"\b", sent)):
+            return own_reg, None                                  # this register's own sentence
+        before = [o for o in other if o[0] < m.start()]
+        before = [o for o in before if o[1] in named] or before    # a field's own name beats "REG0x22"
+        # the subject nearest before the clause; with none before it, the object named after it
+        _, tname, rid = max(before, key=lambda o: o[0]) if before else min(other, key=lambda o: o[0])
+        return rid, tname
+
+    def m_pos(sent: str, t: str) -> int:
+        return re.search(r"\b" + re.escape(t) + r"\b", sent).start()
+
     by_cite: dict[str, list[str]] = {}
-    for f in _jsonl(doc / "records" / "field.jsonl"):
-        if f.get("reg") not in ids:
-            continue
+    quotes: dict[str, str] = {}
+    for f in fields:
+        own = f.get("reg")
         text = " ".join(str(f.get(k) or "") for k in ("desc", "q"))
-        if reads_clear(f.get("access")) or READ_CLEARS_TEXT.search(text):
-            by_cite.setdefault(f"{f.get('doc')} p{f.get('p')}", []).append(str(f.get("name")))
-    why += [f"{', '.join(names)} {'clears' if len(names) == 1 else 'clear'} on the read ({cite})"
-            for cite, names in by_cite.items()]
+        cite = f"{f.get('doc')} p{f.get('p')}"
+        if reads_clear(f.get("access")):
+            if own in ids:
+                by_cite.setdefault(cite, []).append(str(f.get("name")))
+            continue
+        hit = _clear_sentence(text)
+        if not hit:
+            continue
+        rid, tname = target(hit[0], hit[1], own, str(f.get("name")))
+        if rid in ids:
+            name = tname or str(f.get("name"))
+            by_cite.setdefault(cite, []).append(name)
+            quotes.setdefault(f"{cite}\0{name}", hit[0])
+    why = []
+    for cite, names in by_cite.items():
+        names = list(dict.fromkeys(names))
+        q = "; ".join(f'"{quotes[k]}"' for n in names if (k := f"{cite}\0{n}") in quotes)
+        why.append(f"{', '.join(names)} {'clears' if len(names) == 1 else 'clear'} on the read ({cite})"
+                   + (f": {q}" if q else ""))
     for r in recs:
-        if READ_CLEARS_TEXT.search(" ".join(str(r.get(k) or "") for k in ("desc", "q", "summary"))):
-            why.append(f"the register's text says a read clears it ({r.get('doc')} p{r.get('p')})")
+        hit = _clear_sentence(" ".join(str(r.get(k) or "") for k in ("desc", "q", "summary")))
+        if hit:
+            rid, _ = target(hit[0], hit[1], r.get("id"), "")
+            if rid == r.get("id"):
+                why.append(f"the register's text says a read clears it ({r.get('doc')} p{r.get('p')}): \"{hit[0]}\"")
     for r in _jsonl(doc / "records" / "rule.jsonl") + _jsonl(doc / "records" / "quirk.jsonl"):
-        named = ids & set(r.get("refs") or []) or r.get("reg") in ids
-        if named and READ_CLEARS_TEXT.search(" ".join(str(r.get(k) or "") for k in ("text", "q"))):
+        named_ = ids & set(r.get("refs") or []) or r.get("reg") in ids
+        if named_ and READ_CLEARS_TEXT.search(" ".join(str(r.get(k) or "") for k in ("text", "q"))):
             why.append(f"{r.get('id')} ({r.get('doc')} p{r.get('p')})")
     return list(dict.fromkeys(why))
 
@@ -783,6 +855,9 @@ def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: 
                 order = data if bus.get("byte_order") == "lsb-first" else list(reversed(data))
                 vals.append(sum(b << (8 * i) for i, b in enumerate(order)))
         except LiveError as e:
+            if "command not found" in str(e):
+                return (f"src: {con.src()}\n\nThe image on the board has no I2C shell ({e}): build it with "
+                        "`CONFIG_I2C_SHELL=y`. Nothing was read; the bus was not tried.\n")
             state = _device_state(con, inst)
             hint = f"; the board lists {inst['name']} as ({state})" if state else ""
             return (f"src: {con.src()}\n\nThe read of {label}.{g[0].get('name')} failed: {e}{hint}. "

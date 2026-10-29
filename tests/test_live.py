@@ -263,6 +263,8 @@ words = cmd.split()
 out = ""
 if words[:2] == ["device", "list"]:
     out = "devices:\\r\\n" + "".join("- %s (off)\\r\\n" % n for n in devs.get("_off", []))
+elif words[0] == "i2c" and devs.get("_no_i2c"):
+    out = "i2c: command not found\\r\\n"
 elif words[0] == "i2c":
     regs = devs.get("%s/%s" % (words[2], words[3].lower()))
     reg = int(words[4], 16)
@@ -552,3 +554,57 @@ def test_a_field_reset_is_field_relative_and_null_falls_back_to_the_register(tmp
             [dict(field("RST", "HI", 7, 4), reset="0x5"), dict(field("RST", "LO", 3, 0), reset=None)])
     off = live.reg_read(ad2, "UART1.RST")
     assert "* HI[7:4] = 0x6 (reset 0x5)" in off and "* LO" not in off
+
+
+def test_a_board_without_the_i2c_shell_is_told_so_not_given_a_bus_diagnosis(tmp_path):
+    ad = make_ext(tmp_path, {"_no_i2c": True, "_off": ["vsys-sense@45"]})
+    out = live.reg_read(ad, "sense_vsys.VBUS")
+    assert "no I2C shell" in out and "CONFIG_I2C_SHELL=y" in out
+    assert "Nothing answered" not in out and "the board lists" not in out
+    assert shell_log(ad) == ["i2c read i2c@40005800 0x45 0x05 2"]        # no `device list`
+    assert "Nothing answered at 0x45" in live.reg_read(make_ext(tmp_path / "b", {}), "sense_vsys.VBUS")
+
+
+def charger_doc(tmp: Path) -> Path:
+    """Records shaped like the parts whose read-to-clear wordings differ: a config bit that names
+    another register's flag, a plain read-clear flag, a latch, a W1C flag."""
+    doc = tmp / "chg@C"
+    r = lambda n, a, w=16: {"kind": "register", "id": f"c.reg.{n}", "name": n, "addr": a, "width": w, "doc": "chg@C", "p": 9}
+    f = lambda reg, n, **kw: {"kind": "field", "id": f"c.reg.{reg}.{n}", "reg": f"c.reg.{reg}", "name": n,
+                              "bits": [0, 0], "doc": "chg@C", "p": 47, **kw}
+    write_jsonl(doc / "records" / "register.jsonl", [
+        r("ChargeOption0", "0x00"), r("ProchotStatus", "0x22"), r("ChargerStatus", "0x20"),
+        r("ChargeOption4", "0x3C"), r("ALERT_DIAG", "0x0B"), r("STATUS", "0x07", 8), r("Plain", "0x10")])
+    write_jsonl(doc / "records" / "field.jsonl", [
+        f("ChargeOption0", "EN_CMP_LATCH", access="rw",
+          desc="Enable comparator latch. When set, the comparator output STAT_COMP (REG0x22) stays set until read by host. "
+               "The default is 0."),
+        f("ProchotStatus", "STAT_COMP", access="ro", desc="Comparator trip flag"),
+        f("ChargerStatus", "FAULT_OCP", access="ro", desc="Fault flag, cleared when read by host."),
+        f("ChargeOption4", "STAT_IDCHG2", access="ro", desc="Latched until read by the host."),
+        f("ALERT_DIAG", "OVF", access="ro", desc="Overflow; cleared by reading ALERT_DIAG."),
+        f("STATUS", "OCP", access="ro", desc="Latched fault, reading STATUS clears it."),
+        f("Plain", "EN", access="rw", desc="Enable.")])
+    return doc
+
+
+def test_a_clear_on_read_sentence_naming_another_register_is_charged_to_that_one(tmp_path):
+    doc = charger_doc(tmp_path)
+    regs = {r["name"]: r for r in live._jsonl(doc / "records" / "register.jsonl")}
+    eff = {n: live._ext_effects(doc, [r]) for n, r in regs.items()}
+    assert eff["ChargeOption0"] == [] and eff["Plain"] == []
+    assert len(eff["ProchotStatus"]) == 1 and eff["ProchotStatus"][0].startswith("STAT_COMP clears on the read (chg@C p47)")
+    assert "stays set until read by host" in eff["ProchotStatus"][0]          # quotes the sentence it matched
+    assert "EN_CMP_LATCH" not in " ".join(sum(eff.values(), []))
+    for n in ("ChargerStatus", "ChargeOption4", "ALERT_DIAG", "STATUS"):
+        assert eff[n] and "clears on the read" in eff[n][0], n
+    assert [n for n, e in eff.items() if e] == ["ProchotStatus", "ChargerStatus", "ChargeOption4", "ALERT_DIAG", "STATUS"]
+
+
+def test_the_guard_over_every_external_part_in_the_fixture_atlases_is_pinned(tmp_path):
+    ad = make_ext(tmp_path, SENSE)
+    docs = {"sense@A": ad / "docs" / "sense@A", "gauge@B": ad / "docs" / "gauge@B", "chg@C": charger_doc(tmp_path)}
+    guarded = sorted(f"{d}:{r['name']}" for d, p in docs.items()
+                     for r in live._jsonl(p / "records" / "register.jsonl") if live._ext_effects(p, [r]))
+    assert guarded == ["chg@C:ALERT_DIAG", "chg@C:ChargeOption4", "chg@C:ChargerStatus", "chg@C:ProchotStatus",
+                       "chg@C:STATUS", "sense@A:DIAG"]

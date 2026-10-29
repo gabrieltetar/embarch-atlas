@@ -414,7 +414,13 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   bytes in the `byte_order` stated). `windows` send a register outside the part's own range to the
   address that serves it. A wide register with no `bus` record is refused: the byte order is a
   datasheet fact, not a default. The read-to-clear guard reads the part's own records: `rclr`
-  access, or field, register or rule text saying a read clears it. A device that does not answer
+  access, or field, register or rule text saying a read clears it. A clear-on-read sentence that
+  names another register (`REG0x22`) or field (`STAT_COMP`, an underscore name) is charged to that
+  one, not to the field carrying the text (a config bit saying a flag "stays set until read" does
+  not clear itself), unless the sentence also names the carrying register; the reason quotes the
+  sentence it matched. The shell's `i2c: command not found` answers "no I2C shell: build it with
+  `CONFIG_I2C_SHELL=y`" with nothing about the bus (read from the failed read's own answer, no
+  extra exchange). A device that does not answer
   gets the state the board's `device list` gives it (`off` when its power domain is suspended).
   A whole part is read when it has at most 24 registers, one shell command each.
 - **Live stacks.** `live_stacks` runs `kernel thread stacks` and joins each thread to its stack
