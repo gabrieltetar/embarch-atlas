@@ -1175,6 +1175,13 @@ def _cmd_stacks(a) -> int:
     return 1 if out.startswith("src: none") else 0
 
 
+def _cmd_core_state(a) -> int:
+    from . import common, corestate
+    out = corestate.core_state(common.atlas_dir(a.atlas_dir), a.build, a.role, a.halt, a.samples)
+    print(out, end="")
+    return 1 if out.startswith("src: none") else 0
+
+
 def register(sub, groups) -> None:
     from . import common
     g = common.verb_group(sub, groups, "live", "read the running board through embarch-core (live module)")
@@ -1189,6 +1196,13 @@ def register(sub, groups) -> None:
     p.add_argument("--build", help="the build dir the board runs (default: the atlas's pinned build)")
     p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")
     p.set_defaults(func=_cmd_stacks)
+    p = g.add_parser("core-state", help="where the core is: DHCSR and ICSR by field name, PC samples (or with "
+                                        "--halt the registers) as functions and lines in the ELF the board runs")
+    p.add_argument("--halt", action="store_true", help="stop the core once for the registers and SCB_ICSR")
+    p.add_argument("--samples", type=int, default=8, help="DWT_PCSR samples, 1 ms apart (1 to 64)")
+    p.add_argument("--build", help="the build dir the board runs (default: the atlas's pinned build)")
+    p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")
+    p.set_defaults(func=_cmd_core_state)
     p = g.add_parser("shell", help="one command on the board's shell, through embarch-core")
     p.add_argument("command", nargs="+")
     p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")

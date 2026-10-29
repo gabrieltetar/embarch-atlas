@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, live as live_mod, query
+from . import common, corestate, live as live_mod, query
 
 INSTRUCTIONS = (
     "Hardware atlas of this firmware project: schematics, datasheets, the MCU reference "
@@ -164,6 +164,17 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             words read through embarch-core show the board runs that build; `!` marks 90 % and above.
             `build`: the build dir the board runs; default the atlas's pinned build."""
             return live_mod.live_stacks(atlas_dir, build, role)
+
+        @server.tool(annotations=READ_ONLY)
+        def core_state(halt: bool = False, samples: int = 8, build: str | None = None,
+                       role: str | None = None) -> str:
+            """Live: where the core is, as symbols. DHCSR (and with `halt` SCB_ICSR) decoded by bit name; the
+            `samples` DWT_PCSR PC samples (default 8, 1 ms apart, no halt) as a histogram of functions with
+            file:line, or with `halt=true` the core is stopped once (it is let run again) and PC, LR, SP and the
+            registers read. Names a symbol only when words read through embarch-core show the board runs the ELF
+            of `build` (default: the atlas's pinned build); otherwise addresses stay raw and the answer says why.
+            The ELF check is one halted read."""
+            return corestate.core_state(atlas_dir, build, role, halt, samples)
 
         @server.tool(annotations=READ_ONLY)
         def shell(command: str, role: str | None = None, timeout_ms: int | None = None) -> str:

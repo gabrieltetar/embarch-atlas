@@ -22,6 +22,10 @@ if (here / "down").exists():
     print(json.dumps({{"success": False, "error": "embarch-core unreachable"}})); sys.exit(1)
 if verb == "status":
     print(json.dumps({{"success": True, "status": "ok", "probes": []}})); sys.exit(0)
+if verb == "core-state":
+    with open(here / "calls.jsonl", "a") as f:
+        f.write(json.dumps(args[3:]) + "\\n")
+    print(json.dumps({{"success": True, "state": json.loads((here / "state.json").read_text())}})); sys.exit(0)
 mem = {{int(k, 16): v for k, v in json.loads((here / "memory.json").read_text()).items()}}
 ranges = [a.split(":") for i, a in enumerate(args) if i and args[i - 1] == "--range"]
 with open(here / "calls.jsonl", "a") as f:

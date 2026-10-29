@@ -506,6 +506,20 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   its stack by K_THREAD_DEFINE's `_k_thread_obj_X` / `_k_thread_stack_X`, else by a name word
   shared by the stack and the thread or the symbol holding the thread object, never by size alone
   (a free stack of the right size is as often the returned main thread's). `!` marks 90 %.
+- **Core state.** `core_state` (CLI `live core-state`) asks `embarch-api core-state` (Core decision 97) where
+  the core is and answers in symbols. `DHCSR` and `SCB_ICSR` are decoded from their raw words by field
+  name (`VECTACTIVE 3 (HardFault)`, `S_LOCKUP`, `PENDSTSET`; bits no table names are shown as hex, so a v8-M
+  bit is not silently dropped). The default never halts for the read: the `DWT_PCSR` samples become a
+  histogram of functions with file:line; `halt` stops the core once (Core lets it run again) and adds
+  PC, LR (resolved as the call, `LR-2`, and not at all when it is an `EXC_RETURN`), SP and `ICSR`. Symbols
+  are named only after the same flash check as `live_stacks` (`image_check`: 16 words at three places of
+  the image through Core, one halted `mem-read`, taken after the state so the sample is not disturbed); on
+  a mismatch, a missing ELF or a probe on another chip the answer says "Refused to name symbols: ..." with
+  the reason and leaves addresses raw, and the bit names stay. Resolution uses `nm` (`footprint.image`,
+  cached) and, when the toolchain has it beside `nm`, `addr2line` for the exact line; without it the
+  function comes from the symbol table with the line its definition starts on, marked as such. No ELF-reading
+  dependency was added: the suite already calls the build's own binutils. The check costs a halt the
+  non-halting read avoids, so it is skipped when no address needs naming (a halted core, no samples).
 - **Wrong chip.** Core's answer names the chip it read (`read['chip']`). Before decoding,
   `reg_read` compares it with the atlas's MCU (the `device` of the SVD document) and refuses on a
   mismatch, naming both chips and the role; case, punctuation and a package or suffix variant are
@@ -513,7 +527,7 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   build", and `live_stacks` then says the console of the role and its probe are different boards.
   An atlas with no SVD device compares nothing.
 - Off unless Core answers: the MCP server asks `embarch-api status` once at start and lists
-  `reg_read`, `reg_read_clear`, `shell`, `shell_run` and `live_stacks` only then.
+  `reg_read`, `reg_read_clear`, `shell`, `shell_run`, `live_stacks` and `core_state` only then.
 
 ## `atlas.toml`
 
@@ -582,6 +596,7 @@ An atlas id is `<target>@<commit12>`.
 | `update <target> [commit]` | `update` | bump: stop while a translation is behind its source (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
 | `q <lookup>` | `query` | the thirteen lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
+| `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
 | `mcp` | `mcp_server` | the thirteen lookups as an MCP server over stdio, and `reg_read` when Core answers |
