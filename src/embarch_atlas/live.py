@@ -87,7 +87,8 @@ def settings(atlas_dir: Path) -> dict[str, Any]:
     live = cfg.get("live") or {}
     api_config = live.get("api_config") or str(fw_dir(atlas_dir, cfg) / "embarch" / "embarch.toml")
     ro = live.get("read_only")
-    return {"api": live.get("api") or "embarch-api", "api_config": api_config, "role": live.get("role") or "dut",
+    cons = live.get("consoles")
+    return {"api": live.get("api") or "embarch-api", "consoles": dict(cons) if isinstance(cons, dict) else {}, "api_config": api_config, "role": live.get("role") or "dut",
             "read_only": list(ro) if isinstance(ro, list) else list(DEFAULT_READ_ONLY)}
 
 
@@ -533,6 +534,40 @@ def consoles(s: dict[str, Any], role: str) -> list[str]:
                   and (x.get("route") or {}).get("kind") == "direct")
 
 
+def _shell_node(atlas_dir: Path, build: str | None, s: dict[str, Any], role: str) -> tuple[str | None, dict, str]:
+    """The devicetree node the image on the board uses for its shell, (node path, that build's dt.json, why):
+    only once the board's flash is shown to hold that build (the check `live_stacks` uses). The node is None
+    when it is not known, and `why` says what was missing."""
+    from . import buildq
+    from .query import Atlas
+    try:
+        src = buildq.source(Atlas(Path(atlas_dir)), build)
+        src.load_dt()
+        dt = src.dt
+        if not dt:
+            return None, {}, src.dt_why or "the build has no dt.json"
+        node = (dt.get("chosen") or {}).get("zephyr,shell-uart")
+        if not node:
+            return None, dt, f"{src.label} chooses no zephyr,shell-uart"
+        same, why = image_check(s, role, src.elf, atlas_dir)
+        if not same:
+            return None, dt, f"{why}, so the board runs another build than {src.label}"
+        return node, dt, f"{src.label}: {why}"
+    except (LookupError, FileNotFoundError, OSError, ValueError, RuntimeError, LiveError,
+            subprocess.CalledProcessError) as e:
+        return None, {}, str(e)
+
+
+def _console_signal(consoles_map: dict[str, str], node: str, dt: dict) -> str | None:
+    """The signal `[live] consoles` maps the node to: by path, node name, or one of its labels."""
+    nodes = dt.get("nodes") if isinstance(dt.get("nodes"), dict) else {}
+    keys = {node, node.rsplit("/", 1)[-1], node.rsplit("/", 1)[-1].split("@")[0], *((nodes.get(node) or {}).get("labels") or [])}
+    for k, sig in consoles_map.items():
+        if k in keys:
+            return sig
+    return None
+
+
 def prompt_of(atlas_dir: Path) -> str:
     """The shell prompt the pinned build was configured with, else Zephyr's default."""
     from .query import current_atlas
@@ -570,7 +605,7 @@ _NOT_WRITTEN = re.compile(r"nothing was written|signal-mismatch|no signal is dec
 class Console:
     """One role's shell, through Core: each `run` is one exchange (the port opened and closed)."""
 
-    def __init__(self, atlas_dir: Path, role: str | None = None):
+    def __init__(self, atlas_dir: Path, role: str | None = None, build: str | None = None):
         from .project import load_config
         self.s = settings(atlas_dir)
         self.role = role or self.s["role"]
@@ -578,10 +613,23 @@ class Console:
             pinned = ((load_config(atlas_dir).get("live") or {}).get("console"))
         except FileNotFoundError:
             pinned = None
+        self.why = ""                   # what chose the console, for the `src:` line
+        self.skipped: list[str] = []    # consoles that sent no byte back, passed over
         self.names = [pinned] if pinned else consoles(self.s, self.role)
         if not self.names:
             raise LiveError(f"no console signal is declared for the role '{self.role}' (declare_signal, "
                             "direction bidirectional, direct route), or set [live] console")
+        if not pinned and self.s["consoles"]:
+            node, dt, why = _shell_node(atlas_dir, build, self.s, self.role)
+            if node:
+                sig = _console_signal(self.s["consoles"], node, dt)
+                if sig is None:
+                    raise LiveError(f"the image's shell is on `{node}`; no signal is declared for it "
+                                    "(add it to [live] consoles in atlas.toml)")
+                self.names = [sig]
+                self.why = f"the image's shell is on {node} ({why})"
+            else:
+                self.why = f"the image's shell is not known ({why})"
         self.prompt = prompt_of(atlas_dir)
         self.used: dict[str, Any] = {}
 
@@ -592,7 +640,8 @@ class Console:
         is provably before anything was written; any other failure raises at once with
         `may_have_written` set, because the line may be on the wire and a resend would run it twice."""
         last = None
-        for name in names or self.names:
+        todo = names or self.names
+        for i, name in enumerate(todo):
             try:
                 ex = call_api(self.s, ["signal-exchange", "--name", name, "--write", command, "--until",
                                        self.prompt, "--timeout-ms", str(timeout_ms),
@@ -604,6 +653,9 @@ class Console:
                 e.may_have_written = True
                 raise
             self.used = {"signal": ex.get("signal"), "port": ex.get("port"), "prompt_seen": ex.get("until_seen")}
+            if not ex.get("text") and not ex.get("port_lost") and i + 1 < len(todo):
+                self.skipped.append(name)   # not even the echo came back: nothing ran there, try the next
+                continue
             return ex
         raise last or LiveError("no console answered")
 
@@ -612,7 +664,10 @@ class Console:
 
     def src(self) -> str:
         u = self.used
-        return f"live {self.role} shell via embarch-core (signal {u.get('signal')}, {u.get('port')})"
+        extra = "".join(f"; {x}" for x in ([self.why] if self.why else [])
+                        + ([f"no byte came back from {', '.join(self.skipped)}, so the next console was tried"]
+                           if self.skipped else []))
+        return f"live {self.role} shell via embarch-core (signal {u.get('signal')}, {u.get('port')}){extra}"
 
 
 def retval_known(atlas_dir: Path) -> bool | None:
@@ -1151,7 +1206,7 @@ def live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = No
     from . import buildq, footprint as F
     from .query import Atlas
     try:
-        con = Console(atlas_dir, role)
+        con = Console(atlas_dir, role, build)
         out = con.run("kernel thread stacks", 5000)
     except LiveError as e:
         return f"src: none\n\nThe command did not run: {e}\n"

@@ -863,3 +863,100 @@ def test_every_peripheral_of_a_real_svd_maps_or_is_listed_unknown(tmp_path):
     assert {p for p, g in got.items() if g is None} == UNKNOWN_ON_REAL
     assert {p for p, g in got.items() if g == "none"} == {"RCC", "EXTI", "IWDG"}
     assert got["RTC"][1]["name"] == "RTCAPBEN"
+
+
+# --------------------------------------------------------------------------- the console follows the image
+
+def _console_rig(tmp_path, monkeypatch, replies, consoles_toml=""):
+    """A Console over a fake `signal-exchange`: `replies[name]` is Core's exchange answer for that signal;
+    the signals list is `replies`' keys. Returns (atlas dir, the list of signals opened)."""
+    ad = tmp_path / "fw" / "embarch" / "atlas"
+    ad.mkdir(parents=True)
+    (ad / "atlas.toml").write_text(f'[project]\nfw = "{tmp_path / "fw"}"\n\n[live]\napi = "x"\n{consoles_toml}')
+    opened = []
+
+    def fake(s, args, timeout):
+        if args[0] == "list-signals":
+            return {"signals": [{"name": n, "origin_role": "dut", "direction": "bidirectional",
+                                 "route": {"kind": "direct"}} for n in replies]}
+        assert args[0] == "signal-exchange"
+        name = args[args.index("--name") + 1]
+        opened.append(name)
+        return {"exchange": {"signal": name, "port": "P-" + name, **replies[name]}}
+    monkeypatch.setattr(live, "call_api", fake)
+    return ad, opened
+
+
+def test_a_silent_console_is_passed_over_for_the_one_that_answers(tmp_path, monkeypatch):
+    ad, opened = _console_rig(tmp_path, monkeypatch, {
+        "a-bridge": {"text": "", "written": True},
+        "b-cdc": {"text": "kernel uptime\r\nUptime: 5 ms\r\nuart:~$ ", "until_seen": True}})
+    out = live.shell(ad, "kernel uptime")
+    assert opened == ["a-bridge", "b-cdc"]
+    assert "signal b-cdc" in out and "no byte came back from a-bridge" in out and "Uptime: 5 ms" in out
+
+
+def test_a_console_that_echoed_and_errored_is_the_answer(tmp_path, monkeypatch):
+    ad, opened = _console_rig(tmp_path, monkeypatch, {
+        "a-bridge": {"text": "foo\r\nfoo: command not found\r\nuart:~$ ", "until_seen": True},
+        "b-cdc": {"text": "never", "until_seen": True}})
+    out = live.shell(ad, "foo")
+    assert opened == ["a-bridge"]
+    assert "command not found" in out and "signal a-bridge" in out
+
+
+def test_a_lost_port_is_never_retried_on_the_next_console(tmp_path, monkeypatch):
+    ad, opened = _console_rig(tmp_path, monkeypatch, {
+        "a-bridge": {"text": "", "port_lost": True}, "b-cdc": {"text": "x", "until_seen": True}})
+    out, code = live.shell_status(ad, "reset")
+    assert opened == ["a-bridge"] and code == 3
+
+
+def test_every_console_silent_answers_nothing_came_back(tmp_path, monkeypatch):
+    ad, opened = _console_rig(tmp_path, monkeypatch, {"a": {"text": ""}, "b": {"text": ""}})
+    out, code = live.shell_status(ad, "kernel uptime")
+    assert opened == ["a", "b"] and code == 2 and "not even the echo" in out
+
+
+def _known_build(monkeypatch, node, labels=()):
+    import types
+    from embarch_atlas import buildq
+    dt = {"chosen": {"zephyr,shell-uart": node} if node else {},
+          "nodes": {node: {"labels": list(labels)}} if node else {}}
+    src = types.SimpleNamespace(label="b", elf=Path("z.elf"), dt=dt, dt_why=None, load_dt=lambda: None)
+    monkeypatch.setattr(buildq, "source", lambda *a: src)
+    monkeypatch.setattr(live, "image_check", lambda *a: (True, "flash matches the ELF at 3 places"))
+
+
+def test_a_known_build_picks_the_console_its_shell_is_on_and_never_opens_the_bridge(tmp_path, monkeypatch):
+    ad, opened = _console_rig(tmp_path, monkeypatch, {
+        "a-bridge": {"text": "", "written": True},
+        "b-cdc": {"text": "kernel uptime\r\nUptime: 5 ms\r\nuart:~$ ", "until_seen": True}},
+        '[live.consoles]\n"/soc/usb/cdc_acm_uart0" = "b-cdc"\n"/soc/serial@1000" = "a-bridge"\n')
+    _known_build(monkeypatch, "/soc/usb/cdc_acm_uart0")
+    out = live.shell(ad, "kernel uptime")
+    assert opened == ["b-cdc"]
+    assert "the image's shell is on /soc/usb/cdc_acm_uart0" in out and "flash matches" in out
+
+
+def test_consoles_map_by_label_and_an_unconfirmed_build_tries_them_in_turn(tmp_path, monkeypatch):
+    ad, opened = _console_rig(tmp_path, monkeypatch, {
+        "a-bridge": {"text": "", "written": True},
+        "b-cdc": {"text": "kernel uptime\r\nUptime: 5 ms\r\nuart:~$ ", "until_seen": True}},
+        '[live.consoles]\ncdc = "b-cdc"\n')
+    _known_build(monkeypatch, "/soc/usb/cdc_acm_uart0", ["cdc"])
+    live.shell(ad, "kernel uptime")
+    assert opened == ["b-cdc"]
+    monkeypatch.setattr(live, "image_check", lambda *a: (False, "flash differs from the ELF at 2 of 3 places"))
+    opened.clear()
+    out = live.shell(ad, "kernel uptime")
+    assert opened == ["a-bridge", "b-cdc"] and "the image's shell is not known" in out
+
+
+def test_a_shell_uart_with_no_declared_signal_says_so_and_tries_nothing(tmp_path, monkeypatch):
+    ad, opened = _console_rig(tmp_path, monkeypatch, {"a-bridge": {"text": "x", "until_seen": True}},
+                              '[live.consoles]\n"/soc/serial@1000" = "a-bridge"\n')
+    _known_build(monkeypatch, "/soc/usb/cdc_acm_uart0")
+    out, code = live.shell_status(ad, "kernel uptime")
+    assert opened == [] and code == 1
+    assert "the image's shell is on `/soc/usb/cdc_acm_uart0`; no signal is declared for it" in out

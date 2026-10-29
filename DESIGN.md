@@ -485,11 +485,21 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   zero-byte write), `signal-mismatch` (the port is not enumerable, a port wait ran out), an unknown or
   non-writable signal, or embarch-api absent. Any other failure (embarch-api's own timeout, a write
   that took some bytes, a flush failure, an unparsable reply) raises at once, `may_have_written` set,
-  and a `port_lost` or silent reply is an answer, never a retry: the line may be on the wire, and a
+  and a `port_lost` is an answer, never a retry (a reply with no byte at all moves on only as the *Which console* rule says): the line may be on the wire, and a
   resend would run a state-changing command twice. The classification reads Core's error text, since
   embarch-api forwards no status code, so an error text nobody listed counts as "may have written"; an
   older Core without the `written`/`port_lost`/`echo_seen` fields gets the same treatment (a silent
   reply says "this Core did not say whether the line was written, so it may have run").
+  **Which console.** `[live] consoles` maps a devicetree UART node (path, node name, or a label of it)
+  to a signal. When it is set and no `[live] console` pins one, `Console` reads the build's
+  `chosen` `zephyr,shell-uart` (`dt.json`; the pinned build, or `build=` on `live_stacks`) and, only
+  if `image_check` shows the board's flash holds that build, uses the mapped signal alone and says so
+  in the `src:` line. A chosen node that maps to no signal answers "the image's shell is on `<node>`;
+  no signal is declared for it" and tries nothing. When the build is not confirmed (or `consoles` is
+  unset), the declared consoles are tried in name order, and `exchange` moves past one only when
+  not a byte came back (no echo, no `port_lost`): nothing written was read, so nothing ran. A reply of
+  any kind, including an error line, or a lost port, stops there. Presence of a signal never says which
+  console the image uses: a USB-UART bridge is powered by the host, not the DUT.
   **How the atlas knows `retval` is absent.** From the pinned build's `kconfig.json`
   (`CONFIG_SHELL_CMDS_RETURN_VALUE`: set to `n`, or missing from a kconfig.json that lists every
   symbol, means no `retval`); then `retval` is not sent and the answer says the status is unknown and
@@ -574,6 +584,7 @@ extra_args = []                      # extra `west build` arguments
 [live]                               # optional: the live module
 api = "embarch-api"                  # the embarch-api binary
 console = "<signal>"                 # optional: the console signal (default: the role's direct writable one)
+consoles = { "<DT uart node, label or path>" = "<signal>" }  # optional: the signal for the node the image's chosen zephyr,shell-uart is
 api_config = "<fw>/embarch/embarch.toml"  # its config (this is the default)
 role = "dut"                         # the enrolled role reg_read reads from
 read_only = ["device list", "kernel uptime"]  # globs the MCP `shell` tool accepts (replaces the default list)
