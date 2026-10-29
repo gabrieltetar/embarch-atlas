@@ -116,6 +116,44 @@ def core_read(s: dict[str, Any], ranges: list[tuple[int, int]], role: str) -> di
     return call_api(s, args, READ_TIMEOUT_S)["read"]
 
 
+class ChipMismatch(LiveError):
+    """Core read a chip that is not the atlas's MCU."""
+
+
+def _chip_key(name: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def atlas_chip(atlas_dir: Path) -> str | None:
+    """The atlas's MCU part: the `device` of its SVD document. None when the atlas does not say."""
+    for d in _docs_of_kind(atlas_dir, "svd"):
+        try:
+            info = json.loads((d / "peripherals.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if info.get("device") or info.get("part"):
+            return info.get("device") or info.get("part")
+    return None
+
+
+def same_chip(atlas: str | None, core: str | None) -> bool:
+    """Whether Core's chip is the atlas's MCU, tolerating package and suffix variants
+    (`ABC200XY` against `abc200`): equal once case and punctuation are dropped, or one a
+    prefix of the other. An unnamed side cannot disagree."""
+    a, c = _chip_key(atlas), _chip_key(core)
+    return not a or not c or a.startswith(c) or c.startswith(a)
+
+
+def chip_refusal(atlas_dir: Path, read: dict[str, Any], role: str | None) -> str | None:
+    """Why the words in `read` must not be decoded against this atlas, else None."""
+    mine = atlas_chip(atlas_dir)
+    if same_chip(mine, read.get("chip")):
+        return None
+    return (f"Refused: Core read the chip {read.get('chip')!r} for the role '{role or read.get('role')}', but this "
+            f"atlas is for {mine!r}. The words are not decoded: they would be another chip's registers read as this "
+            "one's. The role's probe is on another board than this atlas's.")
+
+
 # --------------------------------------------------------------------------- records
 
 def _docs_of_kind(atlas_dir: Path, kind: str) -> list[Path]:
@@ -383,6 +421,9 @@ def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str 
         read = core_read(s, ranges, who)
     except LiveError as e:
         return f"src: none\n\nThe read failed: {e}\n"
+    bad = chip_refusal(atlas_dir, read, who)
+    if bad:
+        return f"src: none\n\n{bad}\n"
     words = word_map(read)
     halt = (f"core halted {read.get('halted_us')} us and let run again" if read.get("halted")
             else "core was already halted, left halted")
@@ -766,12 +807,16 @@ def probe_ranges(segs: list[tuple[int, int, int]], words: int = PROBE_WORDS) -> 
     return [(a, n) for a in sorted(starts)]
 
 
-def image_check(s: dict[str, Any], role: str, elf: Path) -> tuple[bool, str]:
-    """Whether the board's flash holds this ELF's image, at the probe ranges (one halted read)."""
+def image_check(s: dict[str, Any], role: str, elf: Path, atlas_dir: Path | None = None) -> tuple[bool, str]:
+    """Whether the board's flash holds this ELF's image, at the probe ranges (one halted read).
+    ChipMismatch when the probe reads a chip that is not the atlas's MCU: that is not "another build"."""
     data = elf.read_bytes()
     segs = elf_segments(elf)
     ranges = probe_ranges(segs)
     read = core_read(s, ranges, role)
+    if atlas_dir is not None and chip_refusal(atlas_dir, read, role):
+        raise ChipMismatch(f"the probe of role '{role}' reads {read.get('chip')!r}, the atlas's MCU is "
+                           f"{atlas_chip(atlas_dir)!r}")
     board = word_map(read)
     differ = 0
     for addr, n in ranges:
@@ -845,7 +890,7 @@ def live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = No
     try:
         src = buildq.source(Atlas(Path(atlas_dir)), build)
         img = buildq._image(src)
-        same, why = image_check(con.s, con.role, src.elf)
+        same, why = image_check(con.s, con.role, src.elf, atlas_dir)
         if same:
             src.load_kconfig()
             rows = F.stack_rows(img, F.dotconfig_of(src.dotconfig), (src.kconfig or {}).get("symbols"))
@@ -853,6 +898,9 @@ def live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = No
         else:
             join_note = (f"; not joined to {src.label}: {why}, so the board runs another build. Pass build=<dir> "
                          "of the image it runs")
+    except ChipMismatch as e:
+        join_note = (f"; not joined to an ELF: the console of role {con.role} and its probe are different boards "
+                     f"({e})")
     except (LookupError, FileNotFoundError, OSError, ValueError, RuntimeError, LiveError,
             subprocess.CalledProcessError) as e:
         join_note = f"; not joined to an ELF: {e}"

@@ -30,7 +30,8 @@ out = []
 for a, n in ranges:
     base = int(a, 16)
     out.append({{"address": base, "words": [mem.get(base + 4 * i, 0) for i in range(int(n))]}})
-print(json.dumps({{"success": True, "read": {{"role": "dut", "chip": "DEMO1", "probe_serial": "P1",
+chip = (here / "chip").read_text() if (here / "chip").exists() else "DEMO1"
+print(json.dumps({{"success": True, "read": {{"role": "dut", "chip": chip, "probe_serial": "P1",
                   "ranges": out, "halted": True, "halted_us": 850}}}}))
 """
 
@@ -79,6 +80,58 @@ def make(tmp: Path, memory: dict[int, int]) -> Path:
     (ad / "memory.json").write_text(json.dumps({f"0x{k:08X}": v for k, v in memory.items()}))
     (ad / "atlas.toml").write_text(f'[project]\nfw = "{tmp / "fw"}"\n\n[live]\napi = "{api}"\napi_config = "x.toml"\n')
     return ad
+
+
+def set_chips(ad: Path, atlas: str, core: str) -> None:
+    write_json(ad / "docs" / "demo-svd" / "peripherals.json", {"device": atlas, "peripherals": {}})
+    (ad / "chip").write_text(core)
+
+
+def test_a_read_from_another_chip_is_refused_and_names_both(tmp_path):
+    ad = make(tmp_path, {BASE + 0x0C: 0x0000_01A1})
+    set_chips(ad, "ABC200", "XYZ700")
+    out = live.reg_read(ad, "UART1.BRR", role="dev-bench")
+    assert "Refused" in out and "XYZ700" in out and "ABC200" in out and "dev-bench" in out
+    assert "0x000001A1" not in out and "BRR[" not in out
+    set_chips(ad, "ABC200", "ABC200")
+    ok = live.reg_read(ad, "UART1.BRR")
+    assert not ok.startswith("src: none") and "0x000001A1" in ok
+
+
+def test_chip_names_compare_across_package_and_suffix_variants():
+    assert live.same_chip("abc200", "ABC200XY")
+    assert live.same_chip("ABC200XY", "abc200")
+    assert live.same_chip("XYZ700", "XYZ700-QFAA")
+    assert live.same_chip(None, "anything")
+    assert not live.same_chip("ABC200", "XYZ700")
+    assert not live.same_chip("ABC200", "ABC300")
+
+
+def test_live_stacks_says_different_boards_not_another_build_on_a_chip_mismatch(tmp_path):
+    ad = make(tmp_path, {})
+    set_chips(ad, "ABC200", "XYZ700")
+    elf = tmp_path / "z.elf"
+    tiny_elf(elf, 0x0800_0000, bytes(64))
+    import pytest
+    with pytest.raises(live.ChipMismatch):
+        live.image_check(live.settings(ad), "dut", elf, ad)
+    from embarch_atlas import buildq
+
+    class Con:
+        def __init__(self, *a): self.s, self.role = live.settings(ad), "dut"
+        def run(self, *a): return STACKS_OUT
+        def src(self): return "console"
+    import types
+    src = types.SimpleNamespace(label="b", elf=elf)
+    mp = pytest.MonkeyPatch()
+    mp.setattr(live, "Console", Con)
+    mp.setattr(buildq, "source", lambda *a: src)
+    mp.setattr(buildq, "_image", lambda s: {"symbols": []})
+    try:
+        out = live.live_stacks(ad)
+    finally:
+        mp.undo()
+    assert "different boards" in out and "another build" not in out
 
 
 def calls(ad: Path) -> list:

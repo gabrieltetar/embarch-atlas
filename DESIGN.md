@@ -409,6 +409,12 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   its stack by K_THREAD_DEFINE's `_k_thread_obj_X` / `_k_thread_stack_X`, else by a name word
   shared by the stack and the thread or the symbol holding the thread object, never by size alone
   (a free stack of the right size is as often the returned main thread's). `!` marks 90 %.
+- **Wrong chip.** Core's answer names the chip it read (`read['chip']`). Before decoding,
+  `reg_read` compares it with the atlas's MCU (the `device` of the SVD document) and refuses on a
+  mismatch, naming both chips and the role; case, punctuation and a package or suffix variant are
+  tolerated (one name a prefix of the other). The image check raises instead of reporting "another
+  build", and `live_stacks` then says the console of the role and its probe are different boards.
+  An atlas with no SVD device compares nothing.
 - Off unless Core answers: the MCP server asks `embarch-api status` once at start and lists
   `reg_read`, `shell` and `live_stacks` only then.
 
