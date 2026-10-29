@@ -722,7 +722,7 @@ def test_non_object_line_survives_a_save_and_is_reported(doc):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     pairs = R.load_records(docdir)
     ch = next(r for _, r in pairs if r.get("id") == "syn1234.reg.CTL")
-    ch["prov"] = "engineer-confirmed"                      # force a change so check must rewrite this file
+    ch["prov"] = "llm-verified"                          # claimed without a pass: check must rewrite it
     R.save_records(docdir, pairs)
     after = path.read_text(encoding="utf-8").splitlines()
     assert after[1] == "[1, 2, 3]" and after[-1] == '"stray"' and len(after) == len(lines)
