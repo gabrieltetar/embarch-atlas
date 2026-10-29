@@ -229,9 +229,19 @@ value anchors only when that record is on a page the line cites. Rendered struct
   (https://code.claude.com/docs/en/memory.md). The MAP is byte-stable, so it stays
   in the cached prefix.
 - When an atlas becomes current (its commit equals HEAD), `embarch/atlas/MAP.md` is
-  replaced by that atlas's MAP. When HEAD moves past it (or a source changes), `status`,
-  which every atlas skill runs as it loads, puts a `> **Stale:**` line first in that MAP with
-  the reasons and `/atlas-update`; the line goes once the MAP's atlas is fresh again.
+  replaced by that atlas's MAP. When HEAD moves past it (or a source changes), `status`
+  puts a `> **Stale:**` line first in that MAP with the reasons and `/atlas-update`; the line
+  goes once the MAP's atlas is fresh again. `status` runs when the MCP server starts and when an
+  atlas skill loads, but a session may do neither, so staleness is also on **every lookup's `src:`
+  line**: `stale=<reasons> (HEAD <sha12>)` whenever HEAD is not the atlas's commit or a source
+  changed (`stale.py`). It is computed per call and cached on the mtime of `.git/HEAD`, of the ref
+  it names and of `packed-refs`, plus the stat of the stamp, manifest and board PDFs: one
+  `git rev-parse` when HEAD moves, a few `stat`s otherwise (measured well under 1 ms). A
+  `current.json` whose commit is not HEAD is no match; the lookups then read the newest atlas and say
+  it is stale.
+- The MAP's reference-manual line reads the worklist of *this* atlas. `join` writes that worklist
+  (`update.rm_todo`) just before it renders the MAP, so `update` and a hand-run `build` + `join`
+  both list the chapters in use; a worklist left for another atlas is rewritten, not skipped.
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
   (https://code.claude.com/docs/en/mcp.md), so its 7 tools skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.

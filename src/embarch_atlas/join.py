@@ -1067,6 +1067,11 @@ def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None =
     write_text(atlas / "pin_slice.txt", render_slice(stamp, rows))
     snapshot_inputs(atlas, root, boards, J.docs, sysj, ad)
     report = mismatch.run(J, stamp, pins)
+    try:                                          # the MAP's RM line reads the worklist of THIS atlas
+        from embarch_atlas import update
+        update.rm_todo(ad, atlas)
+    except Exception as e:                        # noqa: BLE001  (no RM, or a half-built one: the line says "not selected")
+        log(f"join: reference-manual worklist not written: {e}")
     mp = mapgen.run(ad, atlas, J, stamp, pins, report)
     g = graph.run(ad, atlas, J, stamp, pins, report, log=log)
     log(f"{stamp['id']}: {counts['package_pins']} package pins, {counts['dt_pins']} MCU pins in DT, "

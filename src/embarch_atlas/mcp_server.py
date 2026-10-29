@@ -176,7 +176,13 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
 
 
 def _cmd_mcp(args) -> int:
-    server = build_server(common.atlas_dir(args.atlas_dir), args.atlas)
+    from . import project
+    adir = common.atlas_dir(args.atlas_dir)
+    try:
+        project.status(adir)    # current.json and the MAP's stale line are right for the session this starts
+    except Exception:           # noqa: BLE001  (a status failure must not keep the lookups from serving)
+        pass
+    server = build_server(adir, args.atlas)
     server.run("stdio")
     return 0
 

@@ -17,7 +17,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import common
+import functools
+
+from . import common, stale
 from .pdftext import tier2_files
 
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
@@ -54,7 +56,9 @@ def current_atlas(atlas_dir: Path, atlas: str | None = None) -> Path | None:
     cur = atlas_dir / "current.json"
     if cur.is_file():
         try:
-            for m in common.read_json(cur).get("matches") or []:
+            c = common.read_json(cur)
+            head = stale.head(atlas_dir)
+            for m in ([] if head and c.get("commit") != head else c.get("matches") or []):
                 p = root / m.get("atlas", "")
                 if p.is_dir():
                     return p
@@ -62,6 +66,21 @@ def current_atlas(atlas_dir: Path, atlas: str | None = None) -> Path | None:
             pass
     stamps = sorted(root.glob("*/atlas.json"), key=lambda p: p.stat().st_mtime)
     return stamps[-1].parent if stamps else None
+
+
+def _stamped(fn):
+    """Say on the answer's `src:` line when the atlas it came from is behind HEAD or a source changed."""
+    @functools.wraps(fn)
+    def wrapper(a, *args, **kw):
+        out = fn(a, *args, **kw)
+        if not out.startswith("src:"):
+            return out
+        first, nl, rest = out.partition("\n")
+        if "stale=" in first:
+            return out
+        m = stale.mark(a.dir, a.atlas)
+        return f"{first} {m}{nl}{rest}" if m else out
+    return wrapper
 
 
 def _json(path: Path, default: Any = None) -> Any:
@@ -174,6 +193,7 @@ def _missing(what: str, hint: str) -> str:
 
 # --------------------------------------------------------------------------- the twelve
 
+@_stamped
 def part_card(a: Atlas, part: str, board: str | None = None) -> str:
     """The part's card.md; with `board`, the refs of that part on the boards and their nets."""
     d = a.find_doc(part)
@@ -216,6 +236,7 @@ def _pin_key(p: str):
     return (int(m.group(1)) if m else 10**6, p)
 
 
+@_stamped
 def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str:
     """Outline rows: id | title | pages | tokens | tier-2 file (when distilled)."""
     d = a.find_doc(doc)
@@ -313,6 +334,7 @@ def _toc_rows(d: Path) -> list[dict]:
     return rows
 
 
+@_stamped
 def doc_section(a: Atlas, doc: str, section: str | None = None, page: int | None = None,
                 tier: str = "distilled", offset: int = 0) -> str:
     """A tier-2 section file (distilled), or one page's text layer (tier=text)."""
@@ -449,6 +471,7 @@ def _query_part(a: Atlas, terms: list[str]) -> tuple[Path | None, set[str]]:
     return a.find_doc(next(iter(named))), used
 
 
+@_stamped
 def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = None,
               limit: int | None = None) -> str:
     """Lines of facts.txt, and of the distilled prose (`kind=prose`), ranked lexically (BM25)
@@ -608,6 +631,7 @@ def _register_pair(a: Atlas, reg: str, msb: tuple[Path, dict], lsb: tuple[Path, 
     return _cap("\n".join(out + _reg_tail(a, related, ids)) + "\n", "register")
 
 
+@_stamped
 def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
     """A register (MCU `PERIPH.REG` or external `part.REG`) with its fields, rules and conflicts.
     A name a datasheet splits into `<REG>_MSB` and `<REG>_LSB` returns both as one 16-bit view."""
@@ -702,6 +726,7 @@ def _codecheck_refs(a: Atlas, rid: str | None) -> list[str]:
     return out[:20]
 
 
+@_stamped
 def pin_trace(a: Atlas, query: str, board: str | None = None) -> str:
     """One chain per line: MCU pin -> net -> far ends -> DT use -> driver, with provenance per hop."""
     if not a.atlas:
@@ -751,6 +776,7 @@ def _dt(u: dict) -> str:
     return " ".join(b for b in bits if b)
 
 
+@_stamped
 def net_trace(a: Atlas, query: str, board: str | None = None, offset: int = 0) -> str:
     """Any net, part pin (number or name) or part on any board: its members across connector mates,
     then what feeds it, from datasheet pin records with `flow` only, and the datasheets still needed."""
@@ -773,6 +799,7 @@ def _build_src(a: Atlas, build: str | None, query: str, fn):
     return src, fn(src, query)
 
 
+@_stamped
 def config(a: Atlas, symbol: str, build: str | None = None) -> str:
     """A Kconfig symbol (CONFIG_X or X; `*` lists matches): its value, the fragment that set it, its
     depends on and whether it is met, who selects or implies it, the default that applies, where it
@@ -784,6 +811,7 @@ def config(a: Atlas, symbol: str, build: str | None = None) -> str:
     return _cap(_header(f"{src.label} kconfig", extra=f"query={symbol!r}") + body + "\n", "config")
 
 
+@_stamped
 def dt_node(a: Atlas, node: str, build: str | None = None) -> str:
     """A devicetree node by path, label, alias, chosen name or compatible: status, binding, the
     driver compiled for it, whether its device is in the ELF, every property with the file:line
@@ -795,6 +823,7 @@ def dt_node(a: Atlas, node: str, build: str | None = None) -> str:
     return _cap(_header(f"{src.label} devicetree", extra=f"query={node!r}") + body + "\n", "dt_node")
 
 
+@_stamped
 def footprint(a: Atlas, build: str | None = None, vs: str | None = None, by: str = "dir") -> str:
     """Flash image and RAM against the flash, SRAM and code partition the devicetree gives, then the
     largest contributors `by` dir, file or symbol; with `vs` (a build dir, or "pinned"), the change
@@ -810,6 +839,7 @@ def footprint(a: Atlas, build: str | None = None, vs: str | None = None, by: str
                 "footprint")
 
 
+@_stamped
 def stacks(a: Atlas, build: str | None = None) -> str:
     """Every thread stack in the image: size, symbol, the line that defined it, the *_STACK_SIZE option
     it most likely comes from (by inference). Static sizes only; high-water marks are live."""
@@ -822,6 +852,7 @@ def stacks(a: Atlas, build: str | None = None) -> str:
     return _cap(_header(f"{src.label} zephyr.elf") + body + "\n", "stacks")
 
 
+@_stamped
 def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
     """Checks run and passed first, then candidates (claim, evidence, what would settle it)."""
     if not a.atlas:
