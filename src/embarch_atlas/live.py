@@ -413,10 +413,11 @@ def decode(reg: dict, v: int, fields: list[dict], all_fields: bool) -> list[str]
 
 # STM32: a peripheral whose RCC enable bit is clear answers its debug read without error but not with
 # its registers. The enable field is `<PERIPH>EN` in some RCC register; these peripherals share one.
-CLOCK_EXCEPTIONS = {"VREFBUF": "SYSCFGEN", "COMP": "SYSCFGEN", "COMP1": "SYSCFGEN", "COMP2": "SYSCFGEN",
-                    "COMP3": "SYSCFGEN", "OPAMP": "SYSCFGEN", "OPAMP1": "SYSCFGEN", "OPAMP2": "SYSCFGEN"}
-# Blocks with no enable bit of their own (always clocked, or clocked with another block).
-NO_CLOCK_GATE = {"RCC", "EXTI", "IWDG", "NVIC", "SCB", "STK", "SCS", "MPU", "FPU", "NVIC_STIR", "RTC", "TAMP"}
+CLOCK_EXCEPTIONS = {"VREFBUF": "SYSCFGEN",              # shares the SYSCFG clock (named by atlas/013)
+                    "RTC": "RTCAPBEN",                  # RCC.RTCEN gates the RTC clock source, not register access
+                    "DAC": "DAC1EN", "FDCAN1": "FDCANEN", "FDCAN2": "FDCANEN", "HDMI_CEC": "CECEN"}
+# Blocks with no enable bit of their own. Anything not named here and not found by name is "unknown".
+NO_CLOCK_GATE = {"RCC", "EXTI", "IWDG", "NVIC", "SCB", "STK", "SCS", "MPU", "FPU", "NVIC_STIR"}
 
 
 def clock_gate(svd: "Svd", periph: str) -> tuple[str, dict] | str | None:

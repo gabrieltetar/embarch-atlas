@@ -841,11 +841,25 @@ def test_every_peripheral_maps_to_an_enable_field_or_is_listed_unknown(tmp_path)
                                     "bits": [i, i], "doc": "demo-svd"} for i, n in enumerate(ENABLE_FIELDS)])
     svd = live.Svd(ad / "docs" / "demo-svd")
     got = {p: live.clock_gate(svd, p) for p in SVD_PERIPHS}
-    # DAC is spelled DAC1EN in the field list on purpose: it must come out unknown, not guessed.
-    assert got["DAC"] is None
+    assert got["RTC"] is None          # only RCC.RTCEN-like names here; never guessed as the gate
     on_purpose = {p for p, g in got.items() if g == "none"}
-    assert on_purpose == {"RCC", "EXTI", "IWDG", "NVIC", "SCB", "STK", "RTC", "TAMP"}
+    assert on_purpose == {"RCC", "EXTI", "IWDG", "NVIC", "SCB", "STK"}
     unknown = {p for p, g in got.items() if g is None}
-    assert unknown == {"DAC"}
+    assert unknown == {"TAMP", "RTC", "COMP", "OPAMP"}
     for p in set(SVD_PERIPHS) - on_purpose - unknown:
         assert got[p][1]["name"] == live.CLOCK_EXCEPTIONS.get(p, p + "EN")
+
+
+REAL_SVD = os.environ.get("EMBARCH_ATLAS_REAL_SVD")
+UNKNOWN_ON_REAL = {"DMAMUX", "TAMP", "COMP"}      # one SVD: no RCC field names them (measured)
+
+
+@__import__("pytest").mark.skipif(not REAL_SVD, reason="needs a vendor SVD (EMBARCH_ATLAS_REAL_SVD=<file>)")
+def test_every_peripheral_of_a_real_svd_maps_or_is_listed_unknown(tmp_path):
+    from embarch_atlas import svd as svdmod
+    svdmod.write_svd_doc(Path(REAL_SVD), "svd", tmp_path)
+    svd = live.Svd(tmp_path / "docs" / "svd")
+    got = {p: live.clock_gate(svd, p) for p in sorted({live.periph_of(r) for r in svd.regs})}
+    assert {p for p, g in got.items() if g is None} == UNKNOWN_ON_REAL
+    assert {p for p, g in got.items() if g == "none"} == {"RCC", "EXTI", "IWDG"}
+    assert got["RTC"][1]["name"] == "RTCAPBEN"

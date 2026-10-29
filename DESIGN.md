@@ -439,12 +439,14 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   without error but not with its registers. `reg_read` adds the RCC register holding the enable
   field to the same halted read (`clock_gate`): the field is `<PERIPH>EN` in any RCC register of the
   SVD (`UCPD2` -> `RCC.APBENR1.UCPD2EN`), with `CLOCK_EXCEPTIONS` for blocks that share one
-  (`VREFBUF`, `COMP*`, `OPAMP*` -> `SYSCFGEN`). Bit 0 answers "clock off (RCC.X.YEN = 0): these
+  (`VREFBUF` -> `SYSCFGEN`; `RTC` -> `RTCAPBEN`, since `RTCEN` gates only the RTC clock source; `DAC` -> `DAC1EN`, `FDCAN1/2` -> `FDCANEN`, `HDMI_CEC` -> `CECEN`). Bit 0 answers "clock off (RCC.X.YEN = 0): these
   words are not the register's contents", prints raw words and marks nothing against reset; bit 1
-  prints "clock on"; `NO_CLOCK_GATE` (`RCC`, `EXTI`, `IWDG`, `RTC`, `TAMP`, core blocks) says so on
+  prints "clock on"; `NO_CLOCK_GATE` (`RCC`, `EXTI`, `IWDG`, core blocks) says so on
   purpose; any other peripheral says the clock state is unknown. Covered: STM32 families whose SVD
-  names the gate `<PERIPH>EN` (G0 measured by name only; the rule is assumed for the rest, and a
-  spelling it misses, e.g. `DAC` vs `DAC1EN`, answers unknown, never a guess). A part with no `RCC`
+  names the gate `<PERIPH>EN` (the tables were checked against one STM32 vendor SVD (a small-MCU series) and nothing else: 50
+  of 56 peripherals map, `EXTI`/`IWDG`/`RCC` have none, `COMP`, `DMAMUX` and `TAMP` answer unknown
+  because no RCC field names them; other families are the same rule, unchecked; a spelling the
+  tables miss answers unknown, never a guess; `EMBARCH_ATLAS_REAL_SVD=<file>` reruns that check). A part with no `RCC`
   peripheral (non-STM32) answers "clock state unknown" and reads as before. Enable bits are not
   verified on hardware (task atlas/013 debt).
 - **Read-to-clear guard.** A register is refused by name, and left out of a peripheral read,
