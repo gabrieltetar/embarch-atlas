@@ -250,15 +250,22 @@ value anchors only when that record is on a page the line cites. Rendered struct
 
 ## Query surface
 
-`query.py` holds the twelve lookups as plain functions returning markdown: `part_card`,
+`query.py` holds the twelve lookups as plain functions returning markdown: `part_card` (`board="all"`
+adds every board's refs and nets, a label one board's; no tool documents an empty string as a value: a model
+writes `"board": }` for it, and the call never reaches the server),
 `doc_toc` (`under` takes an id, a title, or a word of a title, which resolves to the one
-matching section that holds all the others, else lists the matches), `doc_section`,
+matching section that holds all the others, else lists the matches; no match lists the nearest titles),
+`doc_section` (a toc section with no `s/` file answers its title, pages and the next call, and an RM register
+section points to `register`; `part_card`'s and `doc_section`'s `src:` line carries `pdf=<path relative to the
+firmware repo>`, because a cite gives only a doc id and a page and a guessed path fails the Read),
 `find_fact` (BM25 over every `facts.txt` and the distilled prose of `card.md` and `s/*.md`
 outside rendered tables, as `kind=prose` lines; a query term naming one part narrows to it like
 `part`; with no `limit`, the best 10 hits scoring at least 0.4 of the top one, and the
 header names the query terms no fact contains), `register` (MCU `PERIPH.REG` or
 `<part>.<REG>`, twins merged, rules/quirks/conflicts and firmware references joined; a
-register tabled as `<REG>_MSB` + `<REG>_LSB` bytes answers to `<REG>` as one 16-bit view),
+register tabled as `<REG>_MSB` + `<REG>_LSB` bytes answers to `<REG>` as one 16-bit view; firmware's
+CMSIS struct member (`UCPD1.CFG1`) finds the SVD register at the same address, read from the device header
+that `mcu vote --header` recorded in the RM doc's `vote*.json`: no recorded header, no alias),
 `pin_trace` (MCU pins, from `pins.json`), `net_trace` (any net, part pin or part on any board,
 read from the netlists through the join at query time: members across connector mates, then
 what feeds the net from datasheet pin records with `flow` only, the feeding parts' enables and

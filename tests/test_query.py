@@ -243,3 +243,105 @@ def test_mcp_reg_read_refuses_allow_clear_and_names_the_write_tool(atlas_dir):
     res = asyncio.run(build_server(atlas_dir, live=True).call_tool("reg_read", {"target": "X.Y", "allow_clear": True}))
     text = json.dumps(res.model_dump() if hasattr(res, "model_dump") else res, default=str)
     assert "reg_read_clear" in text and "Refused" in text
+
+
+# ---- field-session misses (atlas/012)
+
+def test_part_card_board_all_is_every_board_and_empty_still_works(atlas_dir):
+    a = query.Atlas(atlas_dir)
+    assert "B:U3 DEMO-BB-QFN" in query.part_card(a, "DEMO-BB-QFN", board="all")
+    assert "B:U3 DEMO-BB-QFN" in query.part_card(a, "DEMO-BB-QFN", board="")
+    assert "On the boards" not in query.part_card(a, "DEMO-BB-QFN")
+    assert "(no board ref" in query.part_card(a, "DEMO-BB-QFN", board="Z")
+
+
+def test_no_mcp_tool_documents_an_empty_string_value(atlas_dir):
+    pytest.importorskip("mcp")
+    from embarch_atlas.mcp_server import build_server
+
+    for live in (False, True):
+        for t in asyncio.run(build_server(atlas_dir, live=live).list_tools()):
+            assert '""' not in (t.description or ""), t.name
+            assert '""' not in json.dumps(t.input_schema), t.name
+    card = next(t for t in asyncio.run(build_server(atlas_dir, live=False).list_tools()) if t.name == "part_card")
+    assert '"all"' in card.description
+
+
+def test_register_by_cmsis_member_name(atlas_dir):
+    a = atlas_dir
+    hdr = a.parent / "devhdr.h"
+    hdr.write_text("""
+typedef struct
+{
+  __IO uint32_t CFG1;      /*!< config 1, Address offset: 0x00 */
+  __IO uint32_t CFG2;      /*!< config 2, Address offset: 0x04 */
+  uint32_t RESERVED[2];
+  __IO uint32_t RX_PAYSZ;  /*!< Address offset: 0x10 */
+} UCPD_TypeDef;
+#define PERIPH_BASE 0x40000000UL
+#define UCPD1_BASE (PERIPH_BASE + 0x00008000UL)
+#define UCPD1 ((UCPD_TypeDef *) UCPD1_BASE)
+""")
+    write_json(a / "docs" / "demo-rm@1" / "vote.json", {"header": {"file": str(hdr)}})
+    write_jsonl(a / "docs" / "demo-mcu-svd" / "records" / "register.jsonl", [
+        {"id": "demo-mcu.reg.UCPD1.UCPD_CFGR1", "kind": "register", "doc": "demo-mcu-svd", "name": "UCPD_CFGR1",
+         "addr": "0x40008000", "width": 32, "reset": "0x0", "src": "svd", "p": None, "prov": "deterministic"},
+        {"id": "demo-mcu.reg.UCPD1.UCPD_RX_PAYSZR", "kind": "register", "doc": "demo-mcu-svd", "name": "UCPD_RX_PAYSZR",
+         "addr": "0x40008010", "width": 32, "reset": "0x0", "src": "svd", "p": None, "prov": "deterministic"}])
+    out = query.register_lookup(query.Atlas(a), "UCPD1.CFG1")
+    assert "demo-mcu.reg.UCPD1.UCPD_CFGR1" in out and "UCPD1->CFG1" in out
+    out = query.register_lookup(query.Atlas(a), "UCPD1.RX_PAYSZ")
+    assert "UCPD_RX_PAYSZR" in out and "addr=0x40008010" in out
+    assert query.register_lookup(query.Atlas(a), "UCPD1.RESERVED").startswith("src: none")
+    assert query.register_lookup(query.Atlas(a), "UCPD1.NOPE").startswith("src: none")
+
+
+def test_cmsis_struct_offsets_skip_what_they_cannot_lay_out():
+    from embarch_atlas import cmsisalias
+    s = cmsisalias.parse_structs("typedef struct { __IO uint16_t A; __IO uint32_t B; uint8_t C, D; } T_TypeDef;"
+                                 "typedef struct { struct { int x; } n; } U_TypeDef;")
+    assert s == {"T": [("A", 0), ("B", 4), ("C", 8), ("D", 9)]}
+
+
+def test_doc_section_on_an_undistilled_toc_section_says_what_it_is(atlas_dir):
+    a = query.Atlas(atlas_dir)
+    out = query.doc_section(a, "demo-bb@A", section="1")
+    assert out.startswith("src: demo-bb@A toc") and "'Features' (p1, 300 tok)" in out and "not distilled" in out
+    assert "tier=text page=1" in out
+    out = query.doc_section(a, "demo-bb@A", section="Mode Register")
+    assert "7.1" in out and "tier=text page=9" in out
+    miss = query.doc_section(a, "demo-bb@A", section="9.9 Nonesuch Registers")
+    assert miss.startswith("src: none") and "Nearest titles" in miss and "7 | Registers" in miss
+
+
+def test_doc_section_undistilled_with_no_section_files_at_all(atlas_dir):
+    import shutil
+    shutil.rmtree(atlas_dir / "docs" / "demo-bb@A" / "s")
+    assert "not distilled" in query.doc_section(query.Atlas(atlas_dir), "demo-bb@A", section="7")
+
+
+def test_rm_register_section_points_to_register(atlas_dir):
+    d = atlas_dir / "docs" / "demo-rm@1"
+    write_json(d / "doc.json", {"doc_id": "demo-rm@1", "kind": "reference-manual"})
+    write_json(d / "outline.json", {"entries": [
+        {"id": "5", "title": "UCPD", "level": 1, "start": 10, "end": 30, "tokens": 5000},
+        {"id": "5.1", "title": "UCPD configuration register 1 (UCPD_CFGR1)", "level": 2, "start": 20, "end": 20,
+         "tokens": 400, "register": True, "regname": "UCPD_CFGR1"}]})
+    out = query.doc_section(query.Atlas(atlas_dir), "demo-rm@1", section="5.1")
+    assert "register <PERIPH>.UCPD_CFGR1" in out and "tier=text page=20" in out
+
+
+def test_doc_toc_under_with_no_match_lists_nearest_titles(atlas_dir):
+    out = query.doc_toc(query.Atlas(atlas_dir), "demo-bb@A", under="Mode Config")
+    assert out.startswith("src: none") and "Nearest titles" in out and "7.1 | MODE Register" in out.split("Nearest titles")[1]
+
+
+def test_cards_and_sections_name_the_pdf_relative_to_the_firmware_repo(atlas_dir):
+    d = atlas_dir / "docs" / "demo-bb@A" / "doc.json"
+    meta = json.loads(d.read_text())
+    meta["path"] = "../../hardware/demo-bb.pdf"      # as pdftext records it: relative to the atlas dir
+    d.write_text(json.dumps(meta))
+    a = query.Atlas(atlas_dir)
+    assert query.part_card(a, "demo-bb").startswith("src: demo-bb@A card pdf=hardware/demo-bb.pdf\n")
+    assert "pdf=hardware/demo-bb.pdf" in query.doc_section(a, "demo-bb@A", section="7").split("\n")[0]
+    assert "pdf=hardware/demo-bb.pdf" in query.doc_section(a, "demo-bb@A", page=9, tier="text").split("\n")[0]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import subprocess
 from collections import Counter
@@ -148,6 +149,21 @@ class Atlas:
         return self._pins
 
 
+def pdf_rel(a: Atlas, d: Path) -> str:
+    """The doc's source PDF as a path relative to the firmware repo (the atlas dir is
+    `<fw>/embarch/atlas`), from doc.json's `path`, which is relative to the atlas dir. A model that
+    has only `demo-ds@6 p102` guesses a path and the Read fails; this is the path to Read."""
+    p = a.doc_meta(d).get("path")
+    if not p:
+        return ""
+    ab = Path(p) if Path(p).is_absolute() else Path(os.path.normpath(a.dir.resolve() / p))
+    fw = a.dir.resolve().parent.parent
+    try:
+        return ab.relative_to(fw).as_posix()
+    except ValueError:
+        return str(ab)
+
+
 def _header(src: str, prov: str | None = None, extra: str = "") -> str:
     return f"src: {src}" + (f" prov={prov}" if prov else "") + (f" {extra}" if extra else "") + "\n\n"
 
@@ -166,10 +182,17 @@ def part_card(a: Atlas, part: str, board: str | None = None) -> str:
                         "for parts without a supplied datasheet.")
     card = d / "card.md"
     body = card.read_text(encoding="utf-8") if card.is_file() else "(no card.md yet: run /atlas-translate-docs)\n"
-    out = _header(f"{d.name} card") + body
+    out = _header(f"{d.name} card", extra=_pdf_extra(a, d)) + body
     if board is not None:
-        out += "\n## On the boards\n\n" + _bindings(a, d.name, board or None)
+        # "all" (and "" from the CLI) is every board; anything else is a board label
+        every = board.strip().lower() in ("", "all")
+        out += "\n## On the boards\n\n" + _bindings(a, d.name, None if every else board)
     return _cap(out, "part_card")
+
+
+def _pdf_extra(a: Atlas, d: Path) -> str:
+    p = pdf_rel(a, d)
+    return f"pdf={p}" if p else ""
 
 
 def _bindings(a: Atlas, doc_id: str, board: str | None) -> str:
@@ -207,7 +230,11 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
     if under:
         found = _toc_find(rows, under)
         if not found:
-            return _missing(f"section {under!r} in {d.name}", "Call doc_toc without `under` to list the top levels.")
+            near = _nearest_titles(rows, under)
+            return _missing(f"section {under!r} in {d.name}",
+                            "Call doc_toc without `under` to list the top levels."
+                            + (("\nNearest titles:\n" + "\n".join(f"{r['id']} | {r['title']} | p{r['start']}"
+                                                                   for r in near)) if near else ""))
         if len(found) > 1:
             listed = "\n".join(f"{r['id']} | {r['title']} | p{r['start']}" for r in found)
             return _cap(_header(f"{d.name} toc", extra=f"under={under!r} matches={len(found)}")
@@ -234,6 +261,18 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
             out.append(f"{'  ' * (r['level'] - lo)}{r['id']} | {r['title']} | {pages} | {r['tokens']} tok"
                        + (f" | {held}" if held else ""))
     return _cap(_header(f"{d.name} toc" + (f" under {base['id']}" if base else "")) + "\n".join(out) + "\n", "doc_toc")
+
+
+def _nearest_titles(rows: list[dict], under: str, k: int = 5) -> list[dict]:
+    """The k toc rows whose titles share the most words with `under`, else the closest by spelling."""
+    import difflib
+    words = {w for w in re.findall(r"[a-z0-9]+", under.lower()) if len(w) > 2}
+    scored = []
+    for r in rows:
+        tw = set(re.findall(r"[a-z0-9]+", r["title"].lower()))
+        sc = len(words & tw) + difflib.SequenceMatcher(None, _norm(under), _norm(r["title"])).ratio()
+        scored.append((-sc, r["start"] or 0, r["id"] or "", r))
+    return [x[3] for x in sorted(scored, key=lambda x: x[:3])[:k]]
 
 
 def _toc_find(rows: list[dict], under: str) -> list[dict]:
@@ -289,10 +328,12 @@ def doc_section(a: Atlas, doc: str, section: str | None = None, page: int | None
         if not f.is_file():
             return _missing(f"page {page} of {d.name}", "Run `embarch-atlas doc prep` for this document.")
         body = f.read_text(encoding="utf-8", errors="replace")
-        return _cap(_header(f"{d.name} p{page} text-layer", extra="(grep target; Read the PDF page to see it)") + body,
+        return _cap(_header(f"{d.name} p{page} text-layer",
+                            extra=(_pdf_extra(a, d) + " " if pdf_rel(a, d) else "")
+                            + "(grep target; Read the PDF page to see it)") + body,
                     "doc_section", offset)
     files = sorted((d / "s").glob("*.md")) if (d / "s").is_dir() else []
-    if not files:
+    if not files and not (section and _toc_rows(d)):
         return _missing(f"distilled sections of {d.name}", "Not translated yet: run /atlas-translate-docs.")
     if not section:
         return _cap(_header(f"{d.name} sections") + "\n".join(f"- s/{f.name}" for f in files) + "\n", "doc_section")
@@ -303,9 +344,36 @@ def doc_section(a: Atlas, doc: str, section: str | None = None, page: int | None
         or next((f for f in files if _norm(f.stem) == want or (title and _norm(f.stem) == title)), None) \
         or next((f for f in files if want and want in _norm(f.stem)), None)
     if not pick:
+        row = _toc_row(list(rows.values()), section)
+        if row:
+            return _undistilled(a, d, row)
+        near = _nearest_titles(list(rows.values()), section) if rows else []
         return _missing(f"section {section!r} in {d.name}",
-                        "Call doc_section without `section` to list the files, or doc_toc for the outline.")
-    return _cap(_header(f"{d.name} s/{pick.name}") + pick.read_text(encoding="utf-8"), "doc_section", offset)
+                        "Call doc_section without `section` to list the files, or doc_toc for the outline."
+                        + (("\nNearest titles:\n" + "\n".join(f"{r['id']} | {r['title']} | p{r['start']}"
+                                                               for r in near)) if near else ""))
+    return _cap(_header(f"{d.name} s/{pick.name}", extra=_pdf_extra(a, d)) + pick.read_text(encoding="utf-8"), "doc_section", offset)
+
+
+def _toc_row(rows: list[dict], section: str) -> dict | None:
+    """The toc row a section argument names: its id, or its title (punctuation ignored)."""
+    n = _norm(section)
+    return next((r for r in rows if r["id"] == section), None) \
+        or next((r for r in rows if n and _norm(r["title"]) == n), None)
+
+
+def _undistilled(a: Atlas, d: Path, r: dict) -> str:
+    """A toc section with no `s/` file: say what it is and the next call, not "not found"."""
+    pages = f"p{r['start']}" + (f"-{r['end']}" if r["end"] != r["start"] else "")
+    out = [f"Section {r['id']} {r['title']!r} ({pages}, {r['tokens']} tok) is in the toc and not distilled."]
+    meta = _json(d / "outline.json", {}) or {}
+    ent = next((e for e in meta.get("entries") or [] if e.get("id") == r["id"]), {})
+    if ent.get("register") or ent.get("regname"):
+        reg = ent.get("regname") or "<REG>"
+        out.append(f"A reference-manual register section is left to the SVD: call `register <PERIPH>.{reg}`.")
+    out.append(f"Next: `doc_section doc={d.name} tier=text page={r['start']}` reads its first page's text layer "
+               f"(pages {pages}), or Read the PDF at those pages.")
+    return _header(f"{d.name} toc", extra=_pdf_extra(a, d)) + "\n".join(out) + "\n"
 
 
 _TOKEN = re.compile(r"[A-Za-z0-9_]+")
@@ -549,17 +617,23 @@ def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
     hn, rn = _norm(head), _norm(reg)
     head_doc = (a.find_doc(head) or Path("-")).name
     cands = _reg_cands(a, hn, rn, head_doc)
+    alias = ""
     if not cands:
         msb, lsb = _reg_cands(a, hn, rn + "msb", head_doc), _reg_cands(a, hn, rn + "lsb", head_doc)
         if msb and lsb and msb[0][0] == lsb[0][0]:
             return _register_pair(a, reg, msb[0], lsb[0], field)
-        return _missing(f"register {target!r}", "Check the name in the SVD slice (docs/<svd>/s/<PERIPH>.md) or the "
+        al = _cmsis_alias(a, head, reg)
+        if al:
+            cands = [al]
+            alias = f"CMSIS `{head}->{reg}` is {al[1].get('name')} (same offset in the device header)"
+        else:
+            return _missing(f"register {target!r}", "Check the name in the SVD slice (docs/<svd>/s/<PERIPH>.md) or the "
                         "part's register section; names are matched without punctuation.")
     d, reg_rec = cands[0]
     rid = reg_rec.get("id")
     fields, related = _reg_joins(a, rid, field)
     fields.sort(key=lambda r: -(r.get("bits") or [0])[0])
-    out = [_header(f"{d.name} {rid}", reg_rec.get("prov")).rstrip("\n"), "",
+    out = [_header(f"{d.name} {rid}", reg_rec.get("prov")).rstrip("\n"), ""] + ([alias, ""] if alias else []) + [
            f"{reg_rec.get('name')} addr={reg_rec.get('addr')} width={reg_rec.get('width')} "
            f"reset={reg_rec.get('reset')} access={reg_rec.get('access')} cite={_cite(reg_rec)}", ""]
     out += [_field_line(f) for f in fields]
@@ -567,6 +641,26 @@ def register_lookup(a: Atlas, target: str, field: str | None = None) -> str:
     if len(cands) > 1:
         out += ["", "Also named " + reg + " in: " + ", ".join(sorted({c[0].name for c in cands[1:]}))]
     return _cap("\n".join(out) + "\n", "register")
+
+
+def _cmsis_alias(a: Atlas, head: str, member: str) -> tuple[Path, dict] | None:
+    """`PERIPH.MEMBER` as the CMSIS device header names it -> the SVD register at the same address."""
+    from . import cmsisalias
+    hdr = cmsisalias.header_path(a.dir)
+    if not hdr:
+        return None
+    addr = cmsisalias.member_address(hdr, head.upper(), member)
+    if addr is None:
+        return None
+    for d in a.docs:
+        for r in _records(d):
+            if r.get("kind") == "register" and r.get("src") == "svd":
+                try:
+                    if int(str(r.get("addr")), 16) == addr:
+                        return d, r
+                except ValueError:
+                    continue
+    return None
 
 
 def _merge_twins(recs: list[dict]) -> list[dict]:
@@ -782,7 +876,7 @@ def register(sub, groups) -> None:
         p.add_argument("--atlas", help="atlas id (default: current)")
         p.set_defaults(func=lambda ns, fn=fn: _run(ns, fn))
 
-    add("part_card", part_card, (["part"], {}), (["--board"], {"nargs": "?", "const": ""}))
+    add("part_card", part_card, (["part"], {}), (["--board"], {"nargs": "?", "const": "all"}))
     add("doc_toc", doc_toc, (["doc"], {}), (["--under"], {}), (["--depth"], {"type": int, "default": 2}))
     add("doc_section", doc_section, (["doc"], {}), (["--section"], {}), (["--page"], {"type": int}),
         (["--tier"], {"choices": ["distilled", "text"], "default": "distilled"}), (["--offset"], {"type": int, "default": 0}))

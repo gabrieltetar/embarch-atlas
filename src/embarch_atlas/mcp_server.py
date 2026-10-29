@@ -49,7 +49,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
     @server.tool(annotations=READ_ONLY)
     def part_card(part: str, board: str | None = None) -> str:
         """A part's card (<=1.5K tokens): role, key limits, register summary, quirks, section index.
-        `part` is an MPN, doc id or document number; `board` ("" for all, or a label) adds its refs and nets."""
+        `part` is an MPN, doc id or document number; `board` ("all" for every board, or one board's label) adds its refs and nets; omit it for the card alone."""
         return query.part_card(view(), part, board)
 
     @server.tool(annotations=READ_ONLY)
