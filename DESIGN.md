@@ -260,7 +260,7 @@ value anchors only when that record is on a page the line cites. Rendered struct
 
 ## Query surface
 
-`query.py` holds the twelve lookups as plain functions returning markdown: `part_card` (`board="all"`
+`query.py` holds the thirteen lookups as plain functions returning markdown: `part_card` (`board="all"`
 adds every board's refs and nets, a label one board's; no tool documents an empty string as a value: a model
 writes `"board": }` for it, and the call never reaches the server),
 `doc_toc` (`under` takes an id, a title, or a word of a title, which resolves to the one
@@ -271,7 +271,15 @@ firmware repo>`, because a cite gives only a doc id and a page and a guessed pat
 `find_fact` (BM25 over every `facts.txt` and the distilled prose of `card.md` and `s/*.md`
 outside rendered tables, as `kind=prose` lines; a query term naming one part narrows to it like
 `part`; with no `limit`, the best 10 hits scoring at least 0.4 of the top one, and the
-header names the query terms no fact contains), `register` (MCU `PERIPH.REG` or
+header names the query terms no fact contains), `find_text` (the step after `find_fact`: plain words
+or a case-insensitive regex over every page of a document's text layer, `pages/p<NNN>.txt`, one block per
+hit with the physical page, the deepest toc section holding it, `s/<file>` or "not distilled", the line and
+`context` lines; `section=` limits it to that section's pages; the `src:` line says
+`<doc> text-layer, <n> pages hits=<n>`. Each answer appends `{doc, section, page, tool}` of the hits it
+returned to `<atlas dir>/usage.jsonl`, so undistilled sections can be ranked by use; the log is write-only,
+never read back into an answer, and a failed write is ignored. A toc gives pages, not lines, so a page
+shared by two sections is credited to the deepest, latest-starting one. Measured on a synthetic 400-page
+text layer: a symbol, a state name and a table title each answer in 11-14 ms), `register` (MCU `PERIPH.REG` or
 `<part>.<REG>`, twins merged, rules/quirks/conflicts and firmware references joined; a
 register tabled as `<REG>_MSB` + `<REG>_LSB` bytes answers to `<REG>` as one 16-bit view; firmware's
 CMSIS struct member (`UCPD1.CFG1`) finds the SVD register at the same address, read from the device header
@@ -394,7 +402,7 @@ scoring each declared interface.
 
 ## Live (`live.py`)
 
-The live module reads the running board. It is not part of the twelve lookups: the atlas never
+The live module reads the running board. It is not part of the thirteen lookups: the atlas never
 touches hardware, so `reg_read` names addresses and decodes the answer, and embarch-core does the
 read (its decision 81) through the `embarch-api mem-read` subcommand, which resolves Core and its
 token the way every suite tool does. Core picks the probe and chip from the role's enrollment,
@@ -521,11 +529,11 @@ An atlas id is `<target>@<commit12>`.
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump: stop while a translation is behind its source (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts; the previous atlas's backlog is counted), the diff written into the new atlas |
-| `q <lookup>` | `query` | the twelve lookups (same answers as the MCP tools) |
+| `q <lookup>` | `query` | the thirteen lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
-| `mcp` | `mcp_server` | the twelve lookups as an MCP server over stdio, and `reg_read` when Core answers |
+| `mcp` | `mcp_server` | the thirteen lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ### When `update` stops
 

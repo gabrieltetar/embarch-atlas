@@ -345,3 +345,92 @@ def test_cards_and_sections_name_the_pdf_relative_to_the_firmware_repo(atlas_dir
     assert query.part_card(a, "demo-bb").startswith("src: demo-bb@A card pdf=hardware/demo-bb.pdf\n")
     assert "pdf=hardware/demo-bb.pdf" in query.doc_section(a, "demo-bb@A", section="7").split("\n")[0]
     assert "pdf=hardware/demo-bb.pdf" in query.doc_section(a, "demo-bb@A", page=9, tier="text").split("\n")[0]
+
+
+# --------------------------------------------------------------------------- find_text
+
+@pytest.fixture()
+def text_atlas(tmp_path: Path) -> Path:
+    """An invented 3-page document: one distilled section, one not, a subsection."""
+    a = tmp_path / "atlas"
+    d = a / "docs" / "demo-spec@1"
+    write_json(d / "doc.json", {"doc_id": "demo-spec@1", "part": "DEMO-SPEC", "kind": "spec"})
+    write_json(d / "toc.json", {"doc_id": "demo-spec@1", "sections": [
+        {"id": "1", "title": "Overview", "level": 1, "pages": [1, 1], "tokens": 100},
+        {"id": "2", "title": "Link Policy", "level": 1, "pages": [2, 3], "tokens": 900},
+        {"id": "2.1", "title": "Hold-off Timer", "level": 2, "pages": [3, 3], "tokens": 200}]})
+    write_text(d / "s" / "overview.md", "# Overview\n\nProse.\n")
+    write_text(d / "pages" / "p001.txt", "Overview\nThe widget uses VBUS_DET for sensing.\nNothing else here.\n")
+    write_text(d / "pages" / "p002.txt", "Link Policy\nstate PE_SNK_Ready is entered\nafter the first contract.\n")
+    write_text(d / "pages" / "p003.txt", "Hold-off Timer\ntHoldoff is 40 ms\nvbus_det again, in lowercase\n")
+    return a
+
+
+def test_find_text_plain_word_regex_and_undistilled(text_atlas):
+    a = query.Atlas(text_atlas)
+    out = query.find_text(a, "demo-spec@1", "VBUS_DET", context=1)
+    assert out.startswith("src: demo-spec@1 text-layer, 3 pages")
+    assert "p1 §1 Overview [s/overview.md]\n  Overview\n> The widget uses VBUS_DET" in out
+    assert "p3 §2.1 Hold-off Timer [not distilled]" in out      # case-insensitive, deepest section
+    out = query.find_text(a, "demo-spec@1", r"PE_(SNK|SRC)_\w+")
+    assert "p2 §2 Link Policy [not distilled]" in out and "> state PE_SNK_Ready is entered" in out
+    assert "\n  after the first contract." in out                 # context
+    assert query.find_text(a, "demo-spec@1", "zzz").count("No line matches") == 1
+
+
+def test_find_text_section_narrows_and_bad_regex_is_plain(text_atlas):
+    a = query.Atlas(text_atlas)
+    out = query.find_text(a, "demo-spec@1", "vbus", section="2")
+    assert "p1 " not in out and "p3 " in out and "section=2" in out
+    assert "src: none" in query.find_text(a, "demo-spec@1", "x", section="nonesuch")
+    write_text(text_atlas / "docs/demo-spec@1/pages/p002.txt", "a (b is open\n")
+    assert "> a (b is open" in query.find_text(a, "demo-spec@1", "(b")
+
+
+def test_find_text_budget_cut_continues_with_next(text_atlas):
+    write_text(text_atlas / "docs/demo-spec@1/pages/p002.txt", "".join(f"hit {i} {'x' * 150}\n" for i in range(300)))
+    a = query.Atlas(text_atlas)
+    first = query.find_text(a, "demo-spec@1", "hit", context=0)
+    assert "next=" in first
+    nxt = int(first.rsplit("next=", 1)[1].split(")")[0])
+    second = query.find_text(a, "demo-spec@1", "hit", context=0, offset=nxt)
+    assert first.count("> hit") + second.count("> hit") > first.count("> hit") > 0
+    assert "hit 0 " in first and "hit 0 " not in second
+
+
+def test_find_text_usage_log_is_written_and_never_read(text_atlas):
+    a = query.Atlas(text_atlas)
+    query.find_text(a, "demo-spec@1", "tHoldoff")
+    rows = [json.loads(x) for x in (text_atlas / "usage.jsonl").read_text().splitlines()]
+    assert rows == [{"doc": "demo-spec@1", "section": "2.1", "page": 3, "tool": "find_text"}]
+    before = query.find_text(a, "demo-spec@1", "tHoldoff")
+    assert before == query.find_text(a, "demo-spec@1", "tHoldoff")
+    assert "usage" not in before
+
+
+def test_find_text_on_400_pages_answers_under_half_a_second(tmp_path):
+    import time
+    a = tmp_path / "atlas"
+    d = a / "docs" / "big-spec@1"
+    write_json(d / "doc.json", {"doc_id": "big-spec@1", "kind": "spec"})
+    write_json(d / "toc.json", {"sections": [{"id": str(i), "title": f"Chapter {i}", "level": 1,
+                                              "pages": [i * 10 - 9, i * 10], "tokens": 1} for i in range(1, 41)]})
+    for n in range(1, 401):
+        write_text(d / "pages" / f"p{n:03d}.txt", "".join(f"line {n}.{k} some ordinary spec prose about messages and timers\n"
+                                                         for k in range(55)) + (f"Table {n}: Widget Ratings\n" if n == 300 else "")
+                   + ("state PE_SNK_Ready\n" if n == 250 else "") + ("SYMBOL_ABC\n" if n == 77 else ""))
+    at = query.Atlas(a)
+    for pat, page in (("SYMBOL_ABC", "p77"), ("PE_SNK_Ready", "p250"), ("Table 300: Widget", "p300")):
+        t = time.perf_counter()
+        out = query.find_text(at, "big-spec@1", pat)
+        dt = time.perf_counter() - t
+        assert f"\n{page} " in out and "400 pages" in out
+        print(f"find_text {pat!r} over 400 pages: {dt:.3f}s")
+        assert dt < 0.5
+
+
+def test_undistilled_and_missing_hints_name_find_text(text_atlas):
+    a = query.Atlas(text_atlas)
+    assert "find_text doc=demo-spec@1 pattern=<words> section=2" in query.doc_section(a, "demo-spec@1", section="Link Policy")
+    assert "find_text doc=demo-spec@1" in query.doc_section(a, "demo-spec@1", section="Nonesuch Thing")
+    assert "find_text doc=demo-spec@1" in query.doc_toc(a, "demo-spec@1", under="Nonesuch Thing")

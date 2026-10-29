@@ -1,4 +1,4 @@
-"""The twelve atlas lookups, as plain functions returning markdown.
+"""The thirteen atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -23,7 +23,7 @@ from . import common, stale
 from .pdftext import tier2_files
 
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
-BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000,
+BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500,
           "register": 1500, "pin_trace": 4000, "net_trace": 4000, "mismatch_report": 4000,
           "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500}
 
@@ -191,7 +191,7 @@ def _missing(what: str, hint: str) -> str:
     return f"src: none\n\n{what} not found. {hint}\n"
 
 
-# --------------------------------------------------------------------------- the twelve
+# --------------------------------------------------------------------------- the thirteen
 
 @_stamped
 def part_card(a: Atlas, part: str, board: str | None = None) -> str:
@@ -255,7 +255,8 @@ def doc_toc(a: Atlas, doc: str, under: str | None = None, depth: int = 2) -> str
             return _missing(f"section {under!r} in {d.name}",
                             "Call doc_toc without `under` to list the top levels."
                             + (("\nNearest titles:\n" + "\n".join(f"{r['id']} | {r['title']} | p{r['start']}"
-                                                                   for r in near)) if near else ""))
+                                                                   for r in near)) if near else "")
+                            + f"\nTo search the page text instead: `find_text doc={d.name} pattern=<words>`.")
         if len(found) > 1:
             listed = "\n".join(f"{r['id']} | {r['title']} | p{r['start']}" for r in found)
             return _cap(_header(f"{d.name} toc", extra=f"under={under!r} matches={len(found)}")
@@ -373,7 +374,8 @@ def doc_section(a: Atlas, doc: str, section: str | None = None, page: int | None
         return _missing(f"section {section!r} in {d.name}",
                         "Call doc_section without `section` to list the files, or doc_toc for the outline."
                         + (("\nNearest titles:\n" + "\n".join(f"{r['id']} | {r['title']} | p{r['start']}"
-                                                               for r in near)) if near else ""))
+                                                               for r in near)) if near else "")
+                        + f"\nTo search the page text instead: `find_text doc={d.name} pattern=<words>`.")
     return _cap(_header(f"{d.name} s/{pick.name}", extra=_pdf_extra(a, d)) + pick.read_text(encoding="utf-8"), "doc_section", offset)
 
 
@@ -394,11 +396,117 @@ def _undistilled(a: Atlas, d: Path, r: dict) -> str:
         reg = ent.get("regname") or "<REG>"
         out.append(f"A reference-manual register section is left to the SVD: call `register <PERIPH>.{reg}`.")
     out.append(f"Next: `doc_section doc={d.name} tier=text page={r['start']}` reads its first page's text layer "
-               f"(pages {pages}), or Read the PDF at those pages.")
+               f"(pages {pages}), or `find_text doc={d.name} pattern=<words> section={r['id']}` searches all of "
+               f"its pages, or Read the PDF at those pages.")
     return _header(f"{d.name} toc", extra=_pdf_extra(a, d)) + "\n".join(out) + "\n"
 
 
 _TOKEN = re.compile(r"[A-Za-z0-9_]+")
+
+
+FIND_TEXT_LINE = 200   # characters of a matching or context line shown
+USAGE_LOG = "usage.jsonl"
+
+
+def _page_files(d: Path) -> list[tuple[int, Path]]:
+    """`pages/p<N>.txt` as (physical page, file), in page order."""
+    out = []
+    for f in (d / "pages").glob("p*.txt") if (d / "pages").is_dir() else []:
+        m = re.fullmatch(r"p(\d+)\.txt", f.name)
+        if m:
+            out.append((int(m.group(1)), f))
+    return sorted(out)
+
+
+def _log_usage(a: Atlas, doc: str, hits: list[tuple[str | None, int]]) -> None:
+    """Append what a `find_text` answer returned to `<atlas dir>/usage.jsonl`, for ranking
+    undistilled sections by use. Write-only: nothing here reads it back into an answer."""
+    if not hits:
+        return
+    try:
+        with open(a.dir / USAGE_LOG, "a", encoding="utf-8") as fh:
+            for sec, page in hits:
+                fh.write(json.dumps({"doc": doc, "section": sec, "page": page, "tool": "find_text"}) + "\n")
+    except OSError:
+        pass
+
+
+@_stamped
+def find_text(a: Atlas, doc: str, pattern: str, section: str | None = None, context: int = 2,
+              offset: int = 0) -> str:
+    """Search every page of a document's text layer (`pages/p<NNN>.txt`) for plain words or a
+    regex (case-insensitive); one block per hit: page, the deepest toc section holding it, whether
+    that section is distilled, the line and `context` lines around it. `section` limits the search
+    to that section's pages."""
+    d = a.find_doc(doc)
+    if not d:
+        return _missing(f"document {doc!r}", "Doc ids are listed in MAP.md and docs/.")
+    if not (pattern or "").strip():
+        return _missing("pattern", "Give plain words or a regex, e.g. `VBUS` or `Source_Capabilities`.")
+    try:
+        rx = re.compile(pattern, re.I)
+    except re.error:
+        rx = re.compile(re.escape(pattern), re.I)
+    pages = _page_files(d)
+    if not pages:
+        return _missing(f"text layer of {d.name}", "Run `embarch-atlas doc prep` for this document.")
+    rows = [r for r in _toc_rows(d) if isinstance(r["start"], int)]
+    lo, hi, scope = 0, 10**9, ""
+    if section:
+        found = _toc_find(_toc_rows(d), section)
+        if not found:
+            near = _nearest_titles(_toc_rows(d), section)
+            return _missing(f"section {section!r} in {d.name}",
+                            "Call doc_toc for the outline." + (("\nNearest titles:\n" + "\n".join(
+                                f"{r['id']} | {r['title']} | p{r['start']}" for r in near)) if near else ""))
+        if len(found) > 1:
+            return _missing(f"one section {section!r} in {d.name}", f"{len(found)} sections match; pass one id:\n"
+                            + "\n".join(f"{r['id']} | {r['title']} | p{r['start']}" for r in found))
+        lo, hi = found[0]["start"] or 0, found[0]["end"] or found[0]["start"] or 0
+        scope = f" section={found[0]['id']}"
+        pages = [(n, f) for n, f in pages if lo <= n <= hi]
+    files = {p.stem for p in (d / "s").glob("*.md")} if (d / "s").is_dir() else set()
+    toc = _json(d / "toc.json")
+    t2 = tier2_files(d, toc["sections"]) if toc and toc.get("sections") else {}
+
+    def holder(n: int) -> dict | None:
+        cover = [r for r in rows if r["start"] <= n <= (r["end"] or r["start"])]
+        return max(cover, key=lambda r: (r["level"], r["start"])) if cover else None
+
+    def held(r: dict | None) -> str:
+        if not r:
+            return "no section"
+        f = next((s for s in (r["id"], _slug(r["title"])) if s in files), "")
+        h = ", ".join(t2.get(r["id"]) or ([f"s/{f}.md"] if f else []))
+        return h or "not distilled"
+
+    context = max(0, int(context))
+    blocks, meta = [], []
+    for n, f in pages:
+        lines = [x.rstrip() for x in f.read_text(encoding="utf-8", errors="replace").splitlines()]
+        hit = [i for i, x in enumerate(lines) if rx.search(x)]
+        if not hit:
+            continue
+        r = holder(n)
+        head = f"p{n} " + (f"§{r['id']} {r['title']} " if r else "") + f"[{held(r)}]"
+        for i in hit:
+            body = [("> " if j == i else "  ") + lines[j].strip()[:FIND_TEXT_LINE]
+                    for j in range(max(0, i - context), min(len(lines), i + context + 1)) if lines[j].strip()]
+            blocks.append(head + "\n" + "\n".join(body) + "\n")
+            meta.append((r["id"] if r else None, n))
+    out = _header(f"{d.name} text-layer, {len(pages)} pages",
+                  extra=f"hits={len(blocks)}{scope} " + (_pdf_extra(a, d) if pdf_rel(a, d) else "")).rstrip(" \n") + "\n\n"
+    if not blocks:
+        return out + f"No line matches {pattern!r}. Try other words, a regex, or `find_fact` for the distilled facts.\n"
+    starts, pos = [], 0
+    for b in blocks:
+        starts.append(pos)
+        pos += len(b) + 1
+    res = _cap(out + "\n".join(blocks), "find_text", offset)
+    m = re.search(r"\(next=(\d+)\)\n$", res)
+    end = int(m.group(1)) if m else 10**12
+    _log_usage(a, d.name, [mt for mt, s in zip(meta, starts) if offset <= s < end])
+    return res
 
 
 PROSE_TABLE_START = re.compile(r"^<!--\s*atlas:table\b")
@@ -889,6 +997,7 @@ def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, 
 
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
+    "find_text": find_text,
     "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "mismatch_report": mismatch_report,
     "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
 }
@@ -912,6 +1021,8 @@ def register(sub, groups) -> None:
     add("doc_section", doc_section, (["doc"], {}), (["--section"], {}), (["--page"], {"type": int}),
         (["--tier"], {"choices": ["distilled", "text"], "default": "distilled"}), (["--offset"], {"type": int, "default": 0}))
     add("find_fact", find_fact, (["query"], {"nargs": "+"}), (["--part"], {}), (["--kind"], {}), (["--limit"], {"type": int}))
+    add("find_text", find_text, (["doc"], {}), (["pattern"], {}), (["--section"], {}),
+        (["--context"], {"type": int, "default": 2}), (["--offset"], {"type": int, "default": 0}))
     add("register", register_lookup, (["target"], {}), (["--field"], {}))
     add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}))
     add("net_trace", net_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))

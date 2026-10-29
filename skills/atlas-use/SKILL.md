@@ -63,6 +63,7 @@ pin → net → far-end part pin → DT node → driver) and `boards/<label>/net
 | Flash/RAM use, headroom in the code partition, what grew between two builds | `footprint` (`vs=<dir or pinned>`, `by=dir|file|symbol`) |
 | Thread stack sizes and where each is defined | `stacks` (static); peaks on the board: `live_stacks` (pass `build` when the board runs another build than the atlas) |
 | A limit / threshold / timing, or any behaviour | `find_fact` (records and distilled prose), or `grep -r <SYMBOL> embarch/atlas/docs/*/facts.txt embarch/atlas/docs/*/s/`, then the section |
+| A term `find_fact` reports as `unmatched=`, or anything in a section `doc_toc` shows with no distilled file | `find_text <doc> <pattern>` (`section=<id>` narrows, `context=<n>` lines around each hit): every page's text layer, each hit with page and section; cite the page and Read the PDF page to verify. Use it instead of `pdftotext`/`grep` dumps |
 | A register or field of an external part | `docs/<doc>/s/` register section, or `grep` the register name in `facts.txt` |
 | An MCU register or field | `docs/<svd-doc>/s/<PERIPH>.md`; conflicts between the SVD and the RM are `conflict` records under the RM doc |
 | What an MCU register holds on the running board | `reg_read PERIPH.REG` (or a whole `PERIPH`), listed when embarch-core answers: read through Core with the core halted about 20 ms, decoded field by field; a read-to-clear register is refused unless `allow_clear` |

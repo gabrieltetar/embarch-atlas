@@ -65,7 +65,8 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
          "net `B:3V3`). Mismatches are candidates for the engineer, never facts. Paths are relative to `embarch/atlas/`.", "",
          "Find: `find_fact` searches the records and the distilled prose; by hand, `grep -r <SYMBOL> "
          "embarch/atlas/docs/*/facts.txt embarch/atlas/docs/*/s/` (facts.txt alone misses what a "
-         "distillation wrote only as prose). Tools: the `embarch-atlas` MCP server (part_card, doc_toc, doc_section, find_fact, "
+         "distillation wrote only as prose). `find_text <doc> <pattern>` is the step after it: every page's text layer, "
+         "each hit with its page and section, for a term `find_fact` reports as `unmatched=` or a section not distilled. Tools: the `embarch-atlas` MCP server (part_card, doc_toc, doc_section, find_fact, find_text, "
          "register, pin_trace, net_trace, mismatch_report, config, dt_node, footprint, stacks), or the same as "
          "`embarch-atlas q <verb>`. Live, when embarch-core answers: `reg_read PERIPH[.REG]` (MCU, core halted about "
          "20 ms) or `<DT label>.<REG>` (an external part, `i2c read` on the shell) reads a register on the board and "

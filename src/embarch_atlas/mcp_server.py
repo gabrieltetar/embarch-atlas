@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's twelve lookups as an MCP server over stdio, and the live
+"""`embarch-atlas mcp`: the atlas's thirteen lookups as an MCP server over stdio, and the live
 module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
@@ -27,7 +27,7 @@ INSTRUCTIONS = (
     "Hardware atlas of this firmware project: schematics, datasheets, the MCU reference "
     "manual and the PRD, distilled, page-cited and joined to one pinned firmware build. "
     "Use it before answering any hardware question. Protocol: MAP.md (already in context) "
-    "-> part_card -> doc_section -> Read the PDF page to verify. Every answer starts with a "
+    "-> part_card -> doc_section (find_fact, then find_text for page text) -> Read the PDF page to verify. Every answer starts with a "
     "`src:` line: cite it. prov=llm-unverified and figure facts are leads, not truth. "
     "Mismatches are candidates for the engineer, never facts."
 )
@@ -71,6 +71,14 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         A part named in the query narrows to it, like `part`. Without `limit`: the best 10 above 0.4x the
         top score. `kind`: limit, timing, pin, rule, register, field, quirk, strap, requirement, conflict."""
         return query.find_fact(view(), query_text, part, kind, limit)
+
+    @server.tool(annotations=READ_ONLY)  # appends to the atlas's usage log; changes no answer
+    def find_text(doc: str, pattern: str, section: str | None = None, context: int = 2, offset: int = 0) -> str:
+        """Search every page of a document's text layer for plain words or a regex (case-insensitive): one block per
+        hit with the page, the deepest section holding it, whether that section is distilled, the line and `context`
+        lines around it. The step after find_fact, for a term it reports as unmatched or a section with no
+        distillation. `section` limits the search to one section's pages. Long answers end with next=<offset>."""
+        return query.find_text(view(), doc, pattern, section, context, offset)
 
     @server.tool(annotations=READ_ONLY)
     def register(target: str, field: str | None = None) -> str:
@@ -188,6 +196,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's twelve lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's thirteen lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)
