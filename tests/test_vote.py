@@ -285,3 +285,16 @@ def test_rm_elements_and_index_variables():
     assert vote.name_style("MODE5", "MODER5", {"MODER"}, 11, 10) == "family"
     assert vote.name_style("SEL3", "SEL24_31", {"SELCR1"}, 31, 24) == "bit-range"
     assert vote.name_style("RXNE", "RXNEF", {"SR"}, 1, 1) is None
+
+
+def test_vote_compares_only_svd_reset_bits_that_are_defined():
+    r = demo_rmdoc()
+    sr, _ = vote.parse_register_section(r, r.by_id["2.3.2"])
+    f = {"TXE": {"name": "TXE", "bits": [0, 0], "access": "rw", "reset": None},
+         "RXNE": {"name": "RXNE", "bits": [1, 1], "access": "ro", "reset": None},
+         "PARF": {"name": "PARF", "bits": [2, 2], "access": "ro", "reset": None}}
+    undefined = {"name": "UART_SR", "off": "0x004", "reset": None, "access": "rw", "fields": f}
+    assert "reset differs" not in {d["kind"] for d in vote.diff_register(sr, undefined)}
+    # the RM's reset is not 0 (the existing test), so a defined 0 on one bit it disagrees with still counts
+    defined = dict(undefined, fields={k: dict(v, reset="0x0") for k, v in f.items()})
+    assert "reset differs" in {d["kind"] for d in vote.diff_register(sr, defined)}

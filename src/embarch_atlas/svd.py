@@ -227,7 +227,7 @@ def _walk_registers(container: ET.Element, props: dict, prefix: str, base_off: i
                 out += _walk_registers(el, eprops, cname + "_", eoff, enum_index,
                                        f"{cluster}.{ename}" if cluster else ename)
                 continue
-            reset = svd_int(eprops.get("resetValue", "0")) or 0
+            reset = svd_int(eprops["resetValue"]) or 0 if eprops.get("resetValue") is not None else None  # None: the SVD gives none
             size = svd_int(eprops.get("size", "32")) or 32
             mask = svd_int(eprops.get("resetMask")) if eprops.get("resetMask") else (1 << size) - 1
             disp = _text(el, "displayName")
@@ -323,6 +323,15 @@ def part_slug(device: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", (device or "mcu").lower())
 
 
+def _full(r: dict) -> int:
+    return (1 << r["size"]) - 1
+
+
+def _defined(r: dict) -> int:
+    """The register bits whose reset the SVD defines: none without a resetValue, else its resetMask."""
+    return 0 if r["reset"] is None else r["reset_mask"] & _full(r)
+
+
 def hexs(v: int | None, width: int = 32) -> str | None:
     if v is None:
         return None
@@ -369,18 +378,21 @@ def build_records(dev: dict, doc_id: str) -> tuple[list[dict], list[dict]]:
                 "id": rid, "kind": "register", "doc": doc_id, "p": None, "q": None,
                 "src": "svd", "prov": "deterministic", "note": rnote,
                 "name": r["name"], "addr": hexs(p["base"] + r["off"]), "width": r["size"],
-                "reset": hexs(r["reset"], r["size"]), "desc": r["desc"] or None,
+                "reset": hexs(r["reset"], r["size"]) if _defined(r) == _full(r) else None, "desc": r["desc"] or None,
                 **({"access": racc} if racc else {}),  # none given: the fields carry it
             })
             for f in r["fields"]:
                 hi, lo = f["lsb"] + f["width"] - 1, f["lsb"]
-                freset = (r["reset"] >> lo) & ((1 << f["width"]) - 1)
+                fbits = ((1 << f["width"]) - 1) << lo
+                freset = (r["reset"] >> lo) & ((1 << f["width"]) - 1) if r["reset"] is not None else None
+                if _defined(r) & fbits != fbits:
+                    freset = None  # a bit the SVD's resetMask leaves undefined: no claimed reset
                 facc, fnote = _schema_access(f["access"] or r["access"])
                 fields.append({
                     "id": f"{rid}.{f['name']}", "kind": "field", "doc": doc_id, "p": None, "q": None,
                     "src": "svd", "prov": "deterministic", "note": fnote,
                     "reg": rid, "name": f["name"], "bits": [hi, lo],
-                    "reset": hex(freset), "enum": _enum_map(f["enums"]), "desc": f["desc"] or None,
+                    "reset": hex(freset) if freset is not None else None, "enum": _enum_map(f["enums"]), "desc": f["desc"] or None,
                     **({"access": facc} if facc else {}),
                 })
     return regs, fields

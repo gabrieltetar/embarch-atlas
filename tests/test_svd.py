@@ -173,3 +173,46 @@ def test_svddoc_lookup(svd_file, tmp_path):
     assert s.has("SER0.CTRL.EN") and s.has("SER0.CTRL") and s.has("CTRL.MODE", ["SER1"])
     assert not s.has("SER0.CTRL.NOPE") and not s.has("CFGR.NOPE") and s.has("A.B.C.D") is None
     assert svd.find_svd_doc(root) == "demo-svd"
+
+
+RESET_SVD = """<?xml version="1.0"?>
+<device><name>RS</name><version>1</version><cpu><name>CM0</name></cpu><width>32</width><size>32</size>
+<access>read-write</access>
+<peripherals><peripheral><name>P</name><baseAddress>0x40000000</baseAddress><registers>
+<register><name>FULL</name><addressOffset>0x0</addressOffset><resetValue>0x00000105</resetValue>
+  <fields><field><name>A</name><bitOffset>0</bitOffset><bitWidth>4</bitWidth></field>
+  <field><name>B</name><bitOffset>8</bitOffset><bitWidth>4</bitWidth></field></fields></register>
+<register><name>PART</name><addressOffset>0x4</addressOffset><resetValue>0x000000F5</resetValue><resetMask>0x0000000F</resetMask>
+  <fields><field><name>LO</name><bitOffset>0</bitOffset><bitWidth>4</bitWidth></field>
+  <field><name>HI</name><bitOffset>4</bitOffset><bitWidth>4</bitWidth></field></fields></register>
+<register><name>NONE</name><addressOffset>0x8</addressOffset>
+  <fields><field><name>X</name><bitOffset>0</bitOffset><bitWidth>4</bitWidth></field></fields></register>
+</registers></peripheral></peripherals></device>
+"""
+
+
+def _reset_records(tmp_path):
+    from embarch_atlas.svd import build_records, parse_svd
+    p = tmp_path / "rs.svd"
+    p.write_text(RESET_SVD)
+    regs, fields = build_records(parse_svd(p), "rs-svd")
+    return {r["name"]: r for r in regs}, {f["id"].rsplit(".", 2)[-2] + "." + f["name"]: f for f in fields}
+
+
+def test_reset_bits_the_svd_leaves_undefined_claim_no_reset(tmp_path):
+    regs, fields = _reset_records(tmp_path)
+    assert regs["FULL"]["reset"] == "0x00000105" and fields["FULL.B"]["reset"] == "0x1"
+    assert regs["PART"]["reset"] is None                    # the mask is not all ones
+    assert fields["PART.LO"]["reset"] == "0x5" and fields["PART.HI"]["reset"] is None
+    assert regs["NONE"]["reset"] is None and fields["NONE.X"]["reset"] is None   # no resetValue anywhere
+
+
+def test_full_mask_records_are_byte_identical_to_before_the_reset_mask_was_read(tmp_path):
+    """tests/golden/svd_full_mask_records.txt was written by the code before 021, from SVD above, in which every
+    register has a resetValue and no partial mask; a change to what `mcu svd` writes there fails here."""
+    f = tmp_path / "demo.svd"
+    f.write_text(SVD)
+    svd.write_svd_doc(f, "demo-svd", tmp_path / "o")
+    out = tmp_path / "o" / "docs" / "demo-svd" / "records"
+    got = (out / "register.jsonl").read_text() + "=====\n" + (out / "field.jsonl").read_text()
+    assert got == (Path(__file__).parent / "golden" / "svd_full_mask_records.txt").read_text()

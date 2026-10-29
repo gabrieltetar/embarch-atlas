@@ -272,10 +272,17 @@ def rm_clears(rm_dirs: Iterable[Path]) -> dict[tuple[str, str], list[tuple[str, 
     return out
 
 
+def reads_clear(access) -> bool:
+    """True when `access` says the read itself clears the field (`rclr`). `woclr` and `wclr` are
+    write-one-to-clear: reading them changes nothing."""
+    a = str(access or "")
+    return "rclr" in a or "clear" in a
+
+
 def side_effects(reg: dict, fields: list[dict], clears: dict) -> list[str]:
     """Why reading `reg` changes the target, one reason per effect; empty when it does not."""
     why = [f"{f.get('name')} is cleared by the read ({f.get('doc')}: readAction)"
-           for f in fields if "clr" in str(f.get("access") or "") or "clear" in str(f.get("access") or "")]
+           for f in fields if reads_clear(f.get("access"))]
     periph = periph_of(reg)
     key = (family(periph).upper(), short_name(reg.get("name", ""), periph).upper())
     why += [f"reading it clears {what} ({cite})" for what, cite in clears.get(key, [])]
@@ -374,7 +381,9 @@ def decode(reg: dict, v: int, fields: list[dict], all_fields: bool) -> list[str]
         hi, lo = _bits(f)
         covered |= ((1 << (hi - lo + 1)) - 1) << lo
         fv = field_value(v, f)
-        fr = field_value(reset, f) if reset is not None else None
+        # the field's own reset when the record has the key (null: the SVD's resetMask leaves it undefined)
+        fres = _int(f["reset"]) if "reset" in f else reset
+        fr = field_value(fres, f) if fres is not None else None
         differs = fr is not None and fv != fr
         if not differs:
             same += 1
@@ -664,7 +673,7 @@ def _ext_effects(doc: Path, recs: list[dict]) -> list[str]:
         if f.get("reg") not in ids:
             continue
         text = " ".join(str(f.get(k) or "") for k in ("desc", "q"))
-        if "clr" in str(f.get("access") or "") or READ_CLEARS_TEXT.search(text):
+        if reads_clear(f.get("access")) or READ_CLEARS_TEXT.search(text):
             by_cite.setdefault(f"{f.get('doc')} p{f.get('p')}", []).append(str(f.get("name")))
     why += [f"{', '.join(names)} {'clears' if len(names) == 1 else 'clear'} on the read ({cite})"
             for cite, names in by_cite.items()]

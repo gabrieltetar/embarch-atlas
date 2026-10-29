@@ -494,3 +494,48 @@ def test_threads_join_their_stacks_by_definition_then_name_never_by_size_alone()
     assert out["idle"]["stack"]["n"] == "z_idle_stacks"
     assert out["IRQ 00"]["stack"]["n"] == "z_interrupt_stacks"            # irq ~ interrupt
     assert all(j["stack"] is None or j["stack"]["n"] != "z_main_stack" for j in out.values())
+
+
+# ---------------------------------------------------------------- write-one-to-clear and undefined reset bits
+
+def _extend(ad: Path, doc: str, regs: list[dict], fields: list[dict]) -> None:
+    d = ad / "docs" / doc / "records"
+    for name, add in (("register.jsonl", regs), ("field.jsonl", fields)):
+        rows = [json.loads(x) for x in (d / name).read_text().splitlines() if x.strip()]
+        write_jsonl(d / name, rows + add)
+
+
+def test_a_write_one_to_clear_field_does_not_guard_its_register_on_the_mcu(tmp_path):
+    ad = make(tmp_path, {BASE + 0x34: 0x0000_0003})
+    _extend(ad, "demo-svd", [reg("SR", 0x34, access="rw")],
+            [field("SR", "OVR", 1, 1, access="woclr"), field("SR", "FE", 0, 0, access="wclr")])
+    out = live.reg_read(ad, "UART1.SR")
+    assert "Refused" not in out and "UART1.SR @ 0x40008034 = 0x00000003" in out
+    assert "OVR[1] = 0x1" in out
+    whole = live.reg_read(ad, "UART1")                       # read, not left out under "Not read"
+    assert "UART1.SR @ 0x40008034" in whole and "- SR:" not in whole
+    assert "Refused" in live.reg_read(ad, "UART1.ECR")        # a read-clear (rclr) still guards
+
+
+def test_a_write_one_to_clear_field_does_not_guard_an_external_register(tmp_path):
+    ad = make_ext(tmp_path, SENSE)
+    _extend(ad, "sense@A", [], [])
+    d = ad / "docs" / "sense@A" / "records"
+    rows = [json.loads(x) for x in (d / "field.jsonl").read_text().splitlines()]
+    for r in rows:
+        if r["name"] == "OVF":
+            r["access"], r["desc"] = "woclr", "overflow flag; write 1 to clear"
+    write_jsonl(d / "field.jsonl", rows)
+    out = live.reg_read(ad, "sense_vbus.DIAG")
+    assert "Refused" not in out and "i2c read i2c@40005800 0x44 0x0B 2" in shell_log(ad)
+
+
+def test_fields_whose_reset_the_svd_leaves_undefined_are_not_marked_against_reset(tmp_path):
+    ad = make(tmp_path, {BASE + 0x38: 0x0000_00FF})
+    _extend(ad, "demo-svd", [reg("PART", 0x38, reset=None)],
+            [dict(field("PART", "LO", 3, 0), reset="0x5"), dict(field("PART", "HI", 7, 4), reset=None)])
+    out = live.reg_read(ad, "UART1.PART")
+    assert "reset 0x" not in out.split("LO")[0]              # no register reset claimed
+    assert "* LO[3:0] = 0xf (reset 0x5)" in out
+    hi = next(ln for ln in out.splitlines() if "HI[7:4]" in ln)
+    assert hi.strip() == "HI[7:4] = 0xf"                      # no star, no reset claimed

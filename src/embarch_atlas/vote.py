@@ -627,16 +627,31 @@ def _rng(bits: list[int]) -> list[int]:
     return [max(bits), min(bits)]
 
 
+def _svd_reset(sreg: dict) -> tuple[int, int]:
+    """(value, defined-bits mask) of an SVD register's reset. A register reset of null means the SVD
+    defines none, or leaves some bits to its resetMask; then only the fields that carry a reset count."""
+    if sreg.get("reset"):
+        return int(sreg["reset"], 16), (1 << 64) - 1
+    v = m = 0
+    for f in (sreg.get("fields") or {}).values():
+        if f.get("reset") is None or not f.get("bits"):
+            continue
+        hi, lo = max(f["bits"]), min(f["bits"])
+        m |= ((1 << (hi - lo + 1)) - 1) << lo
+        v |= int(f["reset"], 0) << lo
+    return v, m
+
+
 def diff_register(rmr: dict, sreg: dict) -> list[dict]:
     """Differences between one RM register section (expanded) and its SVD register, grouped."""
     out: list[dict] = []
     s_off = int(sreg["off"], 16)
-    s_reset = int(sreg["reset"], 16) if sreg.get("reset") else 0
+    s_reset, s_def = _svd_reset(sreg)
     if rmr.get("offset") is not None and rmr["offset"] != s_off:
         out.append({"kind": "offset differs", "detail": f"RM {rmr['offset']:#x} / SVD {s_off:#x}", "bits": None,
                     "rm": f"{rmr['offset']:#x}", "svd": f"{s_off:#x}", "q": rmr.get("q_offset")})
-    if rmr.get("reset") is not None and not rmr.get("reset_ambiguous"):
-        m = (rmr.get("reset_mask") or 0xFFFFFFFF) & ((1 << rmr.get("width", 32)) - 1)
+    if rmr.get("reset") is not None and not rmr.get("reset_ambiguous") and s_def:
+        m = (rmr.get("reset_mask") or 0xFFFFFFFF) & ((1 << rmr.get("width", 32)) - 1) & s_def
         if (rmr["reset"] & m) != (s_reset & m):
             out.append({"kind": "reset differs", "detail": f"RM {rmr['reset']:#010x} / SVD {s_reset:#010x}", "bits": None,
                         "rm": rmr["reset_text"], "svd": f"{s_reset:#010x}", "q": rmr.get("q_reset")})

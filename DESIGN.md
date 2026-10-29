@@ -394,6 +394,13 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   when the SVD marks a field `readAction` (access `rclr`) or the reference manual's field text says
   reading it clears something ("cleared by reading the USART_RDR register", matched by a few
   wordings over `rm_regs.json`). `allow_clear=true` reads it and says what the read cleared.
+  Write-one-to-clear (`woclr`, `wclr`: SVD `modifiedWriteValues="oneToClear"`, a printed `R/W1C`)
+  describes a write, so it does not guard: reading such a flag leaves it set.
+- **Undefined reset bits.** `mcu svd` claims a reset only for bits the SVD defines: a register with
+  no `resetValue` anywhere has `reset: null`, and so does one whose `resetMask` is not all ones
+  (its fields keep a reset only when every bit of the field is in the mask). The decode marks a
+  field against its own reset, so an undefined field is never starred; `mcu vote` compares only
+  the bits the SVD defines (the fields' resets when the register's is null).
 - **The live shell.** The CLI's `shell <command>` runs one command on the role's console: the direct,
   writable signal the role declares (`[live] console` pins one), through Core's exchange route, the
   port opened and closed per command. The answer is the command's output alone: escape codes out,
