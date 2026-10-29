@@ -381,9 +381,11 @@ def decode(reg: dict, v: int, fields: list[dict], all_fields: bool) -> list[str]
         hi, lo = _bits(f)
         covered |= ((1 << (hi - lo + 1)) - 1) << lo
         fv = field_value(v, f)
-        # the field's own reset when the record has the key (null: the SVD's resetMask leaves it undefined)
-        fres = _int(f["reset"]) if "reset" in f else reset
-        fr = field_value(fres, f) if fres is not None else None
+        # a field record's reset is field-relative already; null falls back to the register's reset
+        # (which is itself null where the SVD's resetMask leaves the bits undefined)
+        fr = _int(f.get("reset"))
+        if fr is None and reset is not None:
+            fr = field_value(reset, f)
         differs = fr is not None and fv != fr
         if not differs:
             same += 1

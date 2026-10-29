@@ -539,3 +539,16 @@ def test_fields_whose_reset_the_svd_leaves_undefined_are_not_marked_against_rese
     assert "* LO[3:0] = 0xf (reset 0x5)" in out
     hi = next(ln for ln in out.splitlines() if "HI[7:4]" in ln)
     assert hi.strip() == "HI[7:4] = 0xf"                      # no star, no reset claimed
+
+
+def test_a_field_reset_is_field_relative_and_null_falls_back_to_the_register(tmp_path):
+    ad = make(tmp_path, {BASE + 0x38: 0x50})
+    _extend(ad, "demo-svd", [reg("RST", 0x38, reset="0x00000050")],
+            [dict(field("RST", "HI", 7, 4), reset="0x5"), dict(field("RST", "LO", 3, 0), reset=None)])
+    out = live.reg_read(ad, "UART1.RST")
+    assert "* HI" not in out and "* LO" not in out and "(reset" not in out
+    ad2 = make(tmp_path / "b", {BASE + 0x38: 0x60})
+    _extend(ad2, "demo-svd", [reg("RST", 0x38, reset="0x00000050")],
+            [dict(field("RST", "HI", 7, 4), reset="0x5"), dict(field("RST", "LO", 3, 0), reset=None)])
+    off = live.reg_read(ad2, "UART1.RST")
+    assert "* HI[7:4] = 0x6 (reset 0x5)" in off and "* LO" not in off
