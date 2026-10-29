@@ -708,3 +708,27 @@ def test_named_malformed_shapes_leave_other_records_untouched(doc):
         assert any(i.startswith("V:") and r["id"] in i for i in x["issues"]), (key, x["issues"])
     for x in base["records"]:
         assert by[x["id"]] == x, x["id"]
+
+
+# ---- a non-object line survives a save byte for byte (atlas/024)
+
+def test_non_object_line_survives_a_save_and_is_reported(doc):
+    atlas, docdir = doc
+    _add_registers(docdir)
+    path = R.records_dir(docdir) / "zz-regs.jsonl"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    lines.insert(1, "[1, 2,   3]")
+    lines.append('"stray"')
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    pairs = R.load_records(docdir)
+    ch = next(r for _, r in pairs if r.get("id") == "syn1234.reg.CTL")
+    ch["prov"] = "engineer-confirmed"                      # force a change so check must rewrite this file
+    R.save_records(docdir, pairs)
+    after = path.read_text(encoding="utf-8").splitlines()
+    assert after[1] == "[1, 2, 3]" and after[-1] == '"stray"' and len(after) == len(lines)
+    rep = check.run_check(docdir)
+    assert "zz-regs.jsonl" in rep["files_written"]
+    out = path.read_text(encoding="utf-8").splitlines()
+    assert out[1] == "[1, 2, 3]" and out[-1] == '"stray"' and len(out) == len(lines)
+    msgs = [i for x in rep["records"] for i in x["issues"] if i.startswith("V:") and "not a JSON object" in i]
+    assert any("zz-regs.jsonl:2:" in m for m in msgs) and any(f"zz-regs.jsonl:{len(lines)}:" in m for m in msgs)

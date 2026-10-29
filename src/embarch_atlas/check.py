@@ -1200,9 +1200,8 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     pairs = R.load_records(docdir)
     # Schema first: a record of the wrong shape is reported as `V:` and kept out of every check that
     # assumes the schema's shapes (DESIGN.md principle 4: kept, marked llm-unverified, not a crash).
-    verrs = {i: R.validate(r) if isinstance(r, dict) else ["record is not an object"]
-             for i, (_, r) in enumerate(pairs)}
-    pairs = [(f, r if isinstance(r, dict) else {}) for f, r in pairs]
+    verrs = {i: [f"{f}:{r.line}: line is not a JSON object (kept as written)"] if isinstance(r, R.RawLine)
+             else R.validate(r) for i, (f, r) in enumerate(pairs)}
     bad = {i for i, e in verrs.items() if e}
     recs_all = [r for _, r in pairs]
     recs = [r for i, (_, r) in enumerate(pairs) if i not in bad]
@@ -1257,8 +1256,8 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
             if x and not x["ok"]:
                 extra.append(f"X: expect {x['expect']} got {x['got']}")
         status, issues = _status({k: v for k, v in res.items() if k != "A_by"}, r, extra)
-        np_ = new_prov(r, status, twin)
-        if np_ != r.get("prov"):
+        np_ = None if isinstance(r, R.RawLine) else new_prov(r, status, twin)
+        if not isinstance(r, R.RawLine) and np_ != r.get("prov"):
             prov_changed += 1
             if np_ is None:
                 r.pop("prov", None)

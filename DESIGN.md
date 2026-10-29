@@ -475,7 +475,7 @@ An atlas id is `<target>@<commit12>`.
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
 | `missing` | `missing` | missing-documents questions from BOM vs manifest |
 | `doc prep <pdf>` | `pdftext` | doc.json, pages/, toc, page classes |
-| `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; then checks A–T on the rest, writes checks.json, sets `prov` |
+| `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; then checks A–T on the rest, writes checks.json, sets `prov` |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
 | `doc regparse <doc_id> --template ti\|maxim` | `regparse` | deterministic register records |
 | `doc columns <doc_id> <page>...` | `columns` | a table page as rows and cells in reading orientation (sideways tables: rules, else gaps); for reading, never a quote source |
