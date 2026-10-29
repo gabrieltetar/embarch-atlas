@@ -235,9 +235,16 @@ value anchors only when that record is on a page the line cites. Rendered struct
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
   (https://code.claude.com/docs/en/mcp.md), so its 7 tools skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.
-- Every tool, the live ones included, declares `readOnlyHint`: Claude Code refuses an MCP
-  tool without it in plan mode. `shell` carries it too although a command can change the
-  board's state; Core's hardware lock serializes the live calls Claude Code then runs in parallel.
+- A tool declares `readOnlyHint` only when it cannot change the board, because a host (plan
+  mode, an auto-approval rule, a permission classifier, a worker's allowlist) trusts the hint.
+  The seven static tools and `live_stacks` carry it. `shell` carries it because it runs only
+  commands that match the `[live] read_only` list (default: `device list`, `kernel thread stacks`,
+  `kernel uptime`, `i2c read *`, `i2c read_byte *`; `i2c scan` stays out, it addresses every device
+  on the bus) and refuses any other, naming `shell_run`. `reg_read` carries it and refuses
+  `allow_clear=true`, naming `reg_read_clear`. `shell_run` (any command) and `reg_read_clear`
+  declare no hint, so the host asks. The CLI keeps one verb each (it has no hint). Core's hardware
+  lock serializes the live calls Claude Code runs in parallel. (Replaces the 2026-10-06 choice to
+  give `shell` the hint; field use showed the shell is mostly a write path.)
 - `init` writes both files and adds them to the fw repo's `.git/info/exclude`, so no
   tracked file changes.
 
@@ -387,10 +394,12 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   when the SVD marks a field `readAction` (access `rclr`) or the reference manual's field text says
   reading it clears something ("cleared by reading the USART_RDR register", matched by a few
   wordings over `rm_regs.json`). `allow_clear=true` reads it and says what the read cleared.
-- **The live shell.** `shell <command>` runs one command on the role's console: the direct,
+- **The live shell.** The CLI's `shell <command>` runs one command on the role's console: the direct,
   writable signal the role declares (`[live] console` pins one), through Core's exchange route, the
   port opened and closed per command. The answer is the command's output alone: escape codes out,
-  the echo and the closing prompt (the pinned build's `CONFIG_SHELL_PROMPT_UART`) dropped.
+  the echo and the closing prompt (the pinned build's `CONFIG_SHELL_PROMPT_UART`) dropped. The MCP
+  `shell` tool matches the whole command (whitespace collapsed, a command with `; | & `` $(` or a
+  newline never matches) against the `read_only` globs; `shell_run` takes any command.
 - **External registers.** `reg_read <DT label>.<REG>` (or `<part>.<REG>` when the part has one
   device on the board) finds the device in the join's I2C table (bus, address, part, document),
   the register in the part's records, and its `bus` record, and runs the shell's `i2c read_byte`
@@ -416,7 +425,7 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   build", and `live_stacks` then says the console of the role and its probe are different boards.
   An atlas with no SVD device compares nothing.
 - Off unless Core answers: the MCP server asks `embarch-api status` once at start and lists
-  `reg_read`, `shell` and `live_stacks` only then.
+  `reg_read`, `reg_read_clear`, `shell`, `shell_run` and `live_stacks` only then.
 
 ## `atlas.toml`
 
@@ -450,6 +459,7 @@ api = "embarch-api"                  # the embarch-api binary
 console = "<signal>"                 # optional: the console signal (default: the role's direct writable one)
 api_config = "<fw>/embarch/embarch.toml"  # its config (this is the default)
 role = "dut"                         # the enrolled role reg_read reads from
+read_only = ["device list", "kernel uptime"]  # globs the MCP `shell` tool accepts (replaces the default list)
 ```
 
 An atlas id is `<target>@<commit12>`.

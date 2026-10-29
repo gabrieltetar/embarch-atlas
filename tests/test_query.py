@@ -226,8 +226,20 @@ def test_mcp_server_lists_seven_tools_and_answers(atlas_dir):
     tools = asyncio.run(server.list_tools())
     assert sorted(t.name for t in tools) == sorted(query.TOOLS)
     live_tools = asyncio.run(build_server(atlas_dir, live=True).list_tools())
-    assert sorted(t.name for t in live_tools) == sorted([*query.TOOLS, "reg_read", "shell", "live_stacks"])
-    assert all(t.annotations and t.annotations.read_only_hint for t in live_tools)
+    assert sorted(t.name for t in live_tools) == sorted([*query.TOOLS, "reg_read", "reg_read_clear", "shell", "shell_run", "live_stacks"])
+    writes = {"shell_run", "reg_read_clear"}
+    for t in live_tools:
+        hint = bool(t.annotations and t.annotations.read_only_hint)
+        assert hint == (t.name not in writes), t.name
     res = asyncio.run(server.call_tool("pin_trace", {"pin_or_net": "PB9"}))
     text = json.dumps(res.model_dump() if hasattr(res, "model_dump") else res, default=str)
     assert "SDA_1" in text
+
+
+def test_mcp_reg_read_refuses_allow_clear_and_names_the_write_tool(atlas_dir):
+    pytest.importorskip("mcp")
+    from embarch_atlas.mcp_server import build_server
+
+    res = asyncio.run(build_server(atlas_dir, live=True).call_tool("reg_read", {"target": "X.Y", "allow_clear": True}))
+    text = json.dumps(res.model_dump() if hasattr(res, "model_dump") else res, default=str)
+    assert "reg_read_clear" in text and "Refused" in text

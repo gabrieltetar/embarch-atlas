@@ -346,6 +346,23 @@ def test_the_shell_answers_the_command_alone_on_the_roles_console(tmp_path):
     assert out == "src: live dut shell via embarch-core (signal dut-console, COM9)\n\ndevices:\n"
 
 
+def test_shell_read_runs_listed_reads_and_refuses_the_rest(tmp_path):
+    ad = make_ext(tmp_path, SENSE)
+    assert "devices:" in live.shell_read(ad, "device list")
+    assert "src: live" in live.shell_read(ad, "i2c read i2c@40005800 0x44 0x00 2")       # glob
+    for bad in ("gpio set gpio@1 3 1", "i2c scan i2c@40005800", "device list; gpio set g 1 1", "kernel uptime | x"):
+        out = live.shell_read(ad, bad)
+        assert "Refused" in out and "shell_run" in out, bad
+    assert shell_log(ad) == ["device list", "i2c read i2c@40005800 0x44 0x00 2"]
+
+
+def test_the_read_only_list_is_per_project(tmp_path):
+    ad = make_ext(tmp_path, SENSE)
+    assert live.settings(ad)["read_only"] == live.DEFAULT_READ_ONLY
+    assert "i2c scan" not in " ".join(live.DEFAULT_READ_ONLY) and "kernel uptime" in live.DEFAULT_READ_ONLY
+    assert live.is_read_only("foo  bar", ["foo *"]) and not live.is_read_only("foo", ["foo *"])
+
+
 def test_an_external_register_is_read_on_its_bus_and_decoded_msb_first(tmp_path):
     ad = make_ext(tmp_path, SENSE)
     out = live.reg_read(ad, "sense_vbus.CONFIG")

@@ -12,9 +12,10 @@ Register it for a project (local scope keeps it out of every tracked file):
 
 and set `"alwaysLoad": true` on its entry so its tools skip deferred tool search.
 
-Every tool declares `readOnlyHint`: Claude Code refuses an MCP tool without it in plan mode,
-and planning is where the atlas is read most. That includes `shell`, whose command can change
-the board's state; the engineer chose plan mode reaching the board over plan mode without it.
+A tool declares `readOnlyHint` only when it cannot change the board: a host (plan mode, an
+auto-approval rule, a classifier) trusts the hint. `shell` runs only commands the `[live] read_only`
+list marks as reads; `shell_run` (any command) and `reg_read_clear` (a read that clears something)
+carry no hint, so the host asks.
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
 
     server = MCPServer(name="embarch-atlas", instructions=INSTRUCTIONS)
     READ_ONLY = ToolAnnotations(read_only_hint=True)
+    WRITE = ToolAnnotations(read_only_hint=False)
 
     def view() -> query.Atlas:
         # Re-read per call: an atlas rebuilt while the server runs is picked up.
@@ -134,8 +136,17 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             instance) read with the board shell's `i2c read`, decoded against its datasheet. `*` marks a
             field not at its reset value. A running core is halted for the read (about 20 ms over a J-Link) and let run
             again. A register whose read clears something (a FIFO data register, a read-to-clear flag) is
-            refused, or left out of a peripheral read, unless allow_clear=true."""
-            return live_mod.reg_read(atlas_dir, target, allow_clear, role)
+            refused, or left out of a peripheral read; `reg_read_clear` reads those."""
+            if allow_clear:
+                return ("src: none\n\nRefused: allow_clear=true can clear a latched flag or pop a FIFO, so it is "
+                        "not a read-only call. Use `reg_read_clear`.\n")
+            return live_mod.reg_read(atlas_dir, target, False, role)
+
+        @server.tool(annotations=WRITE)
+        def reg_read_clear(target: str, role: str | None = None) -> str:
+            """Live: `reg_read` with allow_clear=true. Reads registers whose read clears a flag or pops a FIFO,
+            and says what the read cleared. Not read-only: a host asks before it runs."""
+            return live_mod.reg_read(atlas_dir, target, True, role)
 
         @server.tool(annotations=READ_ONLY)
         def live_stacks(build: str | None = None, role: str | None = None) -> str:
@@ -147,9 +158,18 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
 
         @server.tool(annotations=READ_ONLY)
         def shell(command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
-            """Live: one command on the board's shell (the console signal the role declares), through
-            embarch-core; returns its output with escape codes stripped. Free text: a command can change the
-            board's state. timeout_ms (default 3000, max 10000) bounds the wait for the prompt."""
+            """Live: one read-only command on the board's shell (the console signal the role declares), through
+            embarch-core; returns its output with escape codes stripped. Runs only commands matching the
+            `[live] read_only` list in atlas.toml (default: device list, kernel thread stacks, kernel uptime,
+            i2c read, i2c read_byte); anything else is refused, use `shell_run`.
+            timeout_ms (default 3000, max 10000) bounds the wait for the prompt."""
+            return live_mod.shell_read(atlas_dir, command, role, timeout_ms)
+
+        @server.tool(annotations=WRITE)
+        def shell_run(command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
+            """Live: any command on the board's shell, through embarch-core. It can change the board's state
+            (switch a power path, drive a GPIO), so it is not read-only: a host asks before it runs.
+            timeout_ms (default 3000, max 10000) bounds the wait for the prompt."""
             return live_mod.shell(atlas_dir, command, role, timeout_ms)
 
     return server

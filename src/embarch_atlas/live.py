@@ -62,6 +62,12 @@ CLEAR_ON_READ = [re.compile(p) for p in (
 )]
 
 
+# Shell commands the read-only `shell` tool may run: Zephyr's own read commands. `i2c scan` stays out
+# (it addresses every device on the bus). `[live] read_only` in atlas.toml replaces this list.
+DEFAULT_READ_ONLY = ["device list", "kernel thread stacks", "kernel uptime", "i2c read *", "i2c read_byte *"]
+_CHAIN = re.compile(r"[;|&`\n\r]|\$\(")
+
+
 class LiveError(RuntimeError):
     """Core refused or failed the read; the message is Core's own."""
 
@@ -78,7 +84,9 @@ def settings(atlas_dir: Path) -> dict[str, Any]:
         cfg = {}
     live = cfg.get("live") or {}
     api_config = live.get("api_config") or str(fw_dir(atlas_dir, cfg) / "embarch" / "embarch.toml")
-    return {"api": live.get("api") or "embarch-api", "api_config": api_config, "role": live.get("role") or "dut"}
+    ro = live.get("read_only")
+    return {"api": live.get("api") or "embarch-api", "api_config": api_config, "role": live.get("role") or "dut",
+            "read_only": list(ro) if isinstance(ro, list) else list(DEFAULT_READ_ONLY)}
 
 
 def call_api(s: dict[str, Any], args: list[str], timeout: float) -> dict[str, Any]:
@@ -534,6 +542,24 @@ def shell(atlas_dir: Path, command: str, role: str | None = None, timeout_ms: in
     tail = "" if con.used.get("prompt_seen") else (f"\n(no prompt within the timeout: the output may be cut; "
                                                    "pass a longer timeout_ms)\n")
     return f"src: {con.src()}\n\n{out}{tail}"
+
+
+def is_read_only(command: str, patterns: Iterable[str]) -> bool:
+    """True when the whole command matches a `read_only` glob; chained commands never do."""
+    from fnmatch import fnmatchcase
+    c = " ".join(command.split())
+    if not c or _CHAIN.search(command):
+        return False
+    return any(fnmatchcase(c, " ".join(p.split())) for p in patterns)
+
+
+def shell_read(atlas_dir: Path, command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
+    """`shell` for the tool that declares readOnlyHint: runs only commands the `read_only` list marks as reads."""
+    if not is_read_only(command, settings(atlas_dir)["read_only"]):
+        return (f"src: none\n\nRefused: `{command}` matches no `read_only` pattern, so it may change the board. "
+                "Call `shell_run` for it (a host asks before running that one); `[live] read_only` in "
+                "atlas.toml lists the commands `shell` accepts.\n")
+    return shell(atlas_dir, command, role, timeout_ms)
 
 
 # --------------------------------------------------------------------------- external registers
