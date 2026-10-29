@@ -452,6 +452,36 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   the echo and the closing prompt (the pinned build's `CONFIG_SHELL_PROMPT_UART`) dropped. The MCP
   `shell` tool matches the whole command (whitespace collapsed, a command with `; | & `` $(` or a
   newline never matches) against the `read_only` globs; `shell_run` takes any command.
+  **Five answers**, the same for `shell`, `shell_run` and the CLI (`live.shell_status`; the CLI exits
+  0, 1, 2, 3 as below, and `live reg-read` and `live stacks` exit 1 on a failed read):
+  1. the output (exit 0), with "no prompt within the timeout: the output may be cut; pass a longer
+     timeout_ms" only when bytes did arrive and the prompt did not;
+  2. the prompt came and the output is empty (exit 0): a second exchange, `retval`, on the console that
+     answered, and "the command printed nothing and returned N";
+  3. "The command did not run: <Core's error>" (exit 1): the failure was provably before the write;
+  4. "Nothing came back, not even the echo" (exit 2): zero bytes. No timeout advice (a longer wait does
+     not help a console that sent nothing); it prints whether the line was written, the port Core opened
+     (VID:PID, product, serial: a USB-UART bridge is not the DUT's own USB device) and the MCU core state
+     (DHCSR flags, or why unavailable), from Core's reply (embarch-core decision 85), which names no cause;
+  5. "the command was sent, then the console port went away" (`port_lost`) or "the command may have
+     run: <error>" (exit 3), with whatever output arrived; the command is not sent again.
+  **The fall-through rule.** `Console.exchange` moves to the next declared console only when the
+  failure is provably before the write: an error text saying `nothing was written` (open failed, a
+  zero-byte write), `signal-mismatch` (the port is not enumerable, a port wait ran out), an unknown or
+  non-writable signal, or embarch-api absent. Any other failure (embarch-api's own timeout, a write
+  that took some bytes, a flush failure, an unparsable reply) raises at once, `may_have_written` set,
+  and a `port_lost` or silent reply is an answer, never a retry: the line may be on the wire, and a
+  resend would run a state-changing command twice. The classification reads Core's error text, since
+  embarch-api forwards no status code, so an error text nobody listed counts as "may have written"; an
+  older Core without the `written`/`port_lost`/`echo_seen` fields gets the same treatment (a silent
+  reply says "this Core did not say whether the line was written, so it may have run").
+  **How the atlas knows `retval` is absent.** From the pinned build's `kconfig.json`
+  (`CONFIG_SHELL_CMDS_RETURN_VALUE`: set to `n`, or missing from a kconfig.json that lists every
+  symbol, means no `retval`); then `retval` is not sent and the answer says the status is unknown and
+  why. Without a kconfig.json the atlas asks the board: a `retval: command not found` reply is read
+  the same way. Firmware source text is never consulted, and the pinned build is the atlas's claim
+  about the board's image, not proof of it, which is why the `command not found` reply is read in
+  either case. A command that returned nonzero still exits 0 from the CLI: it ran and answered.
 - **External registers.** `reg_read <DT label>.<REG>` (or `<part>.<REG>` when the part has one
   device on the board) finds the device in the join's I2C table (bus, address, part, document),
   the register in the part's records, and its `bus` record, and runs the shell's `i2c read_byte`
@@ -542,6 +572,7 @@ An atlas id is `<target>@<commit12>`.
 | `mcu vote --svd-doc <id> --rm-doc <id> [--header <h>] [--periph P]` | `vote` | SVD vs header vs RM: `conflict` / `quirk` (correct omission) / `rule` records under the RM doc |
 | `mcu rm-outline <rm>` / `rm-sections <atlas>` / `rm-text <rm> <item>` / `rm-check <rm> [--chapter C]` / `rm-freeze <rm> [--item I \| --sections S \| --retire E]` | `rm` | outline; the worklist for peripherals in use; one work item's text with `[p.N]` markers; verify distilled RM files; freeze them in `cache/llm/` |
 | `build <target> [<commit>]` | `build` | worktree, west build, artifacts, stamp |
+| `kconfig-extract <atlas>` | `build` | writes kconfig.json for an atlas that lacks it, from its build dir: no rebuild, and only while the workspace's Zephyr is the build's |
 | `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md, graph.json |
 | `graph <atlas>` | `graph` | graph.json again from what `join` wrote (also run by `join`) |
 | `second-look queue <atlas> [--top N] [--diff-from <atlas>]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page (`--diff-from`: only those another atlas's queue did not hold, as `update` batches); the blind reader's prompt; the deterministic verdict; record and freeze verdicts |

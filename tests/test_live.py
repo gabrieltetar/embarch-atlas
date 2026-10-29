@@ -608,3 +608,161 @@ def test_the_guard_over_every_external_part_in_the_fixture_atlases_is_pinned(tmp
                      for r in live._jsonl(p / "records" / "register.jsonl") if live._ext_effects(p, [r]))
     assert guarded == ["chg@C:ALERT_DIAG", "chg@C:ChargeOption4", "chg@C:ChargerStatus", "chg@C:ProchotStatus",
                        "chg@C:STATUS", "sense@A:DIAG"]
+
+
+# ---------------------------------------------------------------- the shell's five answers
+
+# A scripted console: `script.json` maps a command to a full `exchange` body, or to {"error": text} for a
+# failed call. Two dut consoles are declared ("dut-a" then "dut-b"); every exchange is logged with the
+# console it went to in `shell.log` as "<console> <command>".
+FAKE_SCRIPTED = """#!{python}
+import json, sys
+from pathlib import Path
+here = Path(__file__).parent
+args = sys.argv[1:]
+verb = args[3]
+if verb == "list-signals":
+    names = json.loads((here / "consoles.json").read_text())
+    print(json.dumps({{"success": True, "signals": [
+        {{"name": n, "origin_role": "dut", "direction": "bidirectional", "route": {{"kind": "direct"}}}} for n in names]}}))
+    sys.exit(0)
+name = args[args.index("--name") + 1]
+cmd = args[args.index("--write") + 1]
+with open(here / "shell.log", "a") as f:
+    f.write(name + " " + cmd + "\\n")
+script = json.loads((here / "script.json").read_text())
+body = script.get(name + " " + cmd) or script[cmd]
+if "error" in body:
+    print(json.dumps({{"success": False, "error": body["error"]}})); sys.exit(1)
+ex = {{"signal": name, "port": "COM9", "until_seen": True, "truncated": False}}
+ex.update(body)
+print(json.dumps({{"success": True, "exchange": ex}}))
+"""
+P = "\x1b[1;32muart:~$ "
+
+
+def make_scripted(tmp: Path, script: dict, consoles=("dut-a",), retval=None) -> Path:
+    ad = make_ext(tmp, {})
+    (ad / "fake-api").write_text(FAKE_SCRIPTED.format(python=sys.executable))
+    (ad / "script.json").write_text(json.dumps(script))
+    (ad / "consoles.json").write_text(json.dumps(list(consoles)))
+    syms = {"SHELL_PROMPT_UART": {"v": "uart:~$ "}}
+    if retval is not None:
+        syms["SHELL_CMDS_RETURN_VALUE"] = {"v": retval}
+    write_json(ad / "atlases" / "core@000000000000" / "kconfig.json", {"symbols": syms})
+    return ad
+
+
+def echoed(cmd: str, out: str = "") -> dict:
+    return {"text": f"{P}{cmd}\r\n{out}{P}", "echo_seen": True, "written": True, "port_lost": False,
+            "bytes_read": 40}
+
+
+def test_empty_output_with_the_prompt_seen_asks_retval_and_prints_the_status(tmp_path):
+    ad = make_scripted(tmp_path, {"budget set 5": echoed("budget set 5"), "retval": echoed("retval", "0\r\n")},
+                       retval="y")
+    out, code = live.shell_status(ad, "budget set 5")
+    assert code == 0 and "printed nothing and returned 0" in out and "src: live dut shell" in out
+    assert shell_log(ad) == ["dut-a budget set 5", "dut-a retval"]
+    ad = make_scripted(tmp_path / "b", {"budget set 99": echoed("budget set 99"),
+                                        "retval": echoed("retval", "-22\r\n")}, retval="y")
+    assert "returned -22" in live.shell(ad, "budget set 99")
+
+
+def test_the_pinned_build_without_retval_skips_it_and_says_so(tmp_path):
+    for i, rv in enumerate(("n", None)):          # symbol set to n, or the symbol absent from kconfig.json
+        ad = make_scripted(tmp_path / str(i), {"budget set 5": echoed("budget set 5")}, retval=rv)
+        out, code = live.shell_status(ad, "budget set 5")
+        assert code == 0 and "status is unknown" in out and "no `retval` command" in out
+        assert "CONFIG_SHELL_CMDS_RETURN_VALUE" in out
+        assert shell_log(ad) == ["dut-a budget set 5"]                  # retval never sent
+
+
+def test_no_kconfig_json_asks_the_board_and_reads_command_not_found(tmp_path):
+    ad = make_scripted(tmp_path, {"budget set 5": echoed("budget set 5"),
+                                  "retval": echoed("retval", "retval: command not found\r\n")})
+    (ad / "atlases" / "core@000000000000" / "kconfig.json").unlink()
+    out, code = live.shell_status(ad, "budget set 5")
+    assert code == 0 and "the board's image has no `retval` command" in out
+    assert shell_log(ad) == ["dut-a budget set 5", "dut-a retval"]
+
+
+def test_a_silent_console_says_so_with_the_identity_and_core_state_and_no_longer_timeout_advice(tmp_path):
+    silent = {"text": "", "until_seen": False, "echo_seen": False, "written": True, "port_lost": False,
+              "bytes_read": 0,
+              "port_identity": {"vendor_id": 0x1234, "product_id": 0xABCD, "product": "Acme Bridge", "serial_number": "S1"},
+              "core_state": {"dhcsr": 0x03000000, "s_halt": False, "s_sleep": True, "s_lockup": False,
+                             "s_reset_st": False, "s_retire_st": False}}
+    ad = make_scripted(tmp_path, {"ping": silent}, retval="y")
+    out, code = live.shell_status(ad, "ping")
+    assert code == 2 and "Nothing came back, not even the echo" in out and "The line was written." in out
+    assert "1234:abcd, product Acme Bridge, serial S1" in out and "SLEEP" in out and "0x03000000" in out
+    assert "pass a longer timeout_ms" not in out and "retval" not in shell_log(ad)[-1]
+    out = live.shell(make_scripted(tmp_path / "b", {"ping": dict(silent, core_state={"unavailable": "no probe enrolled"})}), "ping")
+    assert "core state is unavailable: no probe enrolled" in out
+    old = live.shell(make_scripted(tmp_path / "c", {"ping": {"text": "", "until_seen": False}}), "ping")
+    assert "did not say whether the line was written" in old
+
+
+def test_a_missing_prompt_with_bytes_keeps_the_longer_timeout_advice(tmp_path):
+    ad = make_scripted(tmp_path, {"slow": {"text": f"{P}slow\r\nstep 1\r\n", "until_seen": False, "echo_seen": True}})
+    out, code = live.shell_status(ad, "slow")
+    assert code == 0 and "step 1" in out and "pass a longer timeout_ms" in out
+
+
+def test_port_lost_after_the_write_is_not_a_did_not_run_and_is_not_retried(tmp_path):
+    lost = {"text": f"{P}usb off\r\nswitching\r\n", "until_seen": False, "echo_seen": True, "written": True,
+            "port_lost": True, "bytes_read": 30}
+    ad = make_scripted(tmp_path, {"usb off": lost}, consoles=("dut-a", "dut-b"))
+    out, code = live.shell_status(ad, "usb off")
+    assert code == 3 and "console port went away" in out and "switching" in out and "do not resend" in out
+    assert "did not run" not in out and shell_log(ad) == ["dut-a usb off"]
+    nothing = dict(lost, text="", bytes_read=0)
+    assert live.shell_status(make_scripted(tmp_path / "b", {"usb off": nothing}), "usb off")[1] == 3
+
+
+def test_a_500_after_the_write_may_have_run_and_never_reaches_the_second_console(tmp_path):
+    for i, why in enumerate(("error writing to the signal's port after 3 of 7 bytes",
+                             "error flushing the signal's port (the line was written, so it may have gone out)",
+                             "embarch-api signal-exchange gave no answer in 90 s")):
+        ad = make_scripted(tmp_path / str(i), {"usb off": {"error": "signal-exchange failed: " + why}},
+                           consoles=("dut-a", "dut-b"))
+        out, code = live.shell_status(ad, "usb off")
+        assert code == 3 and "may have run" in out and "not sent again" in out and "did not run" not in out, why
+        assert shell_log(ad) == ["dut-a usb off"], why
+
+
+def test_a_failure_provably_before_the_write_falls_through_to_the_next_console(tmp_path):
+    for i, why in enumerate(("failed to open signal 'dut-a' on COM9 at 115200 baud: nothing was written",
+                             "signal-mismatch: signal 'dut-a' (from role 'dut') - no port with serial S1")):
+        ad = make_scripted(tmp_path / str(i), {"dut-a ping": {"error": "signal-exchange failed: " + why},
+                                               "dut-b ping": echoed("ping", "pong\r\n")},
+                           consoles=("dut-a", "dut-b"))
+        out, code = live.shell_status(ad, "ping")
+        assert code == 0 and "pong" in out and "signal dut-b" in out
+        assert shell_log(ad) == ["dut-a ping", "dut-b ping"]
+    both = make_scripted(tmp_path / "x", {"ping": {"error": "failed to open signal 'x': nothing was written"}},
+                         consoles=("dut-a", "dut-b"))
+    out, code = live.shell_status(both, "ping")
+    assert code == 1 and "The command did not run" in out and shell_log(both) == ["dut-a ping", "dut-b ping"]
+
+
+def test_shell_run_and_the_cli_use_the_same_answers_and_exit_codes(tmp_path, capsys):
+    import argparse
+    ad = make_scripted(tmp_path, {"ping": {"text": "", "until_seen": False}})
+    ns = argparse.Namespace(atlas_dir=str(ad), command=["ping"], role=None, timeout_ms=None)
+    assert live._cmd_shell(ns) == 2 and "Nothing came back" in capsys.readouterr().out
+    ok = make_scripted(tmp_path / "ok", {"ping": echoed("ping", "pong\r\n")})
+    assert live._cmd_shell(argparse.Namespace(atlas_dir=str(ok), command=["ping"], role=None, timeout_ms=None)) == 0
+    # no console declared: did not run, exit 1
+    none = make_scripted(tmp_path / "none", {}, consoles=())
+    assert live._cmd_shell(argparse.Namespace(atlas_dir=str(none), command=["ping"], role=None, timeout_ms=None)) == 1
+    assert "Refused" in live.shell_read(ad, "usb off")      # the read-only gate is unchanged
+
+
+def test_reg_read_cli_exits_non_zero_on_a_failed_read(tmp_path, capsys):
+    import argparse
+    ad = make_ext(tmp_path, {})
+    ns = lambda t: argparse.Namespace(atlas_dir=str(ad), target=t, allow_clear=False, role=None)
+    assert live._cmd_reg_read(ns("sense_vsys.VBUS")) == 1 and "Nothing answered" in capsys.readouterr().out
+    assert live._cmd_reg_read(ns("nothing_here.REG")) == 1

@@ -69,7 +69,9 @@ _CHAIN = re.compile(r"[;|&`\n\r]|\$\(")
 
 
 class LiveError(RuntimeError):
-    """Core refused or failed the read; the message is Core's own."""
+    """Core refused or failed the read; the message is Core's own. `may_have_written` is set only on an
+    exchange that failed where the line may already have gone out (see `Console.run`)."""
+    may_have_written = False
 
 
 # --------------------------------------------------------------------------- transport
@@ -506,6 +508,15 @@ def clean(text: str, command: str, prompt: str) -> str:
     return t.rstrip("\n") + "\n"
 
 
+# What Core's and embarch-api's own error texts say when nothing reached the wire: the signal is unknown or
+# not writable, the port is not enumerable (`signal-mismatch`, a port wait that ran out), the open failed
+# or the write failed with zero bytes (embarch-core decision 85), or embarch-api itself is not installed.
+# Anything else (a timeout of embarch-api, "after N of M bytes", a flush failure, an unparsable reply) may
+# have written.
+_NOT_WRITTEN = re.compile(r"nothing was written|signal-mismatch|no signal is declared|Core writes only|"
+                          r"; core state: |embarch-api not found|\bnot found; install", re.I)
+
+
 class Console:
     """One role's shell, through Core: each `run` is one exchange (the port opened and closed)."""
 
@@ -524,35 +535,135 @@ class Console:
         self.prompt = prompt_of(atlas_dir)
         self.used: dict[str, Any] = {}
 
-    def run(self, command: str, timeout_ms: int = EXCHANGE_TIMEOUT_MS) -> str:
+    def exchange(self, command: str, timeout_ms: int = EXCHANGE_TIMEOUT_MS,
+                 names: list[str] | None = None) -> dict[str, Any]:
+        """One exchange, Core's answer as it came (`text`, `until_seen`, and the wire fields of its
+        decision 85 when this Core has them). Moves to the next declared console only when the failure
+        is provably before anything was written; any other failure raises at once with
+        `may_have_written` set, because the line may be on the wire and a resend would run it twice."""
         last = None
-        for name in self.names:
+        for name in names or self.names:
             try:
                 ex = call_api(self.s, ["signal-exchange", "--name", name, "--write", command, "--until",
                                        self.prompt, "--timeout-ms", str(timeout_ms),
                                        "--port-wait-ms", str(PORT_WAIT_MS)], READ_TIMEOUT_S)["exchange"]
-            except LiveError as e:   # declared but not enumerable now: try the next console
-                last = e
-                continue
+            except LiveError as e:
+                if _NOT_WRITTEN.search(str(e)):   # no port, would not open, no write: the next console is safe
+                    last = e
+                    continue
+                e.may_have_written = True
+                raise
             self.used = {"signal": ex.get("signal"), "port": ex.get("port"), "prompt_seen": ex.get("until_seen")}
-            return clean(ex.get("text") or "", command, self.prompt)
+            return ex
         raise last or LiveError("no console answered")
+
+    def run(self, command: str, timeout_ms: int = EXCHANGE_TIMEOUT_MS) -> str:
+        return clean(self.exchange(command, timeout_ms).get("text") or "", command, self.prompt)
 
     def src(self) -> str:
         u = self.used
         return f"live {self.role} shell via embarch-core (signal {u.get('signal')}, {u.get('port')})"
 
 
-def shell(atlas_dir: Path, command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
-    """One shell command on the role's console, its output with escape codes stripped."""
+def retval_known(atlas_dir: Path) -> bool | None:
+    """Whether the pinned build has Zephyr's `retval` command: `CONFIG_SHELL_CMDS_RETURN_VALUE` in its
+    kconfig.json (a symbol that file lacks does not exist in that Zephyr). None when there is no
+    kconfig.json to ask; the command's own `command not found` then answers."""
+    from .query import current_atlas
+    try:
+        atlas = current_atlas(Path(atlas_dir), None)
+        syms = json.loads((atlas / "kconfig.json").read_text(encoding="utf-8"))["symbols"]
+    except (OSError, ValueError, KeyError, TypeError, LookupError, AttributeError):
+        return None
+    v = (syms.get("SHELL_CMDS_RETURN_VALUE") or {}).get("v")
+    return v in ("y", True)
+
+
+def _identity(ex: dict) -> str:
+    p = ex.get("port_identity")
+    if not p:
+        return ""
+    hx = lambda v: "?" if v is None else f"{v:04x}"
+    return (f"The port Core opened: {hx(p.get('vendor_id'))}:{hx(p.get('product_id'))}, product "
+            f"{p.get('product') or '?'}, serial {p.get('serial_number') or '?'} (a USB-UART bridge is not the "
+            "DUT's own USB device).\n")
+
+
+def _core_state(ex: dict) -> str:
+    c = ex.get("core_state")
+    if not c:
+        return ""
+    if c.get("unavailable"):
+        return f"The MCU core state is unavailable: {c['unavailable']}.\n"
+    flags = [f"{k[2:].upper()}" for k in ("s_halt", "s_sleep", "s_lockup", "s_reset_st", "s_retire_st") if c.get(k)]
+    return ("The MCU core state (DHCSR" + (f" 0x{c['dhcsr']:08x}" if isinstance(c.get("dhcsr"), int) else "") + "): "
+            + (", ".join(flags) or "no flag set") + ".\n")
+
+
+def _retval(atlas_dir: Path, con: Console, command: str) -> str:
+    """The sentence for a command that printed nothing: what `retval` says it returned, or why that is unknown."""
+    known = retval_known(atlas_dir)
+    if known is False:
+        return ("The command printed nothing. The status is unknown: the pinned build has no `retval` command "
+                "(CONFIG_SHELL_CMDS_RETURN_VALUE is not set in its kconfig.json), so nothing was asked.\n")
+    try:
+        ex = con.exchange("retval", 2000, [con.used["signal"]])
+    except LiveError as e:
+        return f"The command printed nothing, and its status could not be read: {e}\n"
+    out = clean(ex.get("text") or "", "retval", con.prompt).strip()
+    if not out:
+        return "The command printed nothing, and `retval` answered nothing: the status is unknown.\n"
+    if "command not found" in out:
+        return ("The command printed nothing. The status is unknown: the board's image has no `retval` command "
+                f"(it answered `{out.splitlines()[-1].strip()}`).\n")
+    m = re.search(r"-?\d+", out)
+    return (f"The command printed nothing and returned {int(m[0])}.\n" if m else
+            f"The command printed nothing; `retval` answered `{out}`.\n")
+
+
+def shell_status(atlas_dir: Path, command: str, role: str | None = None,
+                 timeout_ms: int | None = None) -> tuple[str, int]:
+    """`shell` with its exit status: 0 an answer (the output, or an empty success with its return value),
+    1 the command did not run, 2 nothing came back, 3 the command was sent and the port went away or an
+    error left it unknown whether it ran."""
     try:
         con = Console(atlas_dir, role)
-        out = con.run(command, min(int(timeout_ms or EXCHANGE_TIMEOUT_MS), 10_000))
+        ex = con.exchange(command, min(int(timeout_ms or EXCHANGE_TIMEOUT_MS), 10_000))
     except LiveError as e:
-        return f"src: none\n\nThe command did not run: {e}\n"
-    tail = "" if con.used.get("prompt_seen") else (f"\n(no prompt within the timeout: the output may be cut; "
-                                                   "pass a longer timeout_ms)\n")
-    return f"src: {con.src()}\n\n{out}{tail}"
+        if e.may_have_written:
+            return (f"src: none\n\nThe command may have run: {e}\nIt was not sent again, on this console or "
+                    "another: check what it did before resending it.\n", 3)
+        return f"src: none\n\nThe command did not run: {e}\n", 1
+    text = ex.get("text") or ""
+    out = clean(text, command, con.prompt)
+    echo = ex.get("echo_seen")
+    wait = min(int(timeout_ms or EXCHANGE_TIMEOUT_MS), 10_000)
+    if ex.get("port_lost"):
+        got = f"What arrived before that:\n{out}" if text else "No byte had come back."
+        return (f"src: {con.src()}\n\nThe command was sent, then the console port went away (the command ran; "
+                f"do not resend it). {got}\n", 3)
+    if not text:
+        wr = ex.get("written")
+        sent = ("The line was written." if wr is True else "The line was not written." if wr is False else
+                "This Core did not say whether the line was written, so it may have run.")
+        return (f"src: {con.src()}\n\nNothing came back, not even the echo, within {wait} ms. {sent} A longer "
+                f"timeout_ms will not help a console that sent no byte; look at the port and the board.\n"
+                f"{_identity(ex)}{_core_state(ex)}", 2)
+    prompt_seen = bool(con.used.get("prompt_seen"))
+    if not prompt_seen:
+        tail = "\n(no prompt within the timeout: the output may be cut; pass a longer timeout_ms)\n"
+        if echo is False:
+            tail += "(the command's echo did not appear: this may be the console's own output, not the command's)\n"
+        return f"src: {con.src()}\n\n{out}{tail}", 0
+    if not out.strip():
+        return f"src: {con.src()}\n\n{_retval(atlas_dir, con, command)}", 0
+    return f"src: {con.src()}\n\n{out}", 0
+
+
+def shell(atlas_dir: Path, command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
+    """One shell command on the role's console, its output with escape codes stripped; see `shell_status`
+    for the four other answers."""
+    return shell_status(atlas_dir, command, role, timeout_ms)[0]
 
 
 def is_read_only(command: str, patterns: Iterable[str]) -> bool:
@@ -1044,14 +1155,24 @@ def live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = No
 
 def _cmd_reg_read(args) -> int:
     from . import common
-    print(reg_read(common.atlas_dir(args.atlas_dir), args.target, args.allow_clear, args.role), end="")
-    return 0
+    out = reg_read(common.atlas_dir(args.atlas_dir), args.target, args.allow_clear, args.role)
+    print(out, end="")
+    return 1 if out.startswith("src: none") or re.search(r"^The read of .* failed: |^The image on the board has no I2C",
+                                                         out, re.M) else 0
 
 
 def _cmd_shell(args) -> int:
     from . import common
-    print(shell(common.atlas_dir(args.atlas_dir), " ".join(args.command), args.role, args.timeout_ms), end="")
-    return 0
+    out, code = shell_status(common.atlas_dir(args.atlas_dir), " ".join(args.command), args.role, args.timeout_ms)
+    print(out, end="")
+    return code
+
+
+def _cmd_stacks(a) -> int:
+    from . import common
+    out = live_stacks(common.atlas_dir(a.atlas_dir), a.build, a.role)
+    print(out, end="")
+    return 1 if out.startswith("src: none") else 0
 
 
 def register(sub, groups) -> None:
@@ -1067,7 +1188,7 @@ def register(sub, groups) -> None:
     p = g.add_parser("stacks", help="every thread's stack peak on the board, joined to its stack symbol and option")
     p.add_argument("--build", help="the build dir the board runs (default: the atlas's pinned build)")
     p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")
-    p.set_defaults(func=lambda a: print(live_stacks(common.atlas_dir(a.atlas_dir), a.build, a.role), end="") or 0)
+    p.set_defaults(func=_cmd_stacks)
     p = g.add_parser("shell", help="one command on the board's shell, through embarch-core")
     p.add_argument("command", nargs="+")
     p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")
