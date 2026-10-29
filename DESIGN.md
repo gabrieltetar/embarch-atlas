@@ -575,11 +575,11 @@ An atlas id is `<target>@<commit12>`.
 | `kconfig-extract <atlas>` | `build` | writes kconfig.json for an atlas that lacks it, from its build dir: no rebuild, and only while the workspace's Zephyr is the build's |
 | `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md, graph.json |
 | `graph <atlas>` | `graph` | graph.json again from what `join` wrote (also run by `join`) |
-| `second-look queue <atlas> [--top N] [--diff-from <atlas>]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page (`--diff-from`: only those another atlas's queue did not hold, as `update` batches); the blind reader's prompt; the deterministic verdict; record and freeze verdicts |
+| `second-look queue <atlas> [--top N] [--diff-from <atlas>]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page (`--diff-from`: only those another atlas's queue did not hold under the same `(id, key)`, as `update` batches; a fact that kept its id but changed a checked field is batched and counted as changed); the blind reader's prompt; the deterministic verdict; record and freeze verdicts |
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name; abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
-| `update <target> [commit]` | `update` | bump: stop while a translation is behind its source (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts; the previous atlas's backlog is counted), the diff written into the new atlas |
+| `update <target> [commit]` | `update` | bump: stop while a translation is behind its source (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
 | `q <lookup>` | `query` | the thirteen lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
@@ -626,7 +626,14 @@ reused by every later atlas whose fact has the same key: a hash over **the field
 checks for that kind** (`secondlook.CHECKED`: a pin's number, name, direction, type, active level,
 I/O and power flow; a limit's symbol, condition, values and unit; ...) and the text of the cited
 pages. A field the look does not check (a description, a note, a quote) can change without voiding
-the verdict; a verdict found under the older whole-record key is aliased to this one on first use. When several entries share a
+the verdict; a verdict found under the older whole-record key is aliased to this one on first use.
+The compare checks every value the reader is asked for that the key covers: a limit or timing's `cond` and
+a strap's `condition` by meaning (`text_value_verdict`: reworded is confirmed, clearly different words or
+quantities are a conflict, an ambiguous overlap is unresolved, a reader that states none is silent), a
+register's `width` numerically. This tightening did **not** bump `CHECKED_VERSION`: verdicts already
+frozen under a current key stay frozen, including a `confirmed` that never looked at the condition or
+width, because a bump re-reads every fact in every atlas. They are corrected when the fact's checked
+fields change, or by a deliberate `CHECKED_VERSION` bump if a full re-look is wanted. When several entries share a
 unit key, the one whose recorded file hashes match the files on disk wins, then the newest; a
 newer freeze of the same files marks the older entry `superseded` (kept, never deleted).
 

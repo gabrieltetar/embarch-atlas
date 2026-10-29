@@ -237,11 +237,25 @@ def priority(why: list[str]) -> int:
 
 
 def owed_by(prev: Path | None) -> set | None:
-    """The ids `prev`'s queue already held (its backlog); None when it has no queue to tell by."""
+    """The `(id, key)` pairs `prev`'s queue already held (its backlog); None when it has no queue to
+    tell by. A fact that kept its id but changed a checked field has a new key, so it is not owed. A
+    queue written before keys existed holds `(id, None)`, which owes the id whatever its key."""
     pq = prev / "second_look_queue.jsonl" if prev else None
     if not pq or not pq.is_file():
         return None
-    return {q.get("id") for q in read_jsonl(pq)}
+    return {(q.get("id"), q.get("key")) for q in read_jsonl(pq)}
+
+
+def is_owed(item: dict, owed: set) -> bool:
+    return (item.get("id"), item.get("key")) in owed or (item.get("id"), None) in owed
+
+
+def split_diff(items: list[dict], owed: set | None) -> tuple[list[dict], int]:
+    """(the items the previous atlas did not owe under this key, how many of those it owed under another)."""
+    owed = owed or set()
+    ids = {i for i, _ in owed}
+    diff = [it for it in items if not is_owed(it, owed)]
+    return diff, sum(1 for it in diff if it.get("id") in ids)
 
 
 def batches(queue: list[dict], top: int, per_batch: int = 8) -> list[dict]:
@@ -337,10 +351,11 @@ def cmd_queue(args) -> int:
         if owed is None:
             print(f"second-look queue: {prev.name} has no second_look_queue.jsonl to tell the diff by", file=sys.stderr)
             return 2
-        diff = [it for it in select(q, getattr(args, "why", None), getattr(args, "doc", None)) if it.get("id") not in owed]
+        diff, changed = split_diff(select(q, getattr(args, "why", None), getattr(args, "doc", None)), owed)
         bs = batches(diff, args.top or len(diff)) if diff else []
         write_json(atlas / "second_look_batches.json", bs)
-        print(f"{len(diff)} items new or changed since {prev.name} ({len(q) - len(diff)} queued there already), "
+        print(f"{len(diff)} items new or changed since {prev.name} ({f'{changed} changed under a new key, ' if changed else ''}"
+              f"{len(q) - len(diff)} queued there already), "
               f"{min(args.top or len(diff), len(diff))} in {len(bs)} page batches -> {atlas / 'second_look_batches.json'}")
     elif getattr(args, "top", None):
         bs = batches(select(q, getattr(args, "why", None), getattr(args, "doc", None)), args.top)
@@ -673,6 +688,19 @@ def expand_pair(vals: dict, first: dict) -> dict:
     return out
 
 
+def _condition(first, second, name: str, diffs: list, soft: list) -> None:
+    """The condition a value holds under, compared by meaning (`text_value_verdict`). A reader that
+    states none says nothing, and stays silent. A condition that reads as another one is a conflict
+    only when its words and quantities clearly differ; an ambiguous overlap is unresolved."""
+    if not str(first or "").strip() or not str(second or "").strip():
+        return
+    v, why = text_value_verdict(str(first), str(second))
+    if v == "conflict":
+        diffs.append(f"{name}: first {first!r} vs second {second!r} ({why})")
+    elif v == "unresolved":
+        soft.append(f"{name}: first {first!r} vs second {second!r} ({why})")
+
+
 def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
     """confirmed / conflict / unresolved, and why. Deterministic: no judgment here."""
     if not reading.get("found", True):
@@ -699,6 +727,7 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
                 diffs.append(f"{f}: first {first.get(f)!r} vs second {vals.get(f)!r}")
         if first.get("unit") and vals.get("unit") and _unit(first["unit"]) != _unit(vals["unit"]):
             diffs.append(f"unit: first {first['unit']!r} vs second {vals['unit']!r}")
+        _condition(first.get("cond"), vals.get("cond"), "cond", diffs, soft)
     elif k == "strap":
         fv, sv = first.get("value"), vals.get("value")
         a, b = _addr(fv), _addr(sv)
@@ -709,6 +738,7 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
             v, why = text_value_verdict(fv, sv)
             if v != "confirmed":
                 return v, [f"value: first {fv!r} vs second {sv!r} ({why})"]
+        _condition(first.get("condition"), vals.get("condition"), "condition", diffs, soft)
     elif k == "pin":
         # Compare what the join reads: the name (overline included), the direction class, whether
         # the output is open-drain, and the active level. Free-form type words (analog, logic,
@@ -745,6 +775,10 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
         if k == "register" and first.get("addr") is not None and vals.get("addr") is not None \
                 and _addr(first["addr"]) != _addr(vals["addr"]):
             diffs.append(f"addr: first {first['addr']!r} vs second {vals['addr']!r}")
+        if k == "register":
+            a, b = _num(first.get("width")), _num(vals.get("width"))
+            if a is not None and b is not None and a != b:
+                diffs.append(f"width: first {first.get('width')!r} vs second {vals.get('width')!r}")
         a, b = _num(first.get("reset")), _num(vals.get("reset"))
         if a is not None and b is not None and a != b:
             diffs.append(f"reset: first {first.get('reset')!r} vs second {vals.get('reset')!r}")

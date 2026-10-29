@@ -180,3 +180,21 @@ def test_a_declared_board_with_no_netlist_does_not_stop_update(tmp_path):
     (ad / "atlas.toml").write_text(f'[project]\nfw = "{tmp_path / "fw"}"\nsources = "hw"\n\n'
                                    '[[boards]]\nlabel = "B"\npdf = "b.pdf"\n')
     assert update.stale_translations(ad) == []
+
+
+def test_a_changed_fact_that_keeps_its_id_is_batched_not_backlog(tmp_path, monkeypatch):
+    prev = _atlas(tmp_path, "core@000000000001", "2026-10-01T00:00:00Z")
+    new = _atlas(tmp_path, "core@000000000002", "2026-10-02T00:00:00Z")
+    write_jsonl(prev / "second_look_queue.jsonl", [{"id": "same", "key": "k1"}, {"id": "moved", "key": "k1"}])
+    item = lambda i, k: {"id": i, "doc": "demo@1", "p": [1], "why": ["limit"], "ask": "x", "key": k, "priority": 1,
+                         "kind": "limit", "pdf": None, "src": "table"}
+    queue = [item("same", "k1"), item("moved", "k2"), item("fresh", "k9")]
+    monkeypatch.setattr(S, "build_queue", lambda ad, atlas: (queue, {"frozen": 0, "frozen_keys": []}))
+    monkeypatch.setattr(S, "carry_frozen", lambda ad, atlas, keys: 0)
+    out = update.second_look_diff(tmp_path, new, prev)
+    assert (out["diff"], out["changed"], out["backlog"]) == (2, 1, 1)
+    batched = {it["id"] for b in read_json(new / "second_look_batches.json") for it in b["items"]}
+    assert batched == {"moved", "fresh"}
+    # the same split through `second-look queue --diff-from`
+    diff, changed = S.split_diff(queue, S.owed_by(prev))
+    assert ({it["id"] for it in diff}, changed) == ({"moved", "fresh"}, 1)

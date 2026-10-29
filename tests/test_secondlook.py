@@ -299,3 +299,28 @@ def test_pin_flow_is_compared():
     assert vague[0] == "unresolved"
     asked = "which way power moves"
     assert asked in sl.ask({"kind": "pin", "pin": 2, "flow": "sink"}) and asked not in sl.ask({"kind": "pin", "pin": 2})
+
+
+def test_a_limit_read_under_another_condition_is_not_confirmed():
+    first = {"kind": "limit", "min": 1.0, "max": 2.0, "unit": "V", "cond": "VDD = 3.3 V, TA = 25 °C"}
+    same = {"found": True, "values": {"min": 1.0, "max": 2.0, "unit": "V", "cond": "TA = 25 °C, VDD = 3.3 V"}}
+    other = {"found": True, "values": {"min": 1.0, "max": 2.0, "unit": "V", "cond": "VDD = 1.8 V, TA = 85 °C"}}
+    silent = {"found": True, "values": {"min": 1.0, "max": 2.0, "unit": "V"}}
+    assert sl.compare_one(first, same)[0] == "confirmed"
+    assert sl.compare_one(first, other)[0] == "conflict"
+    assert sl.compare_one(first, silent)[0] == "confirmed"
+    v, why = sl.compare_one({**first, "cond": "supply voltage rising slowly"},
+                           {"found": True, "values": {**same["values"], "cond": "supply falling quickly"}})
+    assert v != "confirmed" and any(w.startswith("cond") for w in why)
+
+
+def test_a_strap_read_under_another_condition_is_not_confirmed():
+    first = {"kind": "strap", "value": "2S", "condition": "CFG pin tied to GND"}
+    assert sl.compare_one(first, {"found": True, "values": {"value": "2S", "condition": "CFG tied to GND"}})[0] == "confirmed"
+    assert sl.compare_one(first, {"found": True, "values": {"value": "2S", "condition": "battery only, charger absent"}})[0] == "conflict"
+
+
+def test_a_register_read_at_another_width_is_a_conflict():
+    first = {"kind": "register", "name": "R", "addr": "0x10", "width": 16}
+    assert sl.compare_one(first, {"found": True, "values": {"addr": "0x10", "width": 32}})[0] == "conflict"
+    assert sl.compare_one(first, {"found": True, "values": {"addr": "0x10", "width": "16"}})[0] == "confirmed"

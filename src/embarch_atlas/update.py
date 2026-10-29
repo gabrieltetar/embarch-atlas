@@ -203,10 +203,10 @@ def second_look_diff(ad: Path, atlas: Path, prev: Path | None) -> dict[str, Any]
     write_jsonl(atlas / "second_look_queue.jsonl", queue)
     carried = S.carry_frozen(ad, atlas, st["frozen_keys"])
     owed = S.owed_by(prev)
-    diff = [q for q in queue if q.get("id") not in (owed or set())]
+    diff, changed = S.split_diff(queue, owed)  # (id, key): a changed fact keeps its id and is not backlog
     bs = S.batches(diff, len(diff)) if diff else []
     write_json(atlas / "second_look_batches.json", bs)
-    return {"frozen": st["frozen"], "carried": carried, "queued": len(queue), "diff": len(diff),
+    return {"frozen": st["frozen"], "carried": carried, "queued": len(queue), "diff": len(diff), "changed": changed,
             "backlog": len(queue) - len(diff), "batches": len(bs), "prev_queue": bool(owed)}
 
 
@@ -249,7 +249,7 @@ def run(ad: Path, target: str, commit: str = "HEAD", log=print) -> int:
     if rm:
         log(f"  reference manual {rm['doc']}: {rm['frozen']}/{rm['units']} units frozen, {rm['todo_units']} to distil"
             + (" -> /atlas-translate-docs rm-worklist " + atlas.name if rm["todo_units"] else ""))
-    log(f"  second look: {sl['frozen']} verdicts reused, {sl['diff']} new or changed facts in {sl['batches']} batches"
+    log(f"  second look: {sl['frozen']} verdicts reused, {sl['diff']} new or changed facts ({sl.get('changed', 0)} changed under a new key) in {sl['batches']} batches"
         + (f" (second_look_batches.json), {sl['backlog']} already owed before" if sl["prev_queue"] else
            ", no previous queue to tell the diff from the backlog"))
     if sl["diff"]:
