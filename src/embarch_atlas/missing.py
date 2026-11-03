@@ -9,8 +9,9 @@ standard-function card (engineer-declared) for a jellybean part. The link a
 part's own schematic parameters carry is listed as what the schematic says, not
 as something to download.
 
-Firmware visibility, from the netlist (the MCU is every part whose MPN starts
-with `[mcu] part` in atlas.toml):
+Firmware visibility, from the netlist (the MCU is the part `[mcu] ref` names in
+atlas.toml, else every part whose MPN starts with `[mcu] part`; `ref` is how a
+module that carries the MCU, under the module's own MPN, is named the MCU):
 
 - `direct`: shares a signal net with an MCU pin;
 - `via-series`: one series resistor, ferrite bead or net tie away from one;
@@ -161,6 +162,12 @@ def visibility(nls: dict[str, dict[str, Any]], mcu_refs: list[tuple[str, str]],
     return vis
 
 
+def mcu_by_ref(nls: dict[str, dict[str, Any]], ref: str | None) -> list[tuple[str, str]]:
+    """`[mcu] ref` (`board:REF`) when it names a part on a board, as `join` reads it first."""
+    b, _, r = (ref or "").strip().partition(":")
+    return [(b, r)] if r and r in (nls.get(b) or {}).get("components", {}) else []
+
+
 def tier_of(b: str, ref: str, comp: dict[str, Any], vis, mcu_set: set[tuple[str, str]], have_mcu: bool) -> tuple[str, list[dict]]:
     if (b, ref) in mcu_set:
         return "mcu", []
@@ -191,9 +198,11 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
     index = coverage_index(manifest)
     given = answersmod.load(atlas_dir)
     walks = _walks(atlas_dir)
-    mcu_part = ((cfg.get("mcu") or {}).get("part") or "").strip()
-    mcu_refs = sorted((b, r) for b, nl in nls.items() for r, c in nl["components"].items()
-                      if mcu_part and c.get("mpn") and norm(c["mpn"]).startswith(norm(mcu_part)))
+    mcu_cfg = cfg.get("mcu") or {}
+    mcu_part = (mcu_cfg.get("part") or "").strip()
+    mcu_refs = mcu_by_ref(nls, mcu_cfg.get("ref")) or sorted(
+        (b, r) for b, nl in nls.items() for r, c in nl["components"].items()
+        if mcu_part and c.get("mpn") and norm(c["mpn"]).startswith(norm(mcu_part)))
     mated = interfaces.mated_pairs(atlas_dir, nls)
     vis = visibility(nls, mcu_refs, mated)
     mcu_set = set(mcu_refs)
@@ -237,13 +246,13 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
         R["why"] = why
 
     mcu_docs = {"errata": [], "reference-manual": [], "datasheet": []}
-    if mcu_refs:
-        mcu_mpns = sorted({nls[b]["components"][r]["mpn"] for b, r in mcu_refs})
-        for kind in mcu_docs:
-            mcu_docs[kind] = sorted({d["file"] for m in mcu_mpns for d in covering_docs(m, index, (kind,))})
-    elif mcu_part:
-        for kind in mcu_docs:
-            mcu_docs[kind] = sorted({d["file"] for d in covering_docs(mcu_part + "XXXX", index, (kind,))})
+    # The MCU's own MPNs, and the `part` family too: a module's MPN finds the module's
+    # datasheet, never the SoC's reference manual or errata.
+    mcu_keys = sorted({nls[b]["components"][r]["mpn"] for b, r in mcu_refs if nls[b]["components"][r].get("mpn")})
+    if mcu_part and not any(norm(m).startswith(norm(mcu_part)) for m in mcu_keys):
+        mcu_keys.append(mcu_part + "XXXX")
+    for kind in mcu_docs:
+        mcu_docs[kind] = sorted({d["file"] for m in mcu_keys for d in covering_docs(m, index, (kind,))})
     if not mcu_docs["errata"] and not mcu_refs:
         mcu_docs["errata"] = [d["file"] for d, _ in index if d["kind"] == "errata"]
 
@@ -360,7 +369,8 @@ def render_md(a: dict[str, Any]) -> str:
     if not a["mcu_refs"]:
         q += 1
         L.append(f"Q{q}. No part on the boards matches `[mcu] part` in atlas.toml"
-                 f"{' (' + a['mcu_part'] + ')' if a['mcu_part'] else ' (not set)'}. Which part is the MCU?")
+                 f"{' (' + a['mcu_part'] + ')' if a['mcu_part'] else ' (not set)'}. Which part is the MCU? "
+                 "A module carrying it is named with `[mcu] ref = \"<board>:<refdes>\"`.")
     md = a["mcu_docs"]
     fam = a["mcu_part"] or "the MCU"
     if not md["errata"]:

@@ -130,3 +130,24 @@ def test_no_mcu_part(tmp_path):
 def test_needs_inputs(tmp_path):
     with pytest.raises(FileNotFoundError, match="inventory"):
         ms.analyse(tmp_path)
+
+
+def test_mcu_by_ref_names_a_module(tmp_path):
+    adir = make_atlas(tmp_path)
+    board(adir, "M", {
+        "U1": comp({"1": ("P0.01", "SIG1"), "2": ("VDD", "3V3"), "3": ("P0.02", "SIG2")}, "MODX-15"),
+        "U2": comp({"1": (None, "SIG1"), "2": (None, "GND")}, "ICAA100X"),
+    })
+    (adir / "atlas.toml").write_text(f'[project]\nfw = "{tmp_path}"\n\n[mcu]\npart = "MCU123"\nref = "M:U1"\n')
+    a = ms.run(adir)
+    assert a["mcu_refs"] == ["M:U1"]
+    assert {r["mpn"]: r["tier"] for r in a["rows"]}["ICAA100X"] == "direct"
+    # the module's MPN finds no SoC document; the `part` family still does
+    assert a["mcu_docs"]["reference-manual"] == ["mcu-rm.pdf"]
+    assert "Which part is the MCU?" not in (adir / "inventory" / "missing.md").read_text()
+
+
+def test_mcu_ref_not_on_a_board_falls_back_to_part(tmp_path):
+    adir = make_atlas(tmp_path)
+    (adir / "atlas.toml").write_text(f'[project]\nfw = "{tmp_path}"\n\n[mcu]\npart = "MCU123"\nref = "M:U77"\n')
+    assert ms.run(adir)["mcu_refs"] == ["M:U1"]
