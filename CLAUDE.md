@@ -10,7 +10,7 @@
 
 ## Git
 
-**Work directly on `main`** (suite rule, `../embarch-doc/embarch-dev-workflow.md` §6). Commit once `.venv/bin/pytest -q` is green.
+**Work on a branch, land when the owner asks** (suite rule, `../embarch-doc/embarch-dev-workflow.md` §6). Land once `.venv/bin/pytest -q` is green.
 
 ## Python
 
