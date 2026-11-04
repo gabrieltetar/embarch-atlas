@@ -11,6 +11,21 @@ One table per part number the engineer answered:
     answer = "not-needed"
     why = "firmware never touches it"
 
+    [parts."QRS7TUVTR"]
+    answer = "document"                   # the engineer confirmed this file as the part's document
+    file = "qrs7tuv.pdf"
+    sha256 = "<the file's sha256>"
+    rung = "stem"                         # what proposed it
+    rejected = [{ file = "other.pdf", sha256 = "<sha256>" }]   # a table may hold only this
+
+And one table per document the engineer said something about, keyed by the first 12 hex of its sha256, so
+what it says ends when the file changes:
+
+    [documents."0123456789ab"]
+    file = "mcu.pdf"
+    kind = "reference-manual"             # an inventory.KINDS value: overrides the classifier
+    not_reference_manual = true           # the engineer rejected this file as the MCU's reference manual
+
 A **standard-function card** is a function template, not a part: it names each pin's role and `flow` the
 way a datasheet pin record does (`prov = engineer-declared`) and states no limit, timing or part-specific
 fact. A card applies only to an MPN the engineer answered, only through the engineer's pin map (the atlas
@@ -28,7 +43,8 @@ from typing import Any
 from . import common
 
 ANSWERS_FILE = "answers.toml"
-KINDS = ("supplied", "not-needed", "standard-function")
+VERBS = ("supplied", "not-needed", "standard-function")     # what `missing --answer` records
+KINDS = (*VERBS, "document")                                # `document` comes from `missing --confirm`
 PROV = "engineer-declared"
 
 # pin -> (dir, type, flow, control, optional). `flow` source/sink/bidir is what net_trace walks on;
@@ -77,27 +93,62 @@ def path_of(atlas_dir: Path) -> Path:
     return Path(atlas_dir) / "inventory" / ANSWERS_FILE
 
 
-def load(atlas_dir: Path) -> dict[str, dict[str, Any]]:
-    """MPN -> answer, as written. A missing file is no answers; a malformed entry raises ValueError."""
+def _read(atlas_dir: Path) -> dict[str, Any]:
     p = path_of(atlas_dir)
     if not p.is_file():
         return {}
     try:
-        raw = tomllib.loads(p.read_text(encoding="utf-8"))
+        return tomllib.loads(p.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
         raise ValueError(f"{p}: not valid TOML: {e}") from e
+
+
+def load(atlas_dir: Path) -> dict[str, dict[str, Any]]:
+    """MPN -> answer, as written. A missing file is no answers; a malformed entry raises ValueError."""
     out = {}
-    for mpn, a in (raw.get("parts") or {}).items():
+    for mpn, a in (_read(atlas_dir).get("parts") or {}).items():
         problem = check_answer(mpn, a)
         if problem:
-            raise ValueError(f"{p}: {mpn}: {problem}")
+            raise ValueError(f"{path_of(atlas_dir)}: {mpn}: {problem}")
         out[mpn] = a
     return out
 
 
+def load_documents(atlas_dir: Path) -> dict[str, dict[str, Any]]:
+    """sha256[:12] -> what the engineer said about that document. Malformed raises ValueError."""
+    out = {}
+    for key, d in (_read(atlas_dir).get("documents") or {}).items():
+        problem = check_document(key, d)
+        if problem:
+            raise ValueError(f"{path_of(atlas_dir)}: documents.{key}: {problem}")
+        out[key] = d
+    return out
+
+
+def check_document(key: str, d: Any) -> str | None:
+    from .inventory import KINDS as DOC_KINDS
+    if not re.fullmatch(r"[0-9a-f]{12}", key):
+        return "the key must be the first 12 hex of the file's sha256"
+    if not isinstance(d, dict) or not ("kind" in d or d.get("not_reference_manual")):
+        return "needs a `kind` or `not_reference_manual = true`"
+    if "kind" in d and d["kind"] not in DOC_KINDS:
+        return f"`kind` must be one of {', '.join(DOC_KINDS)}"
+    return None
+
+
 def check_answer(mpn: str, a: Any) -> str | None:
-    if not isinstance(a, dict) or a.get("answer") not in KINDS:
+    if not isinstance(a, dict):
         return f"`answer` must be one of {', '.join(KINDS)}"
+    rejected = a.get("rejected")
+    if rejected is not None and not (isinstance(rejected, list) and rejected
+                                     and all(isinstance(r, dict) and r.get("file") and r.get("sha256") for r in rejected)):
+        return "`rejected` must be a list of { file, sha256 }"
+    if "answer" not in a and rejected:
+        return None
+    if a.get("answer") not in KINDS:
+        return f"`answer` must be one of {', '.join(KINDS)}"
+    if a["answer"] == "document" and not (a.get("file") and a.get("sha256")):
+        return "`document` needs a `file` and a `sha256`"
     if a["answer"] == "not-needed" and not str(a.get("why") or "").strip():
         return "`not-needed` needs a `why`"
     if a["answer"] == "standard-function":
@@ -133,33 +184,91 @@ def _q(s: str) -> str:
     return json.dumps(str(s), ensure_ascii=False)
 
 
-def dump(answers: dict[str, dict[str, Any]]) -> str:
+def dump(answers: dict[str, dict[str, Any]], documents: dict[str, dict[str, Any]] | None = None) -> str:
     L = ["# The engineer's answers to missing.md (embarch-atlas missing --answer). Hand edits are kept except comments.", ""]
     for mpn in sorted(answers):
         a = answers[mpn]
         L.append(f"[parts.{_q(mpn)}]")
-        L.append(f"answer = {_q(a['answer'])}")
+        if a.get("answer"):
+            L.append(f"answer = {_q(a['answer'])}")
         if a.get("why"):
             L.append(f"why = {_q(a['why'])}")
-        if a["answer"] == "standard-function":
+        if a.get("answer") == "standard-function":
             L.append(f"function = {_q(a['function'])}")
             L.append("pins = { " + ", ".join(f"{_q(k)} = {_q(v)}" for k, v in a["pins"].items()) + " }")
+        if a.get("answer") == "document":
+            L += [f"file = {_q(a['file'])}", f"sha256 = {_q(a['sha256'])}"]
+            if a.get("rung"):
+                L.append(f"rung = {_q(a['rung'])}")
+        if a.get("rejected"):
+            L.append("rejected = [" + ", ".join(f"{{ file = {_q(r['file'])}, sha256 = {_q(r['sha256'])} }}"
+                                                for r in a["rejected"]) + "]")
+        L.append("")
+    for key in sorted(documents or {}):
+        d = documents[key]
+        L.append(f"[documents.{_q(key)}]")
+        if d.get("file"):
+            L.append(f"file = {_q(d['file'])}")
+        if d.get("kind"):
+            L.append(f"kind = {_q(d['kind'])}")
+        if d.get("not_reference_manual"):
+            L.append("not_reference_manual = true")
         L.append("")
     return "\n".join(L)
 
 
+def _save(atlas_dir: Path, answers: dict[str, dict[str, Any]], documents: dict[str, dict[str, Any]]) -> None:
+    common.write_text(path_of(atlas_dir), dump(answers, documents))
+
+
+def _take(cur: dict[str, dict[str, Any]], mpn: str) -> dict[str, Any]:
+    """Remove `mpn`'s table however it is spelled; what it held."""
+    old: dict[str, Any] = {}
+    for k in [k for k in cur if norm(k) == norm(mpn)]:
+        old = cur.pop(k)
+    return old
+
+
 def record(atlas_dir: Path, mpn: str, answer: dict[str, Any]) -> None:
+    """Set a part's answer. Its rejected documents stay rejected; a confirmed one comes off that list."""
     problem = check_answer(mpn, answer)
     if problem:
         raise ValueError(problem)
     cur = load(atlas_dir)
-    for k in [k for k in cur if norm(k) == norm(mpn)]:
-        del cur[k]
-    cur[mpn] = answer
-    common.write_text(path_of(atlas_dir), dump(cur))
+    rejected = [r for r in _take(cur, mpn).get("rejected") or [] if r["sha256"] != answer.get("sha256")]
+    cur[mpn] = {**answer, **({"rejected": rejected} if rejected else {})}
+    _save(atlas_dir, cur, load_documents(atlas_dir))
+
+
+def record_reject(atlas_dir: Path, mpn: str, file: str, sha256: str) -> None:
+    """A document that is not this part's: it stays out until its sha256 changes. A confirmation of it ends."""
+    cur = load(atlas_dir)
+    a = _take(cur, mpn)
+    rejected = [r for r in a.get("rejected") or [] if r["sha256"] != sha256] + [{"file": file, "sha256": sha256}]
+    a = {} if a.get("answer") == "document" and a.get("sha256") == sha256 else a
+    cur[mpn] = {**a, "rejected": rejected}
+    _save(atlas_dir, cur, load_documents(atlas_dir))
+
+
+def record_document(atlas_dir: Path, sha256: str, file: str, **fields: Any) -> None:
+    """Merge `fields` (`kind`, `not_reference_manual`) into the document's table."""
+    docs = load_documents(atlas_dir)
+    key = sha256[:12]
+    entry = {**docs.get(key, {}), "file": file, **fields}
+    problem = check_document(key, entry)
+    if problem:
+        raise ValueError(problem)
+    docs[key] = entry
+    _save(atlas_dir, load(atlas_dir), docs)
 
 
 def find(answers: dict[str, dict[str, Any]], mpn: str | None) -> dict[str, Any] | None:
+    """The part's answer; None when its table holds only rejected documents."""
+    a = table(answers, mpn)
+    return a if a and a.get("answer") else None
+
+
+def table(answers: dict[str, dict[str, Any]], mpn: str | None) -> dict[str, Any] | None:
     n = norm(mpn)
     return next((a for k, a in answers.items() if norm(k) == n), None) if n else None
 
@@ -199,7 +308,7 @@ def _cmd_answer(args, adir: Path) -> int:
     mpn = args.answer[0]
     kind = args.answer[1] if len(args.answer) > 1 else ""
     rest = args.answer[2:]
-    if kind not in KINDS or rest and kind != "standard-function":
+    if kind not in VERBS or rest and kind != "standard-function":
         print(f"missing --answer: MPN supplied | not-needed --why TEXT | standard-function FUNCTION --pins MAP "
               f"(got {' '.join(args.answer)!r})", file=sys.stderr)
         return 2

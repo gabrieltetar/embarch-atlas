@@ -93,7 +93,8 @@ def stale_translations(ad: Path) -> list[str]:
     why = []
     dists = _distillations(ad)
     for e in _manifest_entries(ad):
-        if e.get("kind") == "schematic":
+        # a Word file is never prepped: its exported PDF has the same doc_id and is the one to compare
+        if e.get("kind") == "schematic" or Path(e.get("file") or "").suffix.lower() in (".docx", ".doc"):
             continue
         d = distillation_of(e, dists)
         if d is None:

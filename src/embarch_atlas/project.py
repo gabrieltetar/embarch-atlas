@@ -27,7 +27,10 @@ from . import common
 
 CONFIG_NAME = "atlas.toml"
 DEFAULT_SOURCES = "embarch/hardware"
-SCHEMATIC_CREATORS = ("altium", "orcad", "capture", "eeschema", "kicad", "allegro", "pads", "xpedition")
+# An EDA tool named as a word in the PDF's Creator or Producer. `Acrobat Web Capture` is not OrCAD Capture and
+# `Allegro MicroSystems` is a chip vendor; a substring match took a 4-page application note for a schematic.
+EDA_TOOL = re.compile(r"\b(?:altium|orcad|eeschema|kicad|xpedition|pads|allegro\b(?!\s*micro)|"
+                      r"(?<!web\s)(?<!screen\s)capture)\b", re.I)
 
 
 # --------------------------------------------------------------------------- config
@@ -69,25 +72,54 @@ def find_west_topdir(start: Path) -> Path | None:
 
 
 def _pdf_creator(path: Path) -> str:
+    """The PDF's Creator and Producer, space separated."""
     try:
         out = subprocess.run(["pdfinfo", str(path)], capture_output=True, text=True, errors="replace", timeout=30).stdout
     except (OSError, subprocess.TimeoutExpired):
         return ""
-    for line in out.splitlines():
-        if line.startswith(("Creator:", "Producer:")):
-            return line.split(":", 1)[1].strip()
-    return ""
+    return " ".join(line.split(":", 1)[1].strip() for line in out.splitlines() if line.startswith(("Creator:", "Producer:")))
+
+
+def _pdf_head(path: Path) -> str:
+    """The text of the first three pages."""
+    try:
+        return subprocess.run(["pdftotext", "-l", "3", "-enc", "UTF-8", str(path), "-"], capture_output=True, text=True,
+                              errors="replace", timeout=120).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def pdf_has_net_info(path: Path) -> bool:
+    """True when the outline carries a `Nets` section (an Altium/OrCAD Smart PDF with net information)."""
+    try:
+        import pymupdf
+        with pymupdf.open(path) as doc:
+            return any(title.strip() == "Nets" for _, title, _ in doc.get_toc(simple=True))
+    except Exception:  # noqa: BLE001 - a PDF PyMuPDF cannot open simply has no net info
+        return False
+
+
+def schematic_evidence(path: Path, creator: str | None = None, head: str | None = None) -> str | None:
+    """What makes this PDF a schematic, or None. The one test, for `inventory` and for `init`'s board hint:
+    an EDA tool named as a word in the Creator or Producer, `.SchDoc` in the first pages' text, or net
+    information in the outline. `creator` and `head` are read from the file when not given."""
+    m = EDA_TOOL.search(_pdf_creator(path) if creator is None else creator)
+    if m:
+        return f"EDA tool {m.group(0)!r} in the PDF creator"
+    if ".schdoc" in (_pdf_head(path) if head is None else head).lower():
+        return ".SchDoc in the text"
+    return "net information in the outline" if pdf_has_net_info(path) else None
 
 
 def _schematic_candidates(sources: Path) -> list[str]:
-    """PDFs in the sources dir whose creator is an EDA tool (a hint for [[boards]], not a decision)."""
+    """PDFs in the sources dir that show schematic evidence (a hint for [[boards]], not a decision)."""
     if not sources.is_dir():
         return []
     found = []
     for p in sorted(sources.rglob("*.pdf")):
         if any(part.startswith(".") for part in p.relative_to(sources).parts):
             continue
-        if any(c in _pdf_creator(p).lower() for c in SCHEMATIC_CREATORS):
+        if schematic_evidence(p):
             found.append(p.relative_to(sources).as_posix())
     return found
 

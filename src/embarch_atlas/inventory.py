@@ -11,7 +11,13 @@ is read when present, because it records where a file came from for free.
 The manifest is byte-identical across runs: every collection is sorted, nothing
 records the time of the run, and when the documents have not changed the
 previous diff block is carried over unchanged (so the last real change stays
-visible until the next one).
+visible until the next one). Page text is not in the manifest: it goes to
+`inventory/text/<sha256[:16]>.txt.gz`, a cache keyed by content that `coverage`
+reads, so `missing` does not run poppler over every document again.
+
+The engineer's kind override (`inventory/answers.toml` `[documents."<sha256[:12]>"]`)
+is applied here and reported in `manifest.md`. It never changes the doc_id: a
+document keeps the id its classified kind gives, so a translation stays where it is.
 
 Detectors, first match wins per field:
 
@@ -28,6 +34,7 @@ Detectors, first match wins per field:
 from __future__ import annotations
 
 import datetime as _dt
+import gzip
 import hashlib
 import re
 import subprocess
@@ -37,13 +44,15 @@ from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
-from . import __version__, common, project
+from . import __version__, answers, common, project
 from .pdftext import text_layer, text_layer_of_pdf
 
 TOOL = f"embarch-atlas/{__version__} inventory"
 PART_LIMIT = 6          # part-number tokens kept per document
 
-KINDS = ("schematic", "datasheet", "reference-manual", "errata", "prd", "spreadsheet", "notes", "other")
+KINDS = ("schematic", "datasheet", "reference-manual", "errata", "appnote", "prd", "spreadsheet", "notes", "other")
+WORD_EXTS = (".docx", ".doc")
+TEXT_DIR = "text"       # under inventory/: page text per document, keyed by content
 
 # ---------------------------------------------------------------- detector patterns (public vendor conventions)
 TI_AUTHOR = re.compile(r"\[(S[A-Z]{3}[A-Z0-9]+),([A-Z]?)")
@@ -69,8 +78,19 @@ NOTES_DATE = re.compile(r"(?:Compiled|Updated|Date|Revised)[^0-9\n]{0,20}(\d{4}-
 PART_TOKEN = re.compile(r"\b([A-Z]{2,6}\d{2,6}[A-Z0-9]*(?:x[A-Z0-9])?(?:/x[A-Z0-9])*)")
 NOT_PART = re.compile(r"^(?:DS|RM|ES|AN|UM|PM|TN|SL[A-Z]{2}|SB[A-Z]{2}|SC[A-Z]{2}|IEC|ISO|EN|JESD|JEDEC|USB|UL|ARM|IPC|"
                       r"AEC|MIL|RFC|IEEE|ANSI|CISPR|ETSI|FCC)\d")
+# A package name is a family and a pin count. The second group holds to at most four digits and nothing after
+# them, because a short prefix like `CSP` or `TO` can also start a real part number.
 PACKAGE = re.compile(r"^(?:LQFP|TQFP|UFBGA|WLCSP|UFQFPN|TSSOP|SSOP|MSOP|QFN|WQFN|VQFN|DSBGA|WCSP|SOT|SOIC|TDFN|LGA|BGA|DFN|"
-                     r"TSOT|SON|WSON|UQFN|HVQFN|XQFN|PDIP|DIP|SC)\d")
+                     r"TSOT|SON|WSON|UQFN|HVQFN|XQFN|PDIP|DIP|SC)\d"
+                     r"|^(?:CSP|FCCSP|LFCSP|WLP|FBGA|LFBGA|TFBGA|VFBGA|WFBGA|FCBGA|PBGA|LBGA|QFP|PQFP|HQFP|VQFP|HTQFP|"
+                     r"TQFN|HQFN|UDFN|VDFN|WDFN|XDFN|SOP|QSOP|TSOP|HSOP|VSSOP|HTSSOP|VSON|USON|XSON|PLCC|MLF|MLP|LLP|"
+                     r"SOD|TO)\d{1,4}$")
+# A vendor's internal or application-note number: a short prefix and five or more digits starting at zero.
+VENDOR_NUMBER = re.compile(r"^[A-Z]{2,3}0\d{4,}$")
+APPNOTE_WORDS = re.compile(r"\bapp(?:lication)?\.?\s+notes?\b|\buser'?s?\s+guide\b|\btech(?:nical)?\.?\s+notes?\b", re.I)
+APPNOTE_NUMBER = re.compile(r"^\s*(?:an|um|tn)[-_ ]?\d{4,5}(?![a-z0-9])", re.I)
+APPNOTE_HEAD = 400      # a datasheet's later text may cite an application note; a note says so at the top
+WORD_PRD = re.compile(r"(^|[^a-z])(prd|requirements?)([^a-z]|$)")
 
 
 # ---------------------------------------------------------------- small helpers
@@ -131,17 +151,69 @@ def pdf_text_layer(path: Path, pages: list[str]) -> dict[str, Any]:
                            for p in pages])
 
 
-def pdf_has_net_info(path: Path) -> bool:
-    """True when the outline carries a `Nets` section (an Altium/OrCAD Smart PDF with net information)."""
+# ---------------------------------------------------------------- page text cache
+
+def text_cache_path(atlas_dir: Path, sha256: str) -> Path:
+    return Path(atlas_dir) / "inventory" / TEXT_DIR / f"{sha256[:16]}.txt.gz"
+
+
+def write_text_cache(path: Path, pages: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress("\f".join(pages).encode("utf-8"), mtime=0))
+
+
+def read_text_cache(path: Path) -> list[str] | None:
     try:
-        import pymupdf
-        with pymupdf.open(path) as doc:
-            return any(title.strip() == "Nets" for _, title, _ in doc.get_toc(simple=True))
-    except Exception:  # noqa: BLE001 - a PDF PyMuPDF cannot open simply has no net info
-        return False
+        return gzip.decompress(path.read_bytes()).decode("utf-8").split("\f")
+    except (OSError, EOFError, ValueError):
+        return None
+
+
+def sources_of(atlas_dir: Path, manifest: dict[str, Any] | None = None) -> Path:
+    """The folder the manifest was made from (`inventory --sources` included), else atlas.toml's."""
+    atlas_dir = Path(atlas_dir)
+    cfg = project.load_config(atlas_dir) if (atlas_dir / project.CONFIG_NAME).is_file() else {}
+    label = (manifest or {}).get("sources")
+    return project.fw_dir(atlas_dir, cfg) / label if label else project.sources_dir(atlas_dir, cfg)
+
+
+def document_pages(atlas_dir: Path, doc: dict[str, Any], manifest: dict[str, Any] | None = None) -> list[str] | None:
+    """Text per page of a manifest document: the cache, else the file itself when it still has that
+    content (a manifest from before the cache), else None."""
+    sha = doc.get("sha256")
+    if not sha or Path(doc.get("file") or "").suffix.lower() != ".pdf":
+        return None
+    cache = text_cache_path(atlas_dir, sha)
+    pages = read_text_cache(cache)
+    if pages is not None:
+        return pages
+    try:
+        path = sources_of(atlas_dir, manifest) / doc["file"]
+        if not path.is_file() or common.sha256_file(path) != sha:
+            return None
+    except (OSError, IndexError):
+        return None
+    pages = pdf_pages_text(path, int(doc.get("pages") or 0))
+    try:
+        write_text_cache(cache, pages)
+    except OSError:
+        pass        # a read-only atlas dir costs a re-read next time, nothing more
+    return pages
 
 
 # ---------------------------------------------------------------- classification + identity
+
+def is_appnote(path: Path, title: str, head: str) -> bool:
+    """An application note, user guide or technical note: its title, its file name, the top of its first
+    page, or an ST `AN`/`UM`/`TN` number as the first ST document number on its first pages."""
+    name = re.sub(r"[-_.]+", " ", path.stem)
+    if APPNOTE_WORDS.search(title) or APPNOTE_WORDS.search(name) or APPNOTE_WORDS.search(head[:APPNOTE_HEAD]):
+        return True
+    if APPNOTE_NUMBER.match(path.stem) or APPNOTE_NUMBER.match(head):
+        return True
+    m = ST_DOC.search(head)
+    return bool(m) and m.group(1)[:2] in ("AN", "UM", "TN")
+
 
 def classify(path: Path, info: dict[str, str], head: str) -> str:
     ext = path.suffix.lower()
@@ -153,11 +225,14 @@ def classify(path: Path, info: dict[str, str], head: str) -> str:
         return "other"
     name = path.stem.lower()
     title = (info.get("Title") or "").lower()
-    creator = " ".join(info.get(k, "") for k in ("Creator", "Producer", "Keywords")).lower()
     low = head.lower()
-    if any(t in creator for t in project.SCHEMATIC_CREATORS) or ".schdoc" in low:
+    if project.schematic_evidence(path, " ".join(info.get(k, "") for k in ("Creator", "Producer")), head):
         return "schematic"
-    if "reference manual" in title or "reference manual" in low[:2000]:
+    if "reference manual" in title:
+        return "reference-manual"
+    if "errata" not in title and is_appnote(path, title, head):     # may cite a reference manual on its first page
+        return "appnote"
+    if "reference manual" in low[:2000]:
         return "reference-manual"
     if "errata" in title or "errata sheet" in low[:1500] or "device errata" in low[:1500] or "silicon errata" in low[:1500]:
         return "errata"
@@ -240,7 +315,7 @@ def detect_ids(kind: str, info: dict[str, str], pages: list[str]) -> dict[str, A
     blob = " ".join([info.get("Title", ""), info.get("Keywords", ""), info.get("Subject", "")] + pages[:3])
     counts: dict[str, int] = {}
     for t in PART_TOKEN.findall(blob):
-        if NOT_PART.match(t) or PACKAGE.match(t) or (d["doc_no"] and t.startswith(d["doc_no"])):
+        if NOT_PART.match(t) or PACKAGE.match(t) or VENDOR_NUMBER.match(t) or (d["doc_no"] and t.startswith(d["doc_no"])):
             continue
         counts[t] = counts.get(t, 0) + 1
     in_title = set(PART_TOKEN.findall(info.get("Title", "")))
@@ -254,8 +329,9 @@ def doc_id_for(rec: dict[str, Any]) -> str:
 
     Datasheets use the part when it is a clean part number (`abc1234@B`) and the
     document number otherwise (an ST family like `ABC32F4xE/xG` gives `ds12345@3`);
-    reference manuals and errata use the document number (`rm0123@6`); everything
-    else uses the file stem. No detected revision gives `@norev`.
+    reference manuals and errata use the document number (`rm0123@6`); an app note
+    uses its document number or file stem, never a part it names; everything else
+    uses the file stem. No detected revision gives `@norev`.
     """
     kind, part, docno = rec.get("kind"), rec.get("part"), rec.get("doc_no")
     clean_part = part if part and re.fullmatch(r"[A-Z0-9]+", part) else None
@@ -263,6 +339,8 @@ def doc_id_for(rec: dict[str, Any]) -> str:
         base = clean_part or docno
     elif kind in ("reference-manual", "errata"):
         base = docno or clean_part
+    elif kind == "appnote":
+        base = docno
     else:
         base = None
     base = base or Path(rec["file"]).stem
@@ -286,12 +364,15 @@ def zone_identifier(path: Path) -> dict[str, str] | None:
 
 # ---------------------------------------------------------------- per-format inventory
 
-def inventory_pdf(path: Path) -> dict[str, Any]:
+def inventory_pdf(path: Path, override: str | None = None, text_cache: Path | None = None) -> dict[str, Any]:
     info = pdfinfo(path)
     npages = int(info.get("Pages", "0") or 0)
     pages = pdf_pages_text(path, npages)
+    if text_cache is not None:
+        write_text_cache(text_cache, pages)
     layer = pdf_text_layer(path, pages)
-    kind = classify(path, info, "\n".join(pages[:3]))
+    found = classify(path, info, "\n".join(pages[:3]))
+    kind = override or found
     rec: dict[str, Any] = {
         "kind": kind,
         "pages": npages,
@@ -303,10 +384,35 @@ def inventory_pdf(path: Path) -> dict[str, Any]:
         "text_layer": layer["text_layer"],
         "meta": {k: info[k] for k in ("Title", "Author", "Creator", "Producer") if info.get(k)},
     }
+    if kind != found:
+        rec["kind_classified"] = found
     ids = detect_ids(kind, info, pages)
     rec.update(ids)
     if kind == "schematic":
-        rec["net_info"] = pdf_has_net_info(path)
+        rec["net_info"] = project.pdf_has_net_info(path)
+    return rec
+
+
+def _docx_title(path: Path) -> str | None:
+    """A Word file's title from `docProps/core.xml`; a `.doc` has no such part."""
+    try:
+        with zipfile.ZipFile(path) as z:
+            root = ET.fromstring(z.read("docProps/core.xml"))
+    except (zipfile.BadZipFile, ET.ParseError, KeyError, OSError):
+        return None
+    for el in root:
+        if el.tag.rsplit("}", 1)[-1] == "title" and (el.text or "").strip():
+            return el.text.strip()
+    return None
+
+
+def inventory_word(path: Path) -> dict[str, Any]:
+    """A Word file gets no pages: its name or title says whether it is the PRD, which is then asked for as a PDF."""
+    title = _docx_title(path) if path.suffix.lower() == ".docx" else None
+    says_prd = WORD_PRD.search(path.stem.lower()) or (title and WORD_PRD.search(title.lower()))
+    rec: dict[str, Any] = {"kind": "prd" if says_prd else "other"}
+    if title:
+        rec["meta"] = {"Title": title}
     return rec
 
 
@@ -380,25 +486,36 @@ def inventory_notes(path: Path) -> dict[str, Any]:
             "date": m.group(1) if m else None}
 
 
-def inventory_file(path: Path, rel: str) -> dict[str, Any]:
+def inventory_file(path: Path, rel: str, overrides: dict[str, dict[str, Any]] | None = None,
+                   atlas_dir: Path | None = None) -> dict[str, Any]:
     st = path.stat()
     rec: dict[str, Any] = {"file": rel, "bytes": st.st_size, "sha256": common.sha256_file(path)}
     origin = zone_identifier(path)
     if origin:
         rec["origin"] = origin
+    override = ((overrides or {}).get(rec["sha256"][:12]) or {}).get("kind")
     ext = path.suffix.lower()
     if ext == ".pdf":
-        rec.update(inventory_pdf(path))
+        cache = text_cache_path(atlas_dir, rec["sha256"]) if atlas_dir else None
+        rec.update(inventory_pdf(path, override, cache))
     elif ext in (".xlsx", ".xlsm", ".xls", ".csv", ".ods"):
         rec.update(inventory_spreadsheet(path))
     elif ext in (".md", ".txt", ".rst"):
         rec.update(inventory_notes(path))
+    elif ext in WORD_EXTS:
+        rec.update(inventory_word(path))
     else:
         rec["kind"] = "other"
+    found = rec.get("kind_classified") or rec["kind"]      # an override never moves the doc_id
+    rec["kind"] = override or rec["kind"]
+    if rec["kind"] != found:
+        rec["kind_classified"] = found
+    if ext in WORD_EXTS and rec["kind"] == "prd":
+        rec["needs_export"] = True
     for k, v in (("doc_no", None), ("rev", None), ("date", None), ("parts", []), ("evidence", [])):
         rec.setdefault(k, v)
     rec["part"] = rec["parts"][0] if rec["parts"] else None
-    rec["doc_id"] = doc_id_for(rec)
+    rec["doc_id"] = doc_id_for({**rec, "kind": found})
     return rec
 
 
@@ -419,17 +536,33 @@ def list_sources(sources: Path, exclude: list[Path] = ()) -> list[tuple[Path, st
     return sorted(out, key=lambda t: t[1])
 
 
+def _word_export(word: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The PDF exported from a Word file: the same stem, ignoring case, in the same folder if there is one there."""
+    path = Path(word["file"])
+    pdfs = [r for r in records if Path(r["file"]).suffix.lower() == ".pdf" and "duplicate_of" not in r
+            and Path(r["file"]).stem.lower() == path.stem.lower()]
+    return next((r for r in pdfs if Path(r["file"]).parent == path.parent), pdfs[0] if pdfs else None)
+
+
 def mark_supersession(records: list[dict[str, Any]]) -> None:
-    """Same content twice -> `duplicate_of`; same document base, older revision -> `superseded_by`."""
+    """Same content twice -> `duplicate_of`; a Word file and the PDF exported from it -> the Word file
+    is `superseded_by` the PDF and no longer needs exporting; same document base, older revision ->
+    `superseded_by`."""
     by_sha: dict[str, list[dict]] = {}
     for r in records:
         by_sha.setdefault(r["sha256"], []).append(r)
     for rs in by_sha.values():
         for r in rs[1:]:
             r["duplicate_of"] = rs[0]["file"]
+    for r in records:
+        if Path(r["file"]).suffix.lower() in WORD_EXTS and "duplicate_of" not in r:
+            pdf = _word_export(r, records)
+            if pdf:
+                r["superseded_by"] = pdf["file"]
+                r.pop("needs_export", None)
     by_base: dict[tuple, list[dict]] = {}
     for r in records:
-        if "duplicate_of" in r or r["kind"] in ("notes", "other"):
+        if "duplicate_of" in r or "superseded_by" in r or r["kind"] in ("notes", "other"):
             continue
         by_base.setdefault((r["kind"], r["doc_id"].split("@")[0]), []).append(r)
     for rs in by_base.values():
@@ -462,8 +595,9 @@ def diff_manifests(prev_docs: list[dict[str, Any]], docs: list[dict[str, Any]]) 
 
 
 def build_manifest(sources: Path, sources_label: str, previous: dict[str, Any] | None,
-                   exclude: list[Path] = (), previous_sha256: str | None = None) -> dict[str, Any]:
-    docs = [inventory_file(p, rel) for p, rel in list_sources(sources, exclude)]
+                   exclude: list[Path] = (), previous_sha256: str | None = None,
+                   overrides: dict[str, dict[str, Any]] | None = None, atlas_dir: Path | None = None) -> dict[str, Any]:
+    docs = [inventory_file(p, rel, overrides, atlas_dir) for p, rel in list_sources(sources, exclude)]
     mark_supersession(docs)
     if previous and previous.get("documents") == docs and previous.get("diff") is not None:
         diff = previous["diff"]  # nothing changed: keep the last real change visible, and stay byte-identical
@@ -495,6 +629,8 @@ def render_md(man: dict[str, Any]) -> str:
             extra.append(f"duplicate of {r['duplicate_of']}")
         if r["kind"] == "schematic" and "net_info" in r:
             extra.append("net info" if r["net_info"] else "NO net info")
+        if r.get("kind_classified"):
+            extra.append(f"engineer override, classified {r['kind_classified']}")
         kind = r["kind"] + (f" ({'; '.join(extra)})" if extra else "")
         L.append("| " + " | ".join(_cell(x) for x in (
             r["file"], kind, r["doc_id"], ", ".join(r.get("parts") or []), r.get("doc_no"), r.get("rev"),
@@ -516,9 +652,21 @@ def render_md(man: dict[str, Any]) -> str:
         if r["kind"] == "schematic" and r.get("net_info") is False:
             notes.append(f"- {r['file']}: schematic PDF without net bookmarks; ask the EE to re-export with "
                          "\"net information\" and \"component parameters\" on")
+        if r.get("needs_export"):
+            notes.append(f"- {r['file']}: a PRD in Word; export it to PDF and put the PDF in the sources folder "
+                         "(the tool does not convert it)")
     if notes:
         L += ["", "## Notes", ""] + notes
     return "\n".join(L) + "\n"
+
+
+def _prune_text_cache(atlas_dir: Path, docs: list[dict[str, Any]]) -> None:
+    """Drop the page text of documents no longer in the manifest."""
+    keep = {text_cache_path(atlas_dir, d["sha256"]).name for d in docs}
+    folder = Path(atlas_dir) / "inventory" / TEXT_DIR
+    for f in folder.glob("*.txt.gz") if folder.is_dir() else []:
+        if f.name not in keep:
+            f.unlink()
 
 
 def run(atlas_dir: Path, sources: Path | None = None) -> dict[str, Any]:
@@ -536,8 +684,10 @@ def run(atlas_dir: Path, sources: Path | None = None) -> dict[str, Any]:
     prev_path = out / "manifest.json"
     previous = common.read_json(prev_path) if prev_path.is_file() else None
     prev_sha = common.sha256_file(prev_path) if previous else None
-    man = build_manifest(src, label, previous, exclude=[atlas_dir], previous_sha256=prev_sha)
+    man = build_manifest(src, label, previous, exclude=[atlas_dir], previous_sha256=prev_sha,
+                         overrides=answers.load_documents(atlas_dir), atlas_dir=atlas_dir)
     common.write_json(prev_path, man)
+    _prune_text_cache(atlas_dir, man["documents"])
     common.write_text(out / "manifest.md", render_md(man))
     return man
 
@@ -547,7 +697,7 @@ def _cmd(args) -> int:
     t0 = _dt.datetime.now()
     try:
         man = run(adir, Path(args.sources) if args.sources else None)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         print(f"inventory: {e}", file=sys.stderr)
         return 2
     d = man["diff"]

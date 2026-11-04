@@ -12,7 +12,7 @@ from pathlib import Path
 import pymupdf
 import pytest
 
-from embarch_atlas import cli, common, inventory as inv
+from embarch_atlas import answers, cli, common, inventory as inv, project, update
 
 pytestmark = pytest.mark.skipif(not all(shutil.which(t) for t in ("pdfinfo", "pdftotext")),
                                 reason="poppler CLI tools not installed")
@@ -216,3 +216,262 @@ def test_inventory_and_doc_prep_agree_on_textless_pages(tmp_path):
     meta = common.read_json(d / "doc.json")
     assert (meta["text_layer"], meta["pages_textless"]) == (rec["text_layer"], rec["pages_textless"])
     assert d.name == rec["doc_id"]
+
+
+# ---------------------------------------------------------------- what makes a schematic
+
+def make_docx(path: Path, title: str | None = None) -> Path:
+    core = ('<cp:coreProperties xmlns:cp="x" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            + (f"<dc:title>{title}</dc:title>" if title else "") + "</cp:coreProperties>")
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("docProps/core.xml", core)
+        z.writestr("word/document.xml", "<document/>")
+    return path
+
+
+@pytest.mark.parametrize("creator,is_schematic", [
+    ("Altium Designer", True),
+    ("KiCad Schematic Editor", True),
+    ("OrCAD Capture CIS", True),
+    ("Capture 17.2", True),
+    ("Allegro Design Entry", True),
+    ("PADS Logic", True),
+    ("Acrobat Web Capture 10.0", False),
+    ("Screen Capture Tool", False),
+    ("iPads Exporter", False),
+    ("Allegro MicroSystems", False),
+    ("Prince 12", False),
+])
+def test_schematic_creator_is_a_word_not_a_substring(tmp_path, creator, is_schematic):
+    pdf = make_pdf(tmp_path / "doc.pdf", [f"A short note about a part.\n{FILLER}"], {"producer": creator})
+    assert (project.schematic_evidence(pdf) is not None) is is_schematic
+    assert (inv.inventory_file(pdf, "doc.pdf")["kind"] == "schematic") is is_schematic
+
+
+def test_schematic_evidence_from_text_and_outline(tmp_path):
+    a = make_pdf(tmp_path / "a.pdf", [f"Main.SchDoc Sheet 1 of 1 {FILLER}"], {"producer": "Acrobat Web Capture 10.0"})
+    assert project.schematic_evidence(a) == ".SchDoc in the text"
+    b = tmp_path / "b.pdf"
+    doc = pymupdf.open()
+    doc.new_page().insert_text((50, 50), "Sheet one")
+    doc.set_toc([[1, "Nets", 1]])
+    doc.save(b)
+    doc.close()
+    assert project.schematic_evidence(b) == "net information in the outline"
+    assert inv.inventory_file(b, "b.pdf")["net_info"] is True
+
+
+def test_init_board_hint_uses_the_same_evidence(tmp_path):
+    make_pdf(tmp_path / "note.pdf", [f"A note.\n{FILLER}"], {"producer": "Acrobat Web Capture 10.0"})
+    make_pdf(tmp_path / "main-board.pdf", [f"A board.\n{FILLER}"], {"creator": "Altium Designer"})
+    assert project._schematic_candidates(tmp_path) == ["main-board.pdf"]
+
+
+# ---------------------------------------------------------------- application notes
+
+@pytest.mark.parametrize("name,pages,meta", [
+    ("note.pdf", ["Features of the bus\n" + FILLER], {"title": "Application Note: bus layout for ZX1234"}),
+    ("note.pdf", ["QQ5566 App Note\nFeatures of the bus\n" + FILLER], None),
+    ("ZX1234 user guide.pdf", ["Features of the kit\n" + FILLER], None),
+    ("note.pdf", ["ZX1234 User's Guide\nFeatures\n" + FILLER], None),
+    ("note.pdf", ["Technical Note\nFeatures\n" + FILLER], None),
+    ("note.pdf", ["Tech note 12\nFeatures\n" + FILLER], None),
+    ("note.pdf", ["Features\n" + FILLER, FILLER + "\nAN9988 Rev 3"], None),
+    ("note.pdf", ["Features\n" + FILLER, FILLER + "\nUM9988 Rev 3"], None),
+    ("note.pdf", ["Features\n" + FILLER, FILLER + "\nTN9988 Rev 3"], None),
+    ("an9988-bus-layout.pdf", ["Features\n" + FILLER], None),
+    ("note.pdf", ["UM9988\nUser manual\nFeatures\n" + FILLER], None),
+    ("note.pdf", ["Application note\nSee the reference manual for the registers.\n" + FILLER], None),
+])
+def test_appnote_is_checked_before_the_datasheet_rule(tmp_path, name, pages, meta):
+    rec = inv.inventory_file(make_pdf(tmp_path / name, pages, meta), name)
+    assert rec["kind"] == "appnote"
+
+
+def test_a_datasheet_citing_an_appnote_stays_a_datasheet(tmp_path):
+    long_top = "ZX1234 Buck Converter\nFeatures\n" + FILLER + "\n" + FILLER + "\n" + FILLER
+    pdf = make_pdf(tmp_path / "zx1234.pdf", [long_top + "\nSee application note AN9988 for the layout.",
+                                             "DS1111 Rev 4\n" + FILLER + "\nAN9988 Rev 3"])
+    assert inv.inventory_file(pdf, "zx1234.pdf")["kind"] == "datasheet"
+
+
+def test_appnote_doc_id_is_its_number_or_stem_never_a_part(tmp_path):
+    a = inv.inventory_file(make_pdf(tmp_path / "a.pdf", [f"AN9988\nApplication note\nUsing the ZX1234\n{FILLER}\nAN9988 Rev 3"]), "a.pdf")
+    assert (a["kind"], a["doc_no"], a["doc_id"]) == ("appnote", "AN9988", "an9988@3") and "ZX1234" in a["parts"]
+    b = inv.inventory_file(make_pdf(tmp_path / "Bus Layout.pdf", [f"Application note\nUsing the ZX1234\n{FILLER}"]), "Bus Layout.pdf")
+    assert b["doc_id"] == "bus-layout@norev" and b["parts"] == ["ZX1234"]
+
+
+# ---------------------------------------------------------------- part tokens and doc_id stability
+
+def test_a_package_name_does_not_become_a_part():
+    d = inv.detect_ids("datasheet", {"Title": "ZX7700 wireless MCU"}, ["CSP47 CSP47 CSP47 WLP36 FBGA484 TO220 ZX7700"])
+    assert d["parts"] == ["ZX7700"]
+    alone = inv.detect_ids("datasheet", {}, ["CSP47 package with 47 balls, CSP47 CSP47"])
+    assert alone["parts"] == [] and inv.doc_id_for({"kind": "datasheet", "part": None, "doc_no": None, "rev": "2",
+                                                    "file": "zx7700.pdf"}) == "zx7700@2"
+
+
+def test_a_part_with_a_package_like_prefix_stays_a_part():
+    d = inv.detect_ids("datasheet", {}, ["CSP12345 Sensor, TO22A7 switch"])
+    assert set(d["parts"]) == {"CSP12345", "TO22A7"}
+
+
+def test_a_vendor_internal_number_does_not_become_a_part():
+    d = inv.detect_ids("datasheet", {}, ["AP02001 AP02001 AP02001 Logic gate ZY1234"])
+    assert d["parts"] == ["ZY1234"]
+    assert inv.detect_ids("datasheet", {}, ["TL072 op-amp"])["parts"] == ["TL072"]
+
+
+def test_a_normal_datasheet_keeps_its_doc_id(world):
+    """Frozen distillations are keyed by doc_id: these must not move."""
+    adir, src = world
+    D = docs_by_file(inv.run(adir, src))
+    got = {f: D[f]["doc_id"] for f in ("zx1234.pdf", "KX1234-03a.pdf", "rm-qq32.pdf", "es-qq32.pdf", "mx9999.pdf", "qq5.pdf")}
+    assert got == {"zx1234.pdf": "zx1234@B", "KX1234-03a.pdf": "kx1234@03a", "rm-qq32.pdf": "rm9999@3",
+                   "es-qq32.pdf": "es9999@2", "mx9999.pdf": "mx9998@2", "qq5.pdf": "qq5566@norev"}
+
+
+# ---------------------------------------------------------------- Word files
+
+@pytest.mark.parametrize("name,title,kind", [
+    ("QQ7 PRD.docx", None, "prd"),
+    ("qq7_requirements.docx", None, "prd"),
+    ("spec.docx", "QQ7 Product Requirements", "prd"),
+    ("QQ7-PRD.doc", None, "prd"),
+    ("spec.docx", "Bench plan", "other"),
+    ("minutes.doc", None, "other"),
+])
+def test_word_prd_needs_export(tmp_path, name, title, kind):
+    (make_docx(tmp_path / name, title) if name.endswith("x") else tmp_path / name).touch()
+    rec = inv.inventory_file(tmp_path / name, name)
+    assert rec["kind"] == kind and rec.get("needs_export", False) is (kind == "prd")
+    assert rec["doc_id"].split("@")[1] == "norev" and "pages" not in rec
+
+
+def test_word_prd_is_superseded_by_its_exported_pdf(tmp_path):
+    src = tmp_path / "hw"
+    src.mkdir()
+    make_docx(src / "QQ7 PRD.docx")
+    adir = tmp_path / "atlas"
+    D = docs_by_file(inv.run(adir, src))
+    assert D["QQ7 PRD.docx"]["needs_export"] is True and "superseded_by" not in D["QQ7 PRD.docx"]
+    assert "export it to PDF" in (adir / "inventory" / "manifest.md").read_text()
+    make_pdf(src / "qq7 prd.pdf", [f"QQ7 Product Requirements Document\n{FILLER}"])
+    D = docs_by_file(inv.run(adir, src))
+    word, pdf = D["QQ7 PRD.docx"], D["qq7 prd.pdf"]
+    assert word["superseded_by"] == "qq7 prd.pdf" and "needs_export" not in word and "superseded_by" not in pdf
+    assert word["doc_id"] == pdf["doc_id"] == "qq7-prd@norev"
+    assert "export it to PDF" not in (adir / "inventory" / "manifest.md").read_text()
+
+
+def test_a_word_file_with_a_revisioned_pdf_never_supersedes_the_pdf(tmp_path):
+    src = tmp_path / "hw"
+    src.mkdir()
+    make_docx(src / "prd.docx")
+    make_pdf(src / "prd.pdf", [f"Requirements document\nVersion: 2.1\n{FILLER}"])
+    D = docs_by_file(inv.run(tmp_path / "atlas", src))
+    assert D["prd.docx"]["superseded_by"] == "prd.pdf" and "superseded_by" not in D["prd.pdf"]
+
+
+def test_the_word_original_does_not_stop_update(tmp_path):
+    """Both files have one doc_id, and only the PDF is prepped: the Word file is not behind anything."""
+    from embarch_atlas import pdftext
+    src = tmp_path / "hw"
+    src.mkdir()
+    adir = tmp_path / "atlas"
+    make_docx(src / "prd.docx")
+    make_pdf(src / "prd.pdf", [f"Requirements document\n{FILLER}"])
+    inv.run(adir, src)
+    pdftext.prep(src / "prd.pdf", adir, log=lambda *_: None)
+    assert update.stale_translations(adir) == []
+
+
+# ---------------------------------------------------------------- the engineer's kind override
+
+def _override(adir: Path, doc: dict, kind: str) -> None:
+    answers.record_document(adir, doc["sha256"], doc["file"], kind=kind)
+
+
+def test_kind_override_is_applied_reported_and_byte_stable(world):
+    adir, src = world
+    doc = docs_by_file(inv.run(adir, src))["zx1234.pdf"]
+    _override(adir, doc, "reference-manual")
+    D = docs_by_file(inv.run(adir, src))
+    got = D["zx1234.pdf"]
+    assert (got["kind"], got["kind_classified"]) == ("reference-manual", "datasheet")
+    assert got["doc_id"] == "zx1234@B"                 # never moved by an override
+    mj, mm = adir / "inventory" / "manifest.json", adir / "inventory" / "manifest.md"
+    first = (mj.read_bytes(), mm.read_bytes())
+    assert "engineer override, classified datasheet" in mm.read_text()
+    inv.run(adir, src)
+    assert (mj.read_bytes(), mm.read_bytes()) == first
+
+
+def test_kind_override_ends_when_the_file_changes(world):
+    adir, src = world
+    doc = docs_by_file(inv.run(adir, src))["KX1234-03a.pdf"]
+    _override(adir, doc, "other")
+    assert docs_by_file(inv.run(adir, src))["KX1234-03a.pdf"]["kind"] == "other"
+    make_pdf(src / "KX1234-03a.pdf", [f"KX1234\nLoad Switch, new\nFeatures\n{FILLER}", f"Ordering\n{FILLER}\nMarch 2026 - Revision 03a"])
+    got = docs_by_file(inv.run(adir, src))["KX1234-03a.pdf"]
+    assert got["kind"] == "datasheet" and "kind_classified" not in got
+
+
+def test_override_makes_a_word_file_a_prd_and_a_schematic_a_datasheet(tmp_path):
+    src = tmp_path / "hw"
+    src.mkdir()
+    adir = tmp_path / "atlas"
+    make_docx(src / "spec.docx")
+    make_pdf(src / "zz4455.pdf", [f"ZZ4455 Features\n{FILLER}"], {"creator": "Altium Designer"})
+    D = docs_by_file(inv.run(adir, src))
+    assert D["zz4455.pdf"]["kind"] == "schematic" and D["zz4455.pdf"]["parts"] == []
+    _override(adir, D["spec.docx"], "prd")
+    _override(adir, D["zz4455.pdf"], "datasheet")
+    D = docs_by_file(inv.run(adir, src))
+    assert D["spec.docx"]["needs_export"] is True
+    assert D["zz4455.pdf"]["kind"] == "datasheet" and D["zz4455.pdf"]["parts"] == ["ZZ4455"]
+    assert D["zz4455.pdf"]["doc_id"] == "zz4455@norev"
+
+
+def test_a_malformed_override_is_said_not_a_traceback(world, capsys):
+    adir, src = world
+    adir.mkdir(parents=True)
+    (adir / "atlas.toml").write_text(f'[project]\nfw = "{src.parent}"\nsources = "hardware"\n')
+    answers.path_of(adir).parent.mkdir(parents=True)
+    answers.path_of(adir).write_text('[documents."0123456789ab"]\nkind = "memo"\n')
+    assert cli.main(["--atlas-dir", str(adir), "inventory"]) == 2
+    assert "`kind` must be one of" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------- the page text cache
+
+def test_page_text_is_cached_by_content_outside_the_manifest(world):
+    adir, src = world
+    D = docs_by_file(inv.run(adir, src))
+    doc = D["mx9999.pdf"]
+    cache = inv.text_cache_path(adir, doc["sha256"])
+    assert cache.is_file() and "Absolute maximum ratings" in inv.read_text_cache(cache)[1]
+    assert "Absolute maximum ratings" not in (adir / "inventory" / "manifest.json").read_text()
+    assert inv.document_pages(adir, doc) == inv.read_text_cache(cache)
+    make_pdf(src / "mx9999.pdf", [f"MX9999\nGeneral Description\n{FILLER}\n19-1234; Rev 3; 3/20"])
+    D2 = docs_by_file(inv.run(adir, src))
+    assert not cache.exists() and inv.text_cache_path(adir, D2["mx9999.pdf"]["sha256"]).is_file()
+
+
+def test_document_pages_reads_the_file_when_the_cache_is_gone(world, monkeypatch):
+    adir, src = world
+    (adir).mkdir(parents=True)
+    (adir / "atlas.toml").write_text(f'[project]\nfw = "{src.parent}"\nsources = "hardware"\n')
+    man = inv.run(adir)
+    doc = docs_by_file(man)["mx9999.pdf"]
+    cache = inv.text_cache_path(adir, doc["sha256"])
+    cache.unlink()
+    assert "General Description" in inv.document_pages(adir, doc, man)[0]
+    assert cache.is_file()
+    calls = []
+    monkeypatch.setattr(inv, "_run", lambda *a, **k: calls.append(a) or "")
+    assert "General Description" in inv.document_pages(adir, doc, man)[0] and not calls   # no poppler the second time
+    cache.unlink()
+    (src / "mx9999.pdf").write_bytes(b"other content")
+    assert inv.document_pages(adir, doc, man) is None      # the file moved on: nothing to read
