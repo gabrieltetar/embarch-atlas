@@ -96,7 +96,7 @@ def test_missing_md_asks_questions(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "5 without a document, 3 firmware-visible" in out and "errata MISSING" in out
     md = (adir / "inventory" / "missing.md").read_text()
-    assert "**7 active part numbers (U/Q/D) on the boards; 2 have a document; 5 missing, 3 of them firmware-visible.**" in md
+    assert "**7 active part numbers (U/Q/D) on the boards: 2 covered, 0 proposed, 5 missing, 3 of them firmware-visible.**" in md
     assert "Q1. **MCU errata sheet**" in md
     assert "Q3. **FETZZ9** x2 (M:Q1, S:Q3): shares MCU net(s) SIG1 (M:U1)." in md
     assert "Q2. **GATE77Q** x1 (M:U3): one series part from MCU net(s) SIG2 (M:U1) via M:R1. Stops 1 net_trace walk." in md

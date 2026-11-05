@@ -125,8 +125,9 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
     L.append("")
     # parts with documents
     rows = parts_table(J)
-    with_doc = [r for r in rows if r["docs"]]
-    without = [r for r in rows if not r["docs"]]
+    with_doc = [r for r in rows if r["docs"] or r["support"]]
+    pending = [r for r in rows if not r["docs"] and r["supplied"]]
+    without = [r for r in rows if not r["docs"] and not r["supplied"]]
     L += ["## Parts on the boards with documents", ""]
     if with_doc:
         L += ["| part (MPN) | refs | doc | card |", "|---|---|---|---|"]
@@ -135,11 +136,14 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
             for d in r["docs"]:
                 card = f"docs/{d}/card.md" if (ad / "docs" / d / "card.md").is_file() else "(no card yet)"
                 L.append(f"| {r['mpn']} | {refs} | `{d}` | {card} |")
+            for d in r["support"]:
+                card = f"docs/{d}/card.md" if (ad / "docs" / d / "card.md").is_file() else "(no card yet)"
+                L.append(f"| {r['mpn']} | {refs} | `{d}` (supporting) | {card} |")
     else:
         L.append("None translated yet (`/atlas-translate-docs`).")
     L.append("")
     # documents tied to no board part: standards, specifications, the PRD
-    shown = {d for d, _, _ in mdocs} | {d for r in with_doc for d in r["docs"]}
+    shown = {d for d, _, _ in mdocs} | {d for r in with_doc for d in r["docs"] + r["support"]}
     other = [(d, v) for d, v in sorted((J.docs.docs if J else {}).items()) if d not in shown]
     if other:
         L += ["## Other documents", "", "Tied to no part on the boards (standards, specifications, the PRD).", "",
@@ -150,6 +154,11 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
             card = f"docs/{d}/card.md" if (v["dir"] / "card.md").is_file() else "(no card yet)"
             L.append(f"| `{d}` | {v['doc'].get('kind') or 'doc'} | {title.replace('|', '/')} | {card} |")
         L.append("")
+    if pending:
+        show = pending if max_parts is None else pending[:max_parts]
+        L += [f"## Active parts with a document supplied, not translated yet ({len(pending)})", "",
+              "; ".join(f"{r['mpn']} ({', '.join(r['supplied'][:2])})" for r in show)
+              + ("; ..." if len(show) < len(pending) else ""), ""]
     if without:
         show = without if max_parts is None else without[:max_parts]
         L += [f"## Active parts without a document ({len(without)})", "",
@@ -204,8 +213,10 @@ def parts_table(J) -> list[dict]:
             by[mpn].append(f"{lab}:{ref}")
     out = []
     for mpn, refs in sorted(by.items(), key=lambda x: (-len(x[1]), x[0])):
-        docs = sorted({d for r in refs for d in J.part_docs.get(tuple(r.split(":", 1)), [])})
-        out.append({"mpn": mpn, "refs": refs, "docs": docs})
+        keys = [tuple(r.split(":", 1)) for r in refs]
+        out.append({"mpn": mpn, "refs": refs, "docs": sorted({d for k in keys for d in J.part_docs.get(k, [])}),
+                    "supplied": sorted({f for k in keys for f in J.part_supplied.get(k, [])}),
+                    "support": sorted({d for k in keys for d in J.part_support.get(k, [])})})
     return out
 
 

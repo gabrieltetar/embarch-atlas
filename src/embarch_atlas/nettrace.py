@@ -15,7 +15,8 @@ Two parts to an answer:
   low-ohm series parts, inductors and ferrites (direction not stated) and connector mates, and
   stops at an MCU pin, an unmated connector, a part without a datasheet or the depth limit.
 
-Parts without a datasheet are listed as questions for the engineer, never guessed.
+Parts without a datasheet are listed as questions for the engineer, never guessed. A part whose document
+is supplied but not translated yet is not asked for again: it is listed as waiting for the translation.
 """
 from __future__ import annotations
 
@@ -139,7 +140,8 @@ def members(J: Join, board: str, net: str) -> list[dict]:
         else:
             name, rec, doc = _role(J, board, p)
             it.update(kind="part", pin_name=name, rec=rec, doc=doc,
-                      documented=bool(J.part_docs.get((board, ref))), generic=(board, ref) in J.generic)
+                      documented=bool(J.part_docs.get((board, ref))), generic=(board, ref) in J.generic,
+                      supplied=J.part_supplied.get((board, ref)))
         out.append(it)
     return out
 
@@ -195,7 +197,9 @@ def _member_lines(items: list[dict]) -> list[str]:
             else:
                 lines.append(f"  {pk}{name} {it.get('mpn') or ''}{dni} "
                              + ("no role: the engineer's pin map for the generic card leaves this pin out"
-                                if it.get("generic") else "role unknown: no datasheet"))
+                                if it.get("generic") else
+                                f"role unknown: {', '.join(it['supplied'])} is supplied, not translated yet"
+                                if it.get("supplied") else "role unknown: no datasheet"))
     if caps:
         lines.append(f"  caps ({len(caps)}): " + ", ".join(caps))
     if tps:
@@ -283,11 +287,13 @@ def _enables(J: Join, board: str, ref: str) -> list[str]:
 
 
 def upstream(J: Join, nets: list[tuple[str, str]], hop: int = 0, seen=None, asks=None,
-             came_from: tuple[str, str] | None = None) -> list[str]:
+             came_from: tuple[str, str] | None = None, waiting=None) -> list[str]:
     """What feeds `nets`, walked toward the source. `came_from` is the part whose input this net is,
-    left out as a feed so a bidirectional switch is not walked back through."""
+    left out as a feed so a bidirectional switch is not walked back through. `asks` collects the parts
+    with no document, `waiting` those whose document is supplied and not translated yet."""
     seen = seen if seen is not None else set()
     asks = asks if asks is not None else {}
+    waiting = waiting if waiting is not None else {}
     pad = "  " * (2 * hop)
     group = [x for x in connected(J, nets) if (x[0], x[1]) not in seen]
     if not group:
@@ -324,14 +330,15 @@ def upstream(J: Join, nets: list[tuple[str, str]], hop: int = 0, seen=None, asks
                 lines.append(f"{pad}    input {pname} on {b2}:{n2} (walk limit; trace it on its own)")
             else:
                 lines.append(f"{pad}    input {pname}:")
-                lines += upstream(J, [(b2, n2)], hop + 1, seen, asks, came_from=(b, ref))
+                lines += upstream(J, [(b2, n2)], hop + 1, seen, asks, came_from=(b, ref), waiting=waiting)
     undocumented = [it for it in items if it["kind"] == "part" and not it.get("documented") and not it.get("dni")
                     and not it.get("generic")]
     for it in undocumented:
-        asks.setdefault(it.get("mpn") or "?", set()).add(f"{it['board']}:{it['ref']}")
+        (waiting if it.get("supplied") else asks).setdefault(it.get("mpn") or "?", set()).add(f"{it['board']}:{it['ref']}")
     if feeds:
         return lines
-    refs = sorted({f"{it['board']}:{it['ref']} {it.get('mpn') or ''}".rstrip() for it in undocumented})
+    refs = sorted({f"{it['board']}:{it['ref']} {it.get('mpn') or ''}".rstrip() for it in undocumented if not it.get("supplied")})
+    pend = sorted({f"{it['board']}:{it['ref']} {it.get('mpn') or ''}".rstrip() for it in undocumented if it.get("supplied")})
     unflowed = [it for it in items if it["kind"] == "part" and it.get("documented") and not it.get("rec")]
     back = any(it["kind"] == "part" and (it["board"], it["ref"]) == came_from
                and (it.get("rec") or {}).get("flow") in ("source", "bidir") for it in items)
@@ -339,7 +346,9 @@ def upstream(J: Join, nets: list[tuple[str, str]], hop: int = 0, seen=None, asks
         lines.append(f"{pad}  fed only back through {came_from[0]}:{came_from[1]}, the part walked in from")
     if refs:
         lines.append(f"{pad}  no documented feed; parts here without a datasheet: " + ", ".join(refs))
-    elif not back and not any(it["kind"] == "mcu" and it.get("io") for it in items):
+    if pend:
+        lines.append(f"{pad}  no documented feed; parts here with a document supplied, not translated yet: " + ", ".join(pend))
+    if not refs and not pend and not back and not any(it["kind"] == "mcu" and it.get("io") for it in items):
         lines.append(f"{pad}  no part on this net has a pin record with flow source or bidir")
     if unflowed:
         lines.append(f"{pad}  documented, but no pin record for: " + ", ".join(_part_key(it) for it in unflowed))
@@ -375,7 +384,10 @@ def answer(J: Join, query: str, board: str | None = None) -> tuple[str, str]:
         lines = [f"{b}:{ref} {B.mpn(ref) or ''} {B.value(ref) or ''}".rstrip() + (" DNI" if B.dni(ref) else "")
                  + (f" datasheet {', '.join(docs)}" if docs else
                     f" no datasheet; pin roles from a generic card the engineer declared {GENERIC_TAG}"
-                    if (b, ref) in J.generic else " no datasheet: role of every pin unknown"), ""]
+                    if (b, ref) in J.generic else
+                    f" document supplied, not translated yet ({', '.join(J.part_supplied[(b, ref)])}): role of every pin unknown"
+                    if (b, ref) in J.part_supplied else " no datasheet: role of every pin unknown")
+                 + (f"; supporting: {', '.join(J.part_support[(b, ref)])}" if (b, ref) in J.part_support else ""), ""]
         for key in B.pins(ref):
             name, rec, doc = _role(J, b, key)
             role = " ".join(f"{f}={rec[f]}" for f in ("dir", "type", "flow") if rec and rec.get(f))
@@ -397,13 +409,19 @@ def answer(J: Join, query: str, board: str | None = None) -> tuple[str, str]:
                      + (f", reached through {how}" if how else "") + ")")
         lines += _member_lines(members(J, b, n))
     asks: dict[str, set[str]] = {}
-    up = upstream(J, start, asks=asks)
+    waiting: dict[str, set[str]] = {}
+    up = upstream(J, start, asks=asks, waiting=waiting)
     if up:
         lines += ["", "## Upstream (feeds come only from datasheet pin records with flow)"] + up
     if asks:
         lines += ["", "## Datasheets needed (role unknown until the engineer supplies them; "
                   "inventory/missing.md has the links)"]
         lines += [f"- {mpn}: {', '.join(sorted(refs))}" for mpn, refs in sorted(asks.items())]
+    if waiting:
+        lines += ["", "## Documents supplied, not translated yet (role unknown until they are)"]
+        for mpn, refs in sorted(waiting.items()):
+            files = sorted({f for r in refs for f in J.part_supplied.get(tuple(r.split(":", 1)), [])})
+            lines.append(f"- {mpn}: {', '.join(sorted(refs))} ({', '.join(files)})")
     if J.answers_error:
         lines += ["", f"inventory/answers.toml ignored: {J.answers_error}"]
     return src, "\n".join(lines)
@@ -411,8 +429,8 @@ def answer(J: Join, query: str, board: str | None = None) -> tuple[str, str]:
 
 def walk_stops(J: Join) -> dict[str, int]:
     """MPN -> how many upstream walks from a rail stop at it for want of a datasheet (one walk per
-    rail net that is not ground; each part number counted once per walk). A part with a datasheet or
-    an engineer-declared generic card is never counted."""
+    rail net that is not ground; each part number counted once per walk). A part with a datasheet, a
+    document supplied and not translated yet, or an engineer-declared generic card is never counted."""
     count: dict[str, int] = {}
     done: set[tuple[str, str]] = set()
     for b in sorted(J.boards):

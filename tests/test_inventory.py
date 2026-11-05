@@ -320,7 +320,7 @@ def test_a_part_with_a_package_like_prefix_stays_a_part():
 def test_a_vendor_internal_number_does_not_become_a_part():
     d = inv.detect_ids("datasheet", {}, ["AP02001 AP02001 AP02001 Logic gate ZY1234"])
     assert d["parts"] == ["ZY1234"]
-    assert inv.detect_ids("datasheet", {}, ["TL072 op-amp"])["parts"] == ["TL072"]
+    assert inv.detect_ids("datasheet", {}, ["QL072 op-amp"])["parts"] == ["QL072"]    # three digits: a part number
 
 
 def test_a_normal_datasheet_keeps_its_doc_id(world):

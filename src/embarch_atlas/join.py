@@ -28,7 +28,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
-from embarch_atlas import answers
+from embarch_atlas import answers, coverage
 from embarch_atlas.common import (read_json, read_jsonl, sha256_file, source_files, sources_fingerprint, write_json,
                                    write_text)
 
@@ -192,6 +192,13 @@ class Docs:
                               "patterns": [_part_pattern(p) for p in parts if p]}
 
     def for_mpn(self, mpn: str | None) -> list[str]:
+        """The distillations that are this part's: an app note may name it, and never speaks for it."""
+        return [d for d in self._matching(mpn) if self.kind(d) != "appnote"]
+
+    def support_for_mpn(self, mpn: str | None) -> list[str]:
+        return [d for d in self._matching(mpn) if self.kind(d) == "appnote"]
+
+    def _matching(self, mpn: str | None) -> list[str]:
         n = norm(mpn)
         if not n:
             return []
@@ -355,19 +362,27 @@ class Join:
                 self.mate[(bb, f"{rb}-{pb}")] = (ba, f"{ra}-{pa}")
         self.mcu = self._find_mcu(mcu_part, mcu_ref)
         self.pin_records: dict[tuple[str, str], dict] = {}   # (board, ref) -> {pin number/ball: record}
-        self.part_docs: dict[tuple[str, str], list[str]] = {}
-        for b in boards.values():
-            for ref in b.comps:
-                ds = docs.for_mpn(b.mpn(ref))
-                if ds:
-                    self.part_docs[(b.label, ref)] = ds
-        # generic cards: only an MPN the engineer answered `standard-function`, only where no datasheet covers it
-        self.generic: dict[tuple[str, str], dict[str, dict]] = {}
         self.answers_error: str | None = None
         try:
             ans = answers.load(ad)
+            cov = coverage.load(ad, ans)
         except ValueError as e:
             ans, self.answers_error = {}, str(e)
+            cov = coverage.load(ad, {}, {})
+        self.part_docs: dict[tuple[str, str], list[str]] = {}
+        self.part_supplied: dict[tuple[str, str], list[str]] = {}   # covered by a file no distillation speaks for yet
+        self.part_support: dict[tuple[str, str], list[str]] = {}    # distilled app notes that name the part
+        for b in boards.values():
+            for ref in b.comps:
+                ds = cov.part_docs(b.mpn(ref), docs)
+                if ds:
+                    self.part_docs[(b.label, ref)] = ds
+                elif cov.supplied(b.mpn(ref)):
+                    self.part_supplied[(b.label, ref)] = cov.supplied(b.mpn(ref))
+                if cov.support_docs(b.mpn(ref), docs):
+                    self.part_support[(b.label, ref)] = cov.support_docs(b.mpn(ref), docs)
+        # generic cards: only an MPN the engineer answered `standard-function`, only where no datasheet covers it
+        self.generic: dict[tuple[str, str], dict[str, dict]] = {}
         for b in boards.values():
             for ref, c in b.comps.items():
                 a = answers.find(ans, b.mpn(ref))
@@ -1151,6 +1166,8 @@ def snapshot_inputs(atlas: Path, root: Path, boards: dict[str, Board], docs: Doc
     man = ad / "inventory" / "manifest.json"
     rec["sources"], rec["source_files"] = sources_fingerprint(man), source_files(man)
     rec["missing_boards"] = list(missing or [])
+    if coverage.answers_fingerprint(ad):
+        rec["answers"] = coverage.answers_fingerprint(ad)
     rec["schematics"] = {lab: (b.nl.get("source") or {}).get("sha256") for lab, b in sorted(boards.items())}
     for lab in boards:
         src = root / lab / "netlist.json"

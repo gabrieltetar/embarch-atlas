@@ -1,9 +1,13 @@
 """`missing`: which parts on the boards have no document, asked as questions.
 
-Joins every board's `bom.json` / `netlist.json` to `inventory/manifest.json` and
-writes `inventory/missing.md`: one question per part number without a document,
-ranked by how directly firmware sees the part, plus the MCU's errata sheet and
-reference manual when the manifest has none. **Nothing is fetched**: for each
+Joins every board's `bom.json` / `netlist.json` to `inventory/manifest.json`
+through `coverage` and writes `inventory/missing.md`. It opens with one table of
+proposed matches, file to part, for the engineer to confirm or reject, so a file
+already supplied is never asked for again. Then one question per part number
+with no document and no proposal, ranked by how directly firmware sees the part,
+plus the MCU's errata sheet and reference manual when the manifest has none, and
+the Word PRDs to export. It closes with the documents nothing uses, which is how
+a wrong file or a mis-typed document shows up. **Nothing is fetched**: for each
 item the engineer supplies the file, marks it not needed, or accepts a
 standard-function card (engineer-declared) for a jellybean part. The link a
 part's own schematic parameters carry is listed as what the schematic says, not
@@ -33,10 +37,9 @@ from pathlib import Path
 from typing import Any
 
 from . import answers as answersmod
-from . import common, interfaces, project
+from . import common, coverage, interfaces, inventory, project
+from .coverage import category, family_regex, norm, ref_prefix  # noqa: F401 - family_regex is this module's API too
 
-ACTIVE = {"U", "Q", "D", "IC", "VR", "LED", "ZD", "TVS", "DS"}
-PASSIVE = {"R", "C", "L", "FB", "RN", "RA", "CR", "TP", "NT", "MH", "FID", "H", "LOGO", "MP", "E", "TH"}
 SERIES = {"R", "FB", "NT"}
 RAIL_PINS = 30
 SUPPLY_PIN = re.compile(r"^(V(DD|SS|BAT|REF|CAP|CC|EE|IN|DDA|SSA|DDIO)[A-Z0-9_+\-]*|A?GND\w*|[AD]V(DD|SS)\w*|EP|EPAD|PAD|"
@@ -44,70 +47,9 @@ SUPPLY_PIN = re.compile(r"^(V(DD|SS|BAT|REF|CAP|CC|EE|IN|DDA|SSA|DDIO)[A-Z0-9_+\
 RAIL_NET = re.compile(r"^([ADPSC]?GND(_?[A-Z0-9]{1,6})?|V(SS|DD|CC|EE)[A-Z0-9_]*|\+?\d+V\d*(_[A-Z0-9]+)?|"
                       r"[+-]?\d+V\d*)$", re.I)
 TIER_ORDER = ("mcu", "direct", "via-series", "cross-board", "not-visible", "unknown")
-DOC_KINDS = ("datasheet", "reference-manual", "errata", "other")
-
-
-def norm(s: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", (s or "").upper())
-
-
-def ref_prefix(ref: str) -> str:
-    m = re.match(r"[A-Za-z]+", ref)
-    return m.group(0).upper() if m else ""
-
-
-def category(ref: str) -> str:
-    p = ref_prefix(ref)
-    return "active" if p in ACTIVE else ("passive" if p in PASSIVE else "other")
-
-
-# ---------------------------------------------------------------- document coverage
-
-def family_regex(token: str) -> re.Pattern | None:
-    """A part token from the manifest -> a regex over normalised MPNs.
-
-    `ABC32F4xE/xG` (ST ordering family: base, one package letter, one of the
-    listed flash-size letters) -> `^ABC32F4[A-Z0-9](E|G)`; a lower-case `x` is a
-    wildcard (`ABC120x` -> `^ABC120[A-Z0-9]`); anything else is a prefix of at
-    least 6 characters, so a bare vendor family (`ABC32`) never covers every part.
-    """
-    if "/x" in token and "x" in token.split("/")[0]:
-        base, *alts = token.split("/")
-        i = base.index("x")
-        sizes = [base[i + 1:]] + [a.lstrip("x") for a in alts]
-        sizes = [norm(s) for s in sizes if norm(s)]
-        if not sizes:
-            return None
-        return re.compile("^" + re.escape(norm(base[:i])) + "[A-Z0-9](" + "|".join(map(re.escape, sizes)) + ")")
-    head = token.split("/")[0]
-    if "x" in head:
-        rx = "".join("[A-Z0-9]" if c == "x" else re.escape(c.upper()) for c in head if c.isalnum())
-        return re.compile("^" + rx) if len(rx) >= 5 else None
-    n = norm(head)
-    return re.compile("^" + re.escape(n)) if len(n) >= 6 and sum(c.isdigit() for c in n) >= 2 else None
-
-
-def doc_patterns(doc: dict[str, Any]) -> list[re.Pattern]:
-    toks = list(doc.get("parts") or [])
-    stem = re.sub(r"^(DS|ds)_", "", Path(doc["file"]).stem)
-    toks += [t for t in re.split(r"[-_ .]+", stem) if re.fullmatch(r"[A-Za-z]{2,}\d{2,}[A-Za-z0-9]*", t)]
-    pats = []
-    for t in toks:
-        rx = family_regex(t)
-        if rx is not None and rx.pattern not in {p.pattern for p in pats}:
-            pats.append(rx)
-    return pats
-
-
-def coverage_index(manifest: dict[str, Any]) -> list[tuple[dict[str, Any], list[re.Pattern]]]:
-    docs = [d for d in manifest.get("documents") or []
-            if d.get("kind") in DOC_KINDS and not d.get("superseded_by") and not d.get("duplicate_of")]
-    return [(d, doc_patterns(d)) for d in docs]
-
-
-def covering_docs(mpn: str, index, kinds: tuple[str, ...] = ("datasheet", "reference-manual", "errata", "other")) -> list[dict[str, Any]]:
-    n = norm(mpn)
-    return [d for d, pats in index if d["kind"] in kinds and any(p.match(n) for p in pats)]
+RM_TOKEN = "reference-manual"       # `--confirm` / `--reject` argument for the MCU reference-manual row
+KEPT_ANSWERS = ("not-needed", "standard-function")      # the engineer decided: no proposal reopens the part
+UNUSED_KINDS = ("schematic", "prd", "spreadsheet", "notes")     # have a role of their own, or are read as they are
 
 
 # ---------------------------------------------------------------- firmware visibility
@@ -195,8 +137,7 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"no boards/*/netlist.json under {atlas_dir}; run `embarch-atlas schematic` per board")
     boms = {b: common.read_json(atlas_dir / "boards" / b / "bom.json") for b in nls
             if (atlas_dir / "boards" / b / "bom.json").is_file()}
-    index = coverage_index(manifest)
-    given = answersmod.load(atlas_dir)
+    cov = coverage.load(atlas_dir)
     walks = _walks(atlas_dir)
     mcu_cfg = cfg.get("mcu") or {}
     mcu_part = (mcu_cfg.get("part") or "").strip()
@@ -218,10 +159,19 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
             comp = nl["components"].get(ref)
             if comp is None:
                 continue
-            R = rows.setdefault(mpn, {"mpn": mpn, "refs": [], "category": cat, "tier": "unknown", "why": [],
-                                      "answer": answersmod.find(given, mpn), "walks": walks.get(mpn, 0),
-                                      "description": e.get("description"), "links": set(), "dni": [],
-                                      "covered_by": [d["file"] for d in covering_docs(mpn, index)]})
+            R = rows.get(mpn)
+            if R is None:
+                st = cov.status(mpn)
+                answer = answersmod.find(cov.given, mpn)
+                answer = None if answer and answer["answer"] == "document" else answer
+                keep = bool(answer) and answer["answer"] in KEPT_ANSWERS
+                R = rows[mpn] = {"mpn": mpn, "refs": [], "category": cat, "tier": "unknown", "why": [],
+                                 "answer": answer, "walks": walks.get(mpn, 0),
+                                 "description": e.get("description"), "links": set(), "dni": [],
+                                 "covered_by": [c["doc"]["file"] for c in st["covered"]],
+                                 "covered_how": {c["doc"]["file"]: c for c in st["covered"] if c["how"] != "family"},
+                                 "proposals": [] if keep else st["proposals"], "supporting": st["supporting"],
+                                 "stale_confirm": st["stale"]}
             if cat == "active":
                 R["category"] = "active"
             R["refs"].append(f"{b}:{ref}")
@@ -252,17 +202,52 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
     if mcu_part and not any(norm(m).startswith(norm(mcu_part)) for m in mcu_keys):
         mcu_keys.append(mcu_part + "XXXX")
     for kind in mcu_docs:
-        mcu_docs[kind] = sorted({d["file"] for m in mcu_keys for d in covering_docs(m, index, (kind,))})
+        found = {d["file"] for m in mcu_keys for d in cov.documents(m, (kind,))}
+        if kind != "datasheet":     # a family name no part token can read still names the MCU; an override says so outright
+            found |= {d["file"] for d, _ in cov.index if d["kind"] == kind and (
+                (cov.overrides.get((d.get("sha256") or "")[:12]) or {}).get("kind") == kind or cov.names_mcu(mcu_part, d))}
+        mcu_docs[kind] = sorted(found)
     if not mcu_docs["errata"] and not mcu_refs:
-        mcu_docs["errata"] = [d["file"] for d, _ in index if d["kind"] == "errata"]
+        mcu_docs["errata"] = [d["file"] for d, _ in cov.index if d["kind"] == "errata"]
+    rm_rows = _rm_rows(cov, mcu_part) if not mcu_docs["reference-manual"] else []
 
     def key(R):
         return (-R["walks"], TIER_ORDER.index(R["tier"]), -len(R["refs"]), R["mpn"])
     ordered = sorted(rows.values(), key=key)
+    passive_mpns = {e["mpn"] for b in boms.values() for e in b if e.get("mpn") and category(e["ref"]) == "passive"}
     return {"boards": sorted(nls), "mcu_part": mcu_part, "mcu_refs": [f"{b}:{r}" for b, r in mcu_refs],
             "mcu_mpns": sorted({nls[b]["components"][r]["mpn"] for b, r in mcu_refs}),
-            "mcu_docs": mcu_docs, "rows": ordered,
+            "mcu_docs": mcu_docs, "rows": ordered, "rm_rows": rm_rows,
+            "word_prds": [d["file"] for d in cov.docs if d.get("needs_export") and not d.get("superseded_by")],
+            "unused": _unused(cov, ordered, mcu_docs, rm_rows, passive_mpns),
             "mating": sorted({src for _, _, src in mated}), "manifest_docs": len(manifest.get("documents") or [])}
+
+
+def _rm_rows(cov: coverage.Coverage, mcu_part: str) -> list[dict[str, Any]]:
+    """Long documents that name the MCU, when no reference manual does: some vendors publish one datasheet
+    with the full register documentation and no separate manual. Longest first."""
+    rows = []
+    for d, _ in cov.index if mcu_part else []:
+        if d["kind"] not in ("datasheet", "other") or int(d.get("pages") or 0) < coverage.MCU_RM_MIN_PAGES:
+            continue
+        if (cov.overrides.get((d.get("sha256") or "")[:12]) or {}).get("not_reference_manual"):
+            continue
+        where = cov.names_mcu(mcu_part, d)
+        if where:
+            rows.append({"file": d["file"], "sha256": d.get("sha256"), "pages": int(d["pages"]), "where": where})
+    return sorted(rows, key=lambda r: (-r["pages"], r["file"]))
+
+
+def _unused(cov: coverage.Coverage, rows: list[dict[str, Any]], mcu_docs: dict[str, list[str]],
+            rm_rows: list[dict[str, Any]], passive_mpns: set[str]) -> list[dict[str, Any]]:
+    """Documents covering no BOM part and no MCU role, and offered for none."""
+    used = {f for fs in mcu_docs.values() for f in fs} | {r["file"] for r in rm_rows}
+    for R in rows:
+        used |= set(R["covered_by"]) | set(R["supporting"]) | {p["file"] for p in R["proposals"]}
+    for mpn in passive_mpns:
+        used |= {c["doc"]["file"] for c in cov.status(mpn)["covered"]}
+    return [d for d in cov.docs if d["file"] not in used and d.get("kind") not in UNUSED_KINDS
+            and not d.get("superseded_by") and not d.get("duplicate_of")]
 
 
 def _walks(atlas_dir: Path) -> dict[str, int]:
@@ -312,15 +297,44 @@ def _answer_text(a: dict[str, Any]) -> str:
         return f"not needed: {a['why']}"
     if a["answer"] == "supplied":
         return "supplied; the file is not in the manifest yet (put it in the sources folder, run `embarch-atlas inventory`)"
+    if a["answer"] == "document":
+        return f"confirmed {a['file']}"
     pins = ", ".join(f"{k}={v}" for k, v in a["pins"].items())
     return f"generic card {a['function']} (engineer-declared; pins {pins})"
+
+
+def _cell(s: Any) -> str:
+    return str(s if s is not None else "").replace("|", "\\|")
+
+
+def _proposal_section(a: dict[str, Any], proposed: list[dict[str, Any]]) -> list[str]:
+    """The one ✓/✕ table. Rows of one part run strongest first; `--confirm-all` takes the first of each."""
+    if not proposed and not a["rm_rows"]:
+        return []
+    L = ["## Proposed matches: confirm or reject", "",
+         "Documents already in the sources folder that look like what a part or the MCU needs. Nothing here counts "
+         "as covered until it is confirmed.", "",
+         "| MPN | refs | proposed file | rung | evidence |", "|---|---|---|---|---|"]
+    for R in proposed:
+        for p in R["proposals"]:
+            L.append("| " + " | ".join(map(_cell, (R["mpn"], _refs(R["refs"], 4), p["file"], p["rung"], p["evidence"]))) + " |")
+    for r in a["rm_rows"]:
+        L.append("| " + " | ".join(map(_cell, ("MCU reference manual", ", ".join(a["mcu_refs"]), r["file"], "long MCU document",
+                                               f"{r['file']} serves as the reference manual ({r['pages']} pages, "
+                                               f"names {a['mcu_part']} in {r['where']})"))) + " |")
+    L += ["", "✓ all: `embarch-atlas missing --confirm-all` (the first row of each part).", "",
+          "✓ one: `embarch-atlas missing --confirm <MPN> --file <file>`. ✕ one: `embarch-atlas missing --reject <MPN> "
+          "--file <file>`, which holds until the file's content changes. The reference-manual row takes "
+          f"`{RM_TOKEN}` for `<MPN>`.", ""]
+    return L
 
 
 def render_md(a: dict[str, Any]) -> str:
     rows = a["rows"]
     no_doc = [R for R in rows if not R["covered_by"]]
-    answered = [R for R in no_doc if R["answer"]]
-    missing = [R for R in no_doc if not R["answer"]]
+    proposed = [R for R in no_doc if R["proposals"]]
+    answered = [R for R in no_doc if R["answer"] and not R["proposals"]]
+    missing = [R for R in no_doc if not R["answer"] and not R["proposals"]]
     act = [R for R in missing if R["category"] == "active"]
     act_vis = [R for R in act if R["tier"] in ("mcu", "direct", "via-series", "cross-board")]
     act_rest = [R for R in act if R not in act_vis]
@@ -328,9 +342,17 @@ def render_md(a: dict[str, Any]) -> str:
     other_vis = [R for R in other if R["tier"] in ("direct", "via-series", "cross-board")]
     covered = [R for R in rows if R["covered_by"]]
     n_act = sum(1 for R in rows if R["category"] == "active")
+    n_cov = sum(1 for R in covered if R["category"] == "active")
+    n_prop = sum(1 for R in proposed if R["category"] == "active")
     n_ans = sum(1 for R in answered if R["category"] == "active")
     mcu = ", ".join(a["mcu_refs"]) or "not found"
     L = ["# Missing documents: questions for the engineer", "",
+         f"**{n_act} active part numbers (U/Q/D) on the boards: {n_cov} covered, {n_prop} proposed, {len(act)} missing, "
+         f"{len(act_vis)} of them firmware-visible.** "
+         + (f"{n_ans} more are answered in `inventory/answers.toml` (listed below). " if n_ans else "")
+         + f"Other parts without a document: {len(other)} ({len(other_vis)} firmware-visible).", ""]
+    L += _proposal_section(a, proposed)
+    L += ["## How to answer", "",
          f"From boards {', '.join(a['boards'])} (`boards/*/bom.json`, the schematic's own component parameters) against "
          f"`inventory/manifest.json` ({a['manifest_docs']} files). The tool never fetches a document: each item is a "
          "question, and every answer is one of",
@@ -343,11 +365,6 @@ def render_md(a: dict[str, Any]) -> str:
          f"MCU: {mcu} (`[mcu] part = \"{a['mcu_part']}\"`). Firmware visibility is read from the netlist: **direct** = "
          "shares a signal net with an MCU pin; **via-series** = one series resistor, bead or net tie away; "
          "**cross-board** = reaches an MCU net through a board-to-board connector. Supply nets never count.",
-         "",
-         f"**{n_act} active part numbers (U/Q/D) on the boards; {n_act - len(act) - n_ans} have a document; "
-         f"{len(act)} missing, {len(act_vis)} of them firmware-visible.** "
-         + (f"{n_ans} more are answered in `inventory/answers.toml` (listed below). " if n_ans else "")
-         + f"Other parts without a document: {len(other)} ({len(other_vis)} firmware-visible).",
          "",
          "Open questions are ordered by how many `net_trace` walks (one per rail, upstream) stop at the part for "
          "want of its datasheet, then by firmware visibility. Answer one with `embarch-atlas missing --answer "
@@ -362,7 +379,10 @@ def render_md(a: dict[str, Any]) -> str:
         desc = f" \"{R['description']}\"." if R.get("description") else ""
         link = f" Link in the schematic's parameters (not fetched): {R['links'][0]}" if R["links"] else ""
         stops = (f" Stops {R['walks']} net_trace walk{'s' if R['walks'] != 1 else ''}." if R["walks"] else "")
-        return (f"Q{q}. **{R['mpn']}** x{len(R['refs'])} ({_refs(R['refs'])}): {_why(R)}.{stops}{desc}{dni} {ANSWERS}"
+        gone = (f" Confirmed earlier as {R['stale_confirm']['file']}, which is no longer in the sources folder."
+                if R.get("stale_confirm") else "")
+        note = f" Supporting material, not its datasheet: {', '.join(R['supporting'])}." if R["supporting"] else ""
+        return (f"Q{q}. **{R['mpn']}** x{len(R['refs'])} ({_refs(R['refs'])}): {_why(R)}.{stops}{desc}{dni}{gone}{note} {ANSWERS}"
                 + (f"\n    {link.strip()}" if link else ""))
 
     L += ["## MCU documents", ""]
@@ -379,7 +399,9 @@ def render_md(a: dict[str, Any]) -> str:
                  "Supply the device errata sheet, or mark it not needed?")
     else:
         L.append(f"- errata: {', '.join(md['errata'])}")
-    if not md["reference-manual"]:
+    if a["rm_rows"]:
+        L.append(f"- reference manual: none for {fam} in the manifest; {a['rm_rows'][0]['file']} is proposed above")
+    elif not md["reference-manual"]:
         q += 1
         L.append(f"Q{q}. **MCU reference manual**: none for {fam} in the manifest. Supply it, or mark it not needed?")
     else:
@@ -387,6 +409,13 @@ def render_md(a: dict[str, Any]) -> str:
     if md["datasheet"]:
         L.append(f"- datasheet: {', '.join(md['datasheet'])}")
     L.append("")
+    if a["word_prds"]:
+        L += ["## PRD in Word", ""]
+        for f in a["word_prds"]:
+            q += 1
+            L.append(f"Q{q}. **{f}** is a PRD in Word, which the procedure cannot read. Export it to PDF and put the PDF in "
+                     "the sources folder under the same name, then run `embarch-atlas inventory`. The tool does not convert it.")
+        L.append("")
     L += [f"## Active parts, firmware-visible, no document ({len(act_vis)})", ""] + [item(R) for R in act_vis] + [""]
     L += [f"## Active parts, not firmware-visible, no document ({len(act_rest)})", "",
           "Ranked by count. Not visible is not unimportant: logic between the MCU and a load can decide what a "
@@ -399,10 +428,29 @@ def render_md(a: dict[str, Any]) -> str:
               "engineer-declared, never a limit or a timing.", ""]
         L += [f"- **{R['mpn']}** x{len(R['refs'])} ({_refs(R['refs'], 4)}): {_answer_text(R['answer'])}" for R in answered]
         L.append("")
-    L += [f"## Covered ({len(covered)})", "", "| MPN | refs | tier | document |", "|---|---|---|---|"]
+    L += [f"## Covered ({len(covered)})", "", "A wrong row here is taken off with `embarch-atlas missing --reject <MPN> --file <file>`.",
+          "", "| MPN | refs | tier | document |", "|---|---|---|---|"]
     for R in covered:
-        L.append(f"| {R['mpn']} | {_refs(R['refs'], 4)} | {R['tier']} | {', '.join(R['covered_by'])} |")
+        L.append(f"| {R['mpn']} | {_refs(R['refs'], 4)} | {R['tier']} | {_covered_cell(R)} |")
+    if a["unused"]:
+        L += ["", f"## Supplied documents nothing uses ({len(a['unused'])})", "",
+              "No part on the boards and no MCU role reads these. A file here is not wrong by itself (a standard, a guide), "
+              "but this is where a wrong file or a mis-typed document shows up; `embarch-atlas missing --kind <file> <kind>` "
+              "corrects a kind.", ""]
+        for d in a["unused"]:
+            pages = f", {d['pages']} page{'s' if d['pages'] != 1 else ''}" if d.get("pages") else ""
+            parts = f"; part tokens read: {', '.join(d['parts'])}" if d.get("parts") else ""
+            L.append(f"- {d['file']} ({d.get('kind')}{pages}){parts}")
     return "\n".join(L) + "\n"
+
+
+def _covered_cell(R: dict[str, Any]) -> str:
+    """The files, each with what covers it when that is not a part token; supporting material beside them."""
+    cells = []
+    for f in R["covered_by"]:
+        c = R["covered_how"].get(f)
+        cells.append(f if not c else f"{f} ({c['how']}{': ' + c['evidence'] if c['evidence'] else ''})")
+    return _cell(", ".join(cells) + (f"; supporting: {', '.join(R['supporting'])}" if R["supporting"] else ""))
 
 
 def run(atlas_dir: Path) -> dict[str, Any]:
@@ -411,25 +459,149 @@ def run(atlas_dir: Path) -> dict[str, Any]:
     return a
 
 
+# ---------------------------------------------------------------- confirm, reject, kind
+
+class _Refused(ValueError):
+    """Said to the engineer as it is, exit 2."""
+
+
+def _row(a: dict[str, Any], mpn: str) -> dict[str, Any]:
+    R = next((R for R in a["rows"] if norm(R["mpn"]) == norm(mpn)), None)
+    if R is None:
+        raise _Refused(f"no part on the boards has MPN {mpn!r}")
+    return R
+
+
+def _doc(cov: coverage.Coverage, name: str) -> dict[str, Any]:
+    d = cov.doc_named(name)
+    if d is None:
+        raise _Refused(f"{name!r} is not in the manifest (or more than one file has that name: give its path in the "
+                       "sources folder); put it there and run `embarch-atlas inventory`")
+    if not d.get("sha256"):
+        raise _Refused(f"the manifest has no sha256 for {d['file']}; run `embarch-atlas inventory`")
+    return d
+
+
+def _confirm_part(adir: Path, cov: coverage.Coverage, R: dict[str, Any], file: str | None) -> str:
+    """Record the part's document: `file`, else its strongest proposal. Returns the file."""
+    if file:
+        d = _doc(cov, file)
+    elif R["proposals"]:
+        d = _doc(cov, R["proposals"][0]["file"])
+    else:
+        raise _Refused(f"{R['mpn']} has no proposal; name its document with --file")
+    if d.get("kind") not in coverage.MATCH_KINDS:
+        raise _Refused(f"{d['file']} is kind {d.get('kind')}, which never covers a part as its datasheet; if the kind is "
+                       f"wrong, run `embarch-atlas missing --kind {d['file']} datasheet` first")
+    rung = next((p["rung"] for p in R["proposals"] if p["file"] == d["file"]), "engineer")
+    answersmod.record(adir, R["mpn"], {"answer": "document", "file": d["file"], "sha256": d["sha256"], "rung": rung})
+    return d["file"]
+
+
+def _confirm_rm(adir: Path, a: dict[str, Any], cov: coverage.Coverage, file: str | None) -> str:
+    """The reference-manual row: the document's kind becomes `reference-manual`, through the kind override."""
+    if file:
+        d = _doc(cov, file)
+    elif len(a["rm_rows"]) == 1:
+        d = _doc(cov, a["rm_rows"][0]["file"])
+    elif a["rm_rows"]:
+        raise _Refused(f"{len(a['rm_rows'])} documents are proposed as the reference manual; name one with --file")
+    else:
+        raise _Refused("no document is proposed as the reference manual; name one with --file")
+    answersmod.record_document(adir, d["sha256"], d["file"], kind="reference-manual")
+    return d["file"]
+
+
+def _refresh_manifest(adir: Path) -> None:
+    """Write a kind override into the manifest now, so that everything reading it agrees."""
+    try:
+        man = common.read_json(adir / "inventory" / "manifest.json")
+        inventory.run(adir, inventory.sources_of(adir, man))
+    except FileNotFoundError as e:
+        print(f"manifest not rewritten ({e}); the next `embarch-atlas inventory` applies the kind")
+
+
+JOIN_HINT = "net_trace reads this now; `embarch-atlas join <atlas>` carries it into pins.json and MAP.md."
+
+
+def _cmd_match(args, adir: Path) -> int:
+    """`--confirm`, `--confirm-all`, `--reject`, `--kind`: record the engineer's word, then rewrite missing.md."""
+    a = analyse(adir)
+    cov = coverage.load(adir)
+    refresh, said = False, []
+    if args.kind:
+        file, kind = args.kind
+        if kind not in inventory.KINDS:
+            raise _Refused(f"kind must be one of {', '.join(inventory.KINDS)} (got {kind!r})")
+        d = _doc(cov, file)
+        answersmod.record_document(adir, d["sha256"], d["file"], kind=kind)
+        refresh = True
+        said.append(f"recorded: {d['file']} is {kind} -> {answersmod.path_of(adir)}")
+    elif args.confirm_all:
+        n = 0
+        for R in a["rows"]:
+            if R["proposals"] and not R["covered_by"]:
+                said.append(f"confirmed: {R['mpn']} -> {_confirm_part(adir, cov, R, None)}")
+                n += 1
+        if a["rm_rows"]:
+            said.append(f"confirmed: {_confirm_rm(adir, a, cov, a['rm_rows'][0]['file'])} serves as the reference manual")
+            refresh = True
+            n += 1
+        said.append(f"{n} proposal{'s' if n != 1 else ''} confirmed" if n else "nothing is proposed")
+    elif args.confirm:
+        if args.confirm == RM_TOKEN:
+            said.append(f"confirmed: {_confirm_rm(adir, a, cov, args.file)} serves as the reference manual")
+            refresh = True
+        else:
+            R = _row(a, args.confirm)
+            said.append(f"confirmed: {R['mpn']} -> {_confirm_part(adir, cov, R, args.file)}")
+    else:
+        if not args.file:
+            raise _Refused("--reject needs --file: the document that is not this part's")
+        d = _doc(cov, args.file)
+        if args.reject == RM_TOKEN:
+            answersmod.record_document(adir, d["sha256"], d["file"], not_reference_manual=True)
+            said.append(f"rejected: {d['file']} as the reference manual")
+        else:
+            R = _row(a, args.reject)
+            answersmod.record_reject(adir, R["mpn"], d["file"], d["sha256"])
+            said.append(f"rejected: {d['file']} for {R['mpn']}, until the file's content changes")
+    if refresh:
+        _refresh_manifest(adir)
+    run(adir)
+    for line in said:
+        print(line)
+    print(JOIN_HINT)
+    return 0
+
+
 def _cmd(args) -> int:
     adir = common.atlas_dir(args.atlas_dir)
+    if args.file and not (args.confirm or args.reject):
+        print("missing: --file goes with --confirm or --reject", file=sys.stderr)
+        return 2
     if args.answer:
         return answersmod._cmd_answer(args, adir)
     try:
+        if args.confirm or args.confirm_all or args.reject or args.kind:
+            return _cmd_match(args, adir)
         a = run(adir)
     except (FileNotFoundError, ValueError) as e:
         print(f"missing: {e}", file=sys.stderr)
         return 2
     rows = a["rows"]
     act = [R for R in rows if R["category"] == "active"]
-    miss = [R for R in act if not R["covered_by"] and not R["answer"]]
+    n_cov = sum(1 for R in act if R["covered_by"])
+    n_prop = sum(1 for R in act if not R["covered_by"] and R["proposals"])
+    miss = [R for R in act if not R["covered_by"] and not R["answer"] and not R["proposals"]]
     vis = [R for R in miss if R["tier"] in ("mcu", "direct", "via-series", "cross-board")]
     tiers = defaultdict(int)
     for R in vis:
         tiers[R["tier"]] += 1
-    other = [R for R in rows if R["category"] != "active" and not R["covered_by"] and not R["answer"]]
-    n_ans = sum(1 for R in rows if not R["covered_by"] and R["answer"])
-    print(f"MCU {', '.join(a['mcu_refs']) or 'not found'}; {len(act)} active MPNs, {len(miss)} without a document, "
+    other = [R for R in rows if R["category"] != "active" and not R["covered_by"] and not R["answer"] and not R["proposals"]]
+    n_ans = sum(1 for R in rows if not R["covered_by"] and R["answer"] and not R["proposals"])
+    print(f"MCU {', '.join(a['mcu_refs']) or 'not found'}; {len(act)} active MPNs, {n_cov} covered, {n_prop} proposed, "
+          f"{len(miss)} without a document, "
           f"{len(vis)} firmware-visible ({', '.join(f'{v} {k}' for k, v in sorted(tiers.items()))}); "
           f"{len(other)} other parts without a document; {n_ans} answered; errata {'present' if a['mcu_docs']['errata'] else 'MISSING'} "
           f"-> {adir / 'inventory' / 'missing.md'}")
@@ -437,10 +609,17 @@ def _cmd(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("missing", help="missing-documents questions from the BOM vs the manifest (inventory/missing.md)")
-    p.add_argument("--answer", nargs="+", metavar="ARG",
-                   help="record an answer instead of writing missing.md: MPN supplied | MPN not-needed --why TEXT | "
-                        "MPN standard-function FUNCTION --pins 1=G,2=S,3=D")
+    p = sub.add_parser("missing", help="proposed matches and missing-documents questions from the BOM vs the manifest (inventory/missing.md)")
+    verb = p.add_mutually_exclusive_group()
+    verb.add_argument("--answer", nargs="+", metavar="ARG",
+                      help="record an answer instead of writing missing.md: MPN supplied | MPN not-needed --why TEXT | "
+                           "MPN standard-function FUNCTION --pins 1=G,2=S,3=D")
+    verb.add_argument("--confirm", metavar="MPN",
+                      help=f"this part's document is --file, else its strongest proposal; `{RM_TOKEN}` confirms the MCU row")
+    verb.add_argument("--confirm-all", action="store_true", help="accept the first proposed row of every part, and the MCU row")
+    verb.add_argument("--reject", metavar="MPN", help=f"--file is not this part's document, until its content changes; `{RM_TOKEN}` for the MCU row")
+    verb.add_argument("--kind", nargs=2, metavar=("FILE", "KIND"), help="override a document's kind, in the manifest from now on")
+    p.add_argument("--file", help="with --confirm or --reject: the document, by its path in the sources folder or its file name")
     p.add_argument("--why", help="with `not-needed`: why the part needs no document")
     p.add_argument("--pins", help="with `standard-function`: the part's pin number or name = the card's pin, comma separated")
     p.set_defaults(func=_cmd)

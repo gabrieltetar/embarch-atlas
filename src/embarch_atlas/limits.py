@@ -87,7 +87,7 @@ FOLD_NOT_COMPARABLE = ("DT limits: mapped, but no row is comparable (typ only, e
                        "point, other variant or sense resistor)")
 FOLD_NO_PART = "DT limits: unit properties on nodes with no part datasheet"
 FOLD_DECLARED_NONE = "DT limits: no datasheet limit applies (declared)"
-NOT_PART_DOCS = ("svd", "rm", "reference-manual", "prd")
+NOT_PART_DOCS = ("svd", "rm", "reference-manual", "prd", "appnote")
 
 
 # ---------------------------------------------------------------- units

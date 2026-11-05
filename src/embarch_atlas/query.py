@@ -158,8 +158,8 @@ class Atlas:
             for k in keys:
                 kn = _norm(k)
                 if kn and (kn == n or kn.startswith(n) or n.startswith(kn)):
-                    scored.append((0 if kn == n else 1, d.name, d))
-        return sorted(scored)[0][2] if scored else None
+                    scored.append((0 if kn == n else 1, meta.get("kind") == "appnote", d.name, d))
+        return sorted(scored, key=lambda t: t[:3])[0][3] if scored else None
 
     # ---- atlas files
     def pins_json(self) -> dict | None:

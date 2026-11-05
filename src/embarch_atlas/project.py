@@ -328,6 +328,8 @@ def joined_stamp(atlas: Path, stamp: dict[str, Any]) -> dict[str, Any]:
     out = dict(stamp)
     if "sources" in inp:
         out["sources"] = inp["sources"]
+    if "answers" in inp:
+        out["answers"] = inp["answers"]
     if inp.get("schematics"):
         out["schematics"] = {**(stamp.get("schematics") or {}), **inp["schematics"]}
     if inp.get("missing_boards"):
@@ -338,6 +340,7 @@ def joined_stamp(atlas: Path, stamp: dict[str, Any]) -> dict[str, Any]:
 def atlas_state(atlas_dir: Path, stamp: dict[str, Any], head: str | None,
                 manifest_sha: str | None, schematic_shas: dict[str, str | None]) -> list[str]:
     """Reasons an atlas is stale; empty when it is fresh."""
+    from . import coverage
     why = []
     if head and stamp.get("commit") != head:
         why.append("commit differs from HEAD")
@@ -348,6 +351,8 @@ def atlas_state(atlas_dir: Path, stamp: dict[str, Any], head: str | None,
             why.append("built before inventory/manifest.json existed")
         else:
             why.append("inventory/manifest.json changed")
+    if stamp.get("answers") != coverage.answers_fingerprint(atlas_dir):
+        why.append("a document was confirmed or rejected since the last join (inventory/answers.toml): run `embarch-atlas join`")
     for label, sha in sorted((stamp.get("schematics") or {}).items()):
         if label in schematic_shas and schematic_shas[label] != sha:
             why.append(f"board {label} PDF changed")
