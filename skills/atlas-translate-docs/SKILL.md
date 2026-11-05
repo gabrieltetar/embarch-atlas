@@ -34,7 +34,7 @@ produces a question the engineer has to answer first.
 - [ ] 2 questions  read inventory/manifest.md: unknown kinds, missing revisions, image-only pages -> ASK
 - [ ] 3 schematics embarch-atlas schematic <pdf> --board <label>   (one per [[boards]] entry; labels come from atlas.toml, never guessed)
 - [ ] 4 interfaces embarch-atlas interfaces; show the proposed mating rules with their scores; ASK the engineer to confirm or correct
-- [ ] 5 missing    embarch-atlas missing; show inventory/missing.md; ASK for the files or "not needed"
+- [ ] 5 missing    embarch-atlas missing; show inventory/missing.md; ASK the engineer to confirm or reject its table of proposed matches (--confirm-all, or --confirm / --reject per row), then ASK for the files still missing or "not needed"
 - [ ] 6 distil     per changed document, one per pass (below)
 - [ ] 7 report     what was translated, what failed checks, the open questions
 ```
@@ -52,6 +52,7 @@ Pick the procedure by the manifest's `kind`:
 | kind | Procedure |
 |---|---|
 | datasheet | `reference/datasheet-procedure.md` |
+| appnote | `reference/datasheet-procedure.md`. An application note, user guide or technical note supports a part and never stands in for its datasheet, so its card says which part it supports, with the part numbers on its `aka:` line |
 | reference-manual | `reference/rm-procedure.md`. RM prose is distilled **lazily**, only for the sections in the worklist that atlas-build writes (`docs/<rm>/worklist.json`), because what is "in use" depends on the build. With no worklist yet, run only `doc prep` and `mcu svd` / `mcu vote` |
 | prd | `reference/prd-procedure.md` |
 | schematic | done in step 3, nothing to distil |

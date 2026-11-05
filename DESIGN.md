@@ -57,9 +57,15 @@ agent loads by itself. `install.py` copies them to `~/.claude/skills/`.
 atlas.toml                      project config (below)
 inventory/
   manifest.json, manifest.md    every source file: kind, doc_id, parts, doc no., rev, date, pages,
-                                sha256, per-page hashes, text-layer coverage, net_info; diff vs previous
-  missing.md                    questions for the engineer: missing datasheets, errata, declarations
-  answers.toml                  the engineer's answers to missing.md (`missing --answer`; below)
+                                sha256, per-page hashes, text-layer coverage, net_info, kind_classified (when
+                                the engineer overrode the kind), needs_export (a Word PRD); diff vs previous
+  text/<sha256[:16]>.txt.gz     page text of each PDF: a cache keyed by content, outside the manifest
+  matches.json                  every rung result, before any answer, keyed by the documents and the BOM
+  missing.md                    the proposed matches to confirm or reject, then questions for the engineer:
+                                missing datasheets, errata, declarations, Word PRDs to export; the documents
+                                nothing uses
+  answers.toml                  the engineer's answers to missing.md (`missing --answer`, `--confirm`,
+                                `--reject`, `--kind`; below)
 docs/<doc_id>/                  one per datasheet / RM / PRD / SVD, board-independent
   doc.json                      identity (file, sha256, kind, part, doc_no, rev, pages)
   toc.md, toc.json              outline: section id | title | pages | tier-2 file | tokens
@@ -99,7 +105,8 @@ atlases/<target>@<commit12>/
   inputs/, inputs.json          netlist and BOM snapshots the atlas was joined against (for diff); the
                                 manifest fingerprint and file list, and each netlist's source PDF hash,
                                 the join read (`sources`, `source_files`, `schematics`: for staleness;
-                                `missing_boards`: declared boards that had no netlist)
+                                `missing_boards`: declared boards that had no netlist; `answers`: a hash of
+                                the confirmed and rejected documents, when there are any)
   dt.json                       pins, devices, buses, IRQ/EXTI from the edt
   kconfig.json                  every Kconfig symbol: value, assigning fragment, depends on (met?),
                                 selected/implied by, the default that applies, where defined.
@@ -128,9 +135,10 @@ false` (a worktree is always clean), `west` (every project's path, revision and
 `head`), `sources` (sha256 of `inventory/manifest.json`), `schematics` (sha256 per
 board PDF), `build{...}` with the from-worktree evidence, `tool` (embarch-atlas
 version + git sha), `created` (UTC). An atlas is **stale** when HEAD or any source
-hash differs; it is never edited, only superseded. Documents and schematics are what
-`join` reads, so the hashes the last join recorded in `inputs.json` stand in for the
-build's: an atlas joined again after a document change is fresh.
+hash differs, or when a document was confirmed or rejected since its last join; it is
+never edited, only superseded. Documents and schematics are what `join` reads, so the
+hashes the last join recorded in `inputs.json` stand in for the build's: an atlas joined
+again after a document change is fresh.
 
 ### A missing kconfig.json
 
@@ -156,7 +164,14 @@ no TU, include path or DTS input from the main checkout (`atlas.json`
 
 - `doc_id` = part or document slug + `@` + revision: `lsw100@04b`, `mcu-rm@6`,
   `bb200@B` (invented examples). Slugs are lower-case, no spaces. No revision gives
-  `@norev`; a non-PDF source (an SVD) may omit `@rev`.
+  `@norev`; a non-PDF source (an SVD) may omit `@rev`. The slug, by kind: a datasheet's
+  part when it is a clean part number, else its document number; a reference manual's or
+  errata sheet's document number, else its part; an app note's document number; anything
+  else, and any of these with neither, the file stem. The **classified** kind decides, so
+  an engineer's kind override never moves a doc_id. A package name or a vendor-internal
+  number is never a part token. A Word file and the PDF exported from it share a doc_id;
+  only the PDF is prepped. `update` finds a translation by content when a doc_id moved
+  (`distillation_of`).
 - Pages are **1-based physical PDF page indices** (what `Read(pages=N)` takes).
   The printed label is stored only where it differs.
 - Section ids are the document's own numbering (`32.9.5`, `7.6.6`); a title slug
@@ -611,7 +626,9 @@ An atlas id is `<target>@<commit12>`.
 | `inventory` | `inventory` | manifest + per-page hashes + diff vs last |
 | `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md |
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
-| `missing [--answer <MPN> supplied \| not-needed --why <text> \| standard-function <fn> --pins <map>]` | `missing` | missing-documents questions from BOM vs manifest, open ones ranked by net_trace walks stopped; `--answer` records the engineer's answer in `answers.toml` |
+| `missing [--answer <MPN> supplied \| not-needed --why <text> \| standard-function <fn> --pins <map>]` | `missing` | the proposed matches, then the missing-documents questions from BOM vs manifest, open ones ranked by net_trace walks stopped, then the documents nothing uses; `--answer` records the engineer's answer in `answers.toml` |
+| `missing --confirm <MPN> [--file <file>]` / `--confirm-all` / `--reject <MPN> --file <file>` | `missing` | accept or refuse a document for a part, recorded in `answers.toml` (`--confirm` with no file takes the part's strongest proposal; `--confirm-all` the first row of each part and the MCU row). `reference-manual` in place of `<MPN>` answers the MCU row |
+| `missing --kind <file> <kind>` | `missing` | override a document's kind, recorded in `answers.toml`; the manifest is rewritten at once |
 | `doc prep <pdf>` | `pdftext` | doc.json, pages/, toc, page classes |
 | `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; then checks A–T on the rest, writes checks.json, sets `prov` |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
@@ -688,20 +705,114 @@ fields change, or by a deliberate `CHECKED_VERSION` bump if a full re-look is wa
 unit key, the one whose recorded file hashes match the files on disk wins, then the newest; a
 newer freeze of the same files marks the older entry `superseded` (kept, never deleted).
 
+## Document kinds and coverage
+
+### Kinds
+
+`inventory.KINDS`: `schematic`, `datasheet`, `reference-manual`, `errata`, `appnote`, `prd`, `spreadsheet`,
+`notes`, `other`. The classifier reads the PDF's metadata and first three pages:
+
+- **`schematic`** needs real evidence (`project.schematic_evidence`, the one test, for `inventory` and for
+  `init`'s board hint): an EDA tool named as a word in the Creator or Producer, `.SchDoc` in the text, or net
+  information in the outline. `Acrobat Web Capture` and `Allegro MicroSystems` are not EDA tools.
+- **`appnote`**: `application note`, `app note`, `user guide`, `technical note` or `tech note` in the title,
+  the file name or the top of page 1, or an ST `AN`/`UM`/`TN` document number. It is tested before the datasheet
+  rule, and before a "reference manual" mentioned in the first page's text, which a note may well cite; only a
+  title saying reference manual comes first. An app
+  note may name parts and never by itself covers one: where a token or a rung finds one it is **supporting
+  material**, shown beside the part in `missing.md` and `MAP.md`, and the join reads no pin record or limit from
+  it. Its translation uses the datasheet procedure, and its card says which part it supports. `--confirm` refuses
+  one and names the way: `--kind <file> datasheet`, if the kind is wrong.
+- **A `.docx` or `.doc`** whose name or title says PRD or requirements is `prd` with `needs_export: true`, and
+  `missing.md` asks for it as a PDF. The tool does not convert it. Any other Word file is `other`. Once a PDF of
+  the same stem is in the sources folder the Word file is `superseded_by` it and the question goes away.
+
+`--kind <file> <kind>` overrides the classifier, in `[documents."<sha256[:12]>"]`. It applies at inventory
+time, `manifest.md` shows it beside the kind, and it ends when the file's content changes. The manifest stays
+byte-identical across runs with an override present.
+
+### Covered, proposed, missing
+
+`coverage.py` is the one reader: `missing`, the join and what the join feeds (`net_trace`, `pins.json`,
+`MAP.md`, the graph) all ask it which document covers an MPN. A part is **covered** by a document whose part
+tokens match its MPN, or by one the engineer confirmed, or, when neither holds, by a rung that says covered. It
+is **proposed** when only a weaker rung ties a document to it, and **missing** with none. A proposal is one row
+of the ✓/✕ table that opens `missing.md`, so a file already supplied is confirmed, not asked for again.
+
+Part tokens (`family_regex`) require two digits on purpose, so a bare vendor family never covers every part, and
+that means they cannot read every shape: `QRS7TUV`, `88LOG2G11`, a mixed-case `abC54X20`. The rungs go the other
+way round. The BOM's MPNs are known, so each is looked for in the supplied documents (kinds `datasheet`,
+`reference-manual`, `other`; not a superseded or duplicate file). Strongest first:
+
+| Rung | Matches | Counts as |
+|---|---|---|
+| `exact` | the normalised MPN as a whole token in the text, on pages 1-3 or an ordering-information page | covered |
+| `link` | the schematic's datasheet-link parameter: its URL basename is the file's name, ignoring case and query, or it equals the file's Zone.Identifier HostUrl | covered |
+| `exact` | the normalised MPN anywhere else | proposed: a datasheet can name another part in a typical-application note |
+| `stem` | a stem of the MPN (packaging cut after `,` `+` `/` `#`, then trailing characters one at a time, down to 5, holding a letter and a digit), as a whole token or token prefix, ignoring case, in the file name, the PDF title or pages 1-2 | proposed: a stem also matches a sibling part |
+| `series` | the title or page 1 says `<prefix> Series` or `Series <prefix>`, and the MPN starts with that prefix | proposed |
+
+An MPN with no digit, or under 5 characters, has no `exact`, `stem` or `series`: `BARREL` on a page says nothing.
+Each result is `{mpn, file, rung, evidence}`, `evidence` saying what matched and where. Rungs run only for a part
+no token or confirmation covers; they never add a second document to a part that has one.
+
+**What the join reads pin records from is narrower than what stops a question**, because a wrong document there
+is a wrong fact and not a question left unasked. `part_docs` holds the distillations whose own identity matches
+(`part` and card `aka`), the distillation of a confirmed document, and, only when those give nothing, the
+distillation of a covering `exact` or `link`. A part token in the manifest alone never gives a pin map: it can be
+a mention on page 2. A part covered by a file with no distillation that speaks for it is `part_supplied`:
+`net_trace` lists it as "supplied, not translated yet", not under "Datasheets needed", and `MAP.md` apart from the
+parts with no document. `walk_stops` does not count it.
+
+**Confirmed and rejected** documents are tied to the file's sha256. A rejection takes a document off a part
+whichever way it got there, in `missing` and in the join, and holds until the content changes; a rename changes
+nothing. A confirmed file whose content changed goes back to proposed, with evidence saying so; a confirmed
+file that is gone is asked for again. Answers apply over the stored rung results, so a confirmation never
+rescans. The join picks them up at the next `join`, and `status` says the atlas is stale until then; `net_trace`
+reads them at once.
+
+Page text comes from `inventory/text/`, written by `inventory` (or read once from the file, for a manifest older
+than the cache); `missing` runs no poppler over a document it has. Rung results are kept in `inventory/matches.json`.
+Neither is in the manifest.
+
+### The MCU's own documents
+
+`[mcu] part` is matched as a token or token prefix, ignoring case, against a document's title, file name and
+pages 1-2. A `reference-manual` or `errata` document that names the MCU this way is the MCU's, whatever its part
+tokens say. Some vendors publish one datasheet with the full register documentation and no separate manual, so
+when there is no reference manual and a `datasheet` or `other` document of 300 pages or more names the MCU, the
+reference-manual question becomes a row of the table: `<file> serves as the reference manual`. Confirming it sets
+the document's kind through the override and rewrites the manifest; its doc_id does not move. When `[mcu] ref`
+names a module whose MPN differs from the SoC, the module's own datasheet question stays open.
+
+### Documents nothing uses
+
+`missing.md` closes with `## Supplied documents nothing uses`: documents covering no BOM part (passives included)
+and no MCU role, proposed for none, supporting none. A schematic, PRD, spreadsheet or notes file has its own role
+and is left out, and so is a superseded or duplicate file. This is how a wrong file or a mis-typed document shows
+up. Not measured on a real board in this unit (synthetic fixtures only).
+
 ## Answers to missing.md and generic function cards
 
 `inventory/answers.toml` holds one table per part number (`[parts."<MPN>"]`), written by
-`embarch-atlas missing --answer <MPN> ...` (which rewrites the file, dropping hand-written comments) and
-read by `missing` and the join. `answer` is one of:
+`embarch-atlas missing --answer <MPN> ...`, `--confirm` and `--reject` (which rewrite the file, dropping
+hand-written comments) and read by `missing` and the join. `answer` is one of:
 
+- `document` with a `file`, a `sha256` and the `rung` that proposed it (`engineer` when none did), from `--confirm`;
 - `supplied`: the engineer will put the file in the sources folder; `missing.md` lists it as answered
-  until the manifest covers the part (then it is simply covered);
+  until the manifest covers the part (then it is simply covered) or a rung proposes a file for it;
 - `not-needed` with a `why` (required);
 - `standard-function` with a `function` and a `pins` map from the part's pin number or netlist pin name
   to the card's pin (`{ "1" = "G", "2" = "S", "3" = "D" }`; several part pins may name one card pin, a
   MOSFET's drain tab). The map must cover every non-optional pin of the card and is checked against the
-  pins of the parts that carry the MPN. A malformed file is reported (`missing` exits 2; `net_trace`
-  says it ignored the file) and never half-applied.
+  pins of the parts that carry the MPN. A malformed file is reported (`missing` and `inventory` exit 2;
+  `net_trace` says it ignored the file) and never half-applied.
+
+A table may also hold `rejected = [{ file, sha256 }, ...]`, from `--reject`, with or without an `answer`. A
+`not-needed` or `standard-function` part gets no proposal: the engineer decided.
+
+`[documents."<sha256[:12]>"]` holds what the engineer said about one document: `file`, `kind` (the override) and
+`not_reference_manual = true` (`--reject reference-manual`). Keyed by content, each ends when the file changes.
 
 A **generic card** is a function template in `answers.CARDS`: n-mosfet, p-mosfet, diode, schottky, tvs,
 thermistor, inverter, and, nand, buffer-oe, decoder-1of2. Each pin has `dir`, `type` and, where current or
@@ -721,7 +832,7 @@ not under "Datasheets needed".
 `missing.md` ranks open questions by **walks stopped** (`nettrace.walk_stops`: one upstream walk per
 non-ground rail net, each MPN counted once per walk, a documented or answered part never counted), then by
 firmware visibility, and shows the count (`Stops N net_trace walks`). Answered items move to an
-"Answered" section. The count is a ranking aid over rail walks, not a coverage figure: a part reached only
+"Answered" section. Its summary line counts covered, proposed and missing part numbers apart. The count is a ranking aid over rail walks, not a coverage figure: a part reached only
 from a signal net is not counted. Not measured on a real board in this unit (a synthetic two-board
 fixture only).
 
