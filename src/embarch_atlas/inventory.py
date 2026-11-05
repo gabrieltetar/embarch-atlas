@@ -89,6 +89,7 @@ PACKAGE = re.compile(r"^(?:LQFP|TQFP|UFBGA|WLCSP|UFQFPN|TSSOP|SSOP|MSOP|QFN|WQFN
 VENDOR_NUMBER = re.compile(r"^[A-Z]{2,3}0\d{4,}$")
 APPNOTE_WORDS = re.compile(r"\bapp(?:lication)?\.?\s+notes?\b|\buser'?s?\s+guide\b|\btech(?:nical)?\.?\s+notes?\b", re.I)
 APPNOTE_NUMBER = re.compile(r"^\s*(?:an|um|tn)[-_ ]?\d{4,5}(?![a-z0-9])", re.I)
+DATASHEET_WORDS = re.compile(r"\bdata\s?sheet\b", re.I)
 APPNOTE_HEAD = 400      # a datasheet's later text may cite an application note; a note says so at the top
 WORD_PRD = re.compile(r"(^|[^a-z])(prd|requirements?)([^a-z]|$)")
 
@@ -205,11 +206,19 @@ def document_pages(atlas_dir: Path, doc: dict[str, Any], manifest: dict[str, Any
 
 def is_appnote(path: Path, title: str, head: str) -> bool:
     """An application note, user guide or technical note: its title, its file name, the top of its first
-    page, or an ST `AN`/`UM`/`TN` number as the first ST document number on its first pages."""
+    page, or an ST `AN`/`UM`/`TN` number as the first ST document number on its first pages. What a
+    document calls itself beats what its first page cites: a title or file name that says datasheet, or
+    a first page that says so before it names a note, is not a note."""
     name = re.sub(r"[-_.]+", " ", path.stem)
-    if APPNOTE_WORDS.search(title) or APPNOTE_WORDS.search(name) or APPNOTE_WORDS.search(head[:APPNOTE_HEAD]):
+    if APPNOTE_WORDS.search(title) or APPNOTE_WORDS.search(name) or APPNOTE_NUMBER.match(path.stem):
         return True
-    if APPNOTE_NUMBER.match(path.stem) or APPNOTE_NUMBER.match(head):
+    if DATASHEET_WORDS.search(title) or DATASHEET_WORDS.search(name):
+        return False
+    top = head[:APPNOTE_HEAD]
+    note, sheet = APPNOTE_WORDS.search(top), DATASHEET_WORDS.search(top)
+    if note and not (sheet and sheet.start() < note.start()):
+        return True
+    if APPNOTE_NUMBER.match(head):
         return True
     m = ST_DOC.search(head)
     return bool(m) and m.group(1)[:2] in ("AN", "UM", "TN")

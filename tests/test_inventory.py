@@ -295,6 +295,16 @@ def test_a_datasheet_citing_an_appnote_stays_a_datasheet(tmp_path):
     assert inv.inventory_file(pdf, "zx1234.pdf")["kind"] == "datasheet"
 
 
+@pytest.mark.parametrize("name,pages,meta", [
+    ("ds_zx1234.pdf", ["ZX1234\nFeatures\nAN9988 (device application note)\n" + FILLER],
+     {"title": "Datasheet - ZX1234 - buck converter"}),
+    ("zx1234-datasheet.pdf", ["ZX1234\nFeatures\nAN9988 (device application note)\n" + FILLER], None),
+    ("ds_zx1234.pdf", ["Datasheet\nZX1234\nFeatures\nAN9988 (device application note)\n" + FILLER], None),
+])
+def test_what_a_datasheet_calls_itself_beats_a_note_its_first_page_cites(tmp_path, name, pages, meta):
+    assert inv.inventory_file(make_pdf(tmp_path / name, pages, meta), name)["kind"] == "datasheet"
+
+
 def test_appnote_doc_id_is_its_number_or_stem_never_a_part(tmp_path):
     a = inv.inventory_file(make_pdf(tmp_path / "a.pdf", [f"AN9988\nApplication note\nUsing the ZX1234\n{FILLER}\nAN9988 Rev 3"]), "a.pdf")
     assert (a["kind"], a["doc_no"], a["doc_id"]) == ("appnote", "AN9988", "an9988@3") and "ZX1234" in a["parts"]

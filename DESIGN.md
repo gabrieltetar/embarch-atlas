@@ -718,7 +718,9 @@ newer freeze of the same files marks the older entry `superseded` (kept, never d
 - **`appnote`**: `application note`, `app note`, `user guide`, `technical note` or `tech note` in the title,
   the file name or the top of page 1, or an ST `AN`/`UM`/`TN` document number. It is tested before the datasheet
   rule, and before a "reference manual" mentioned in the first page's text, which a note may well cite; only a
-  title saying reference manual comes first. An app
+  title saying reference manual comes first. What a document calls itself beats what its first page cites: a
+  title or file name saying datasheet, or a first page saying so before it names a note, keeps it out of this
+  kind, since a datasheet's front page often lists its companion note. An app
   note may name parts and never by itself covers one: where a token or a rung finds one it is **supporting
   material**, shown beside the part in `missing.md` and `MAP.md`, and the join reads no pin record or limit from
   it. Its translation uses the datasheet procedure, and its card says which part it supports. `--confirm` refuses
