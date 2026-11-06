@@ -533,6 +533,9 @@ QUANTITY_TOKENS = {"MV", "UV", "NV", "UA", "MA", "NA", "MW", "UW", "UAH", "MAH"}
 QUANTITY_INNER = {"MAX", "MIN", "STEP", "STEPS"}
 BOUND_TOKENS = {"MAX", "MIN", "COUNT", "NUM", "FIRST", "LAST", "END", "START", "BASE", "SIZE", "LEN", "CNT"}
 ENCODING_TOKENS = {"MASK", "MSK", "BIT", "BITS", "FLAG", "BLOCK", "SHIFT", "POS", "OFFSET", "OFS"}
+OFFSET_TOKENS = {"OFFSET", "OFS"}        # a REG_ name ending here is a bit offset unless its body is a hex address
+BITNAME_TOKENS = {"BIT", "BITS", "SHIFT", "POS", "FIELD", "FLD"}
+HEX_ADDR_BODY = re.compile(r"0[xX][0-9A-Fa-f]+[uUlL]*")
 MASK_SUFFIX = {"MASK", "MSK", "FIELD", "FLD", "BITS", "BIT", "BITMASK"}
 RESET_RE = re.compile(r"_(?:RESET_VAL(?:UE)?|RESET_DEFAULT|POR(?:_VAL(?:UE)?)?|DEFAULT(?:_VAL(?:UE)?)?|RST_VAL|INIT_VAL)$", re.I)
 SHIFT_TOKENS = {"SHIFT", "POS", "OFS"}
@@ -570,6 +573,8 @@ def classify(d: Define, reg_names: set[str]) -> str:
             return "alias"
         if toks[-1] in BOUND_TOKENS:
             return "bound"
+        if toks[-1] in OFFSET_TOKENS and HEX_ADDR_BODY.fullmatch(d.body.strip("() ")) and not BITNAME_TOKENS & set(toks[:-1]):
+            return "register"   # `X_REG_ADC_OFFSET 0x12`: an offset-calibration register, not a bit offset
         if toks[-1] in ENCODING_TOKENS or MASKY_BODY.search(d.body):
             return "encoding"
         return "register"

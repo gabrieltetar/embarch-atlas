@@ -420,3 +420,38 @@ def test_offset_define_is_not_a_register_address():
         assert cls(n, "5") == "encoding", n
     assert cls("CHG_SYS_REG_CTRL", "0x05") == "register"
     assert cls("CHG_REG_SHIP_RST", "0x09") == "register"
+
+
+def test_hex_addressed_offset_register_stays_a_register():
+    def cls(name, body):
+        d = cc.Define(name, None, body, "f.h", 1, 1)
+        d.value, d.short = int(body.rstrip("uUlL"), 0), name
+        return cc.classify(d, set())
+    for n in ("X_REG_ADC_OFFSET", "X_REG_ADC_OFS"):
+        assert cls(n, "0x12") == "register", n
+        assert cls(n, "0x7F") == "register", n
+        assert cls(n, "5") == "encoding", n          # a decimal bit offset
+        assert cls(n, "9") == "encoding", n
+    assert cls("X_REG_CTRL_BIT_OFFSET", "0x03") == "encoding"
+
+
+OFFSET_H = """\
+#define DEMOBB_REG_CTRL2     0x06
+#define DEMOBB_REG_CTRL1     0x05
+#define DEMOBB_REG_CTRL1_OFS 9
+#define DEMOBB_OE            BIT(7)
+#define DEMOBB_FREQ_MASK     GENMASK(6, 4)
+"""
+
+
+def test_bit_offset_define_adds_no_phantom_register_findings(tmp_path):
+    """Masks with no register prefix are tied to the last register define above them: a bit-offset define that
+    were read as a register at address 9 would take them from CTRL1 and report them against a phantom."""
+    ad, atlas = make_atlas(tmp_path, regs_h=OFFSET_H)
+    r = cc.run(ad, atlas, log=lambda *a: None)
+    masks = r["units"][0]["masks"]
+    for macro in ("DEMOBB_OE", "DEMOBB_FREQ_MASK"):
+        row = _row(masks, "macro", macro)
+        assert row["register"] == "0x05", row
+    assert not [f for f in r["findings"] if f["class"] in ("reg-field-in-other-register", "reg-mask-vs-field")
+                and ("0x09" in str(f) or "DEMOBB_REG_CTRL1_OFS" in str(f))]
