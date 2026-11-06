@@ -262,3 +262,35 @@ def test_real_worktree_build(tmp_path):
     out = build.run_build(ad, cfg, "HEAD", log=lambda *a: None)
     ev = read_json(out / "atlas.json")["build"]["from_worktree"]
     assert ev["tus_from_main_checkout"] == 0 and ev["includes_from_main_checkout"] == 0
+
+
+def _sysbuild_tree(bdir: Path, images: list[str], default: str | None):
+    for im in images:
+        (bdir / im / "zephyr").mkdir(parents=True)
+        for f in ("edt.pickle", ".config"):
+            (bdir / im / "zephyr" / f).write_text(f)
+    if default:
+        (bdir / "domains.yaml").write_text(f"default: {default}\ndomains:\n" + "".join(f"  - {i}\n" for i in images))
+
+
+def test_image_choice_in_a_sysbuild(tmp_path):
+    from embarch_atlas import kconfig
+    b = tmp_path / "two"
+    _sysbuild_tree(b, ["mcuboot", "app"], "app")
+    assert kconfig.image_dir(b, "edt.pickle", "other") == b / "app"        # domains.yaml wins
+    assert kconfig.zephyr_dir(b) == b / "app"                              # .config from the same image
+    b = tmp_path / "noyaml"
+    _sysbuild_tree(b, ["mcuboot", "app"], None)
+    assert kconfig.image_dir(b, "edt.pickle", "fw/app") == b / "app"       # app directory name
+    with pytest.raises(FileNotFoundError) as e:
+        kconfig.image_dir(b, "edt.pickle", "zzz")
+    assert "mcuboot/zephyr/edt.pickle" in str(e.value) and "app/zephyr/edt.pickle" in str(e.value)
+    b = tmp_path / "one"
+    _sysbuild_tree(b, ["app"], None)
+    assert kconfig.image_dir(b, "edt.pickle") == b / "app"
+    b = tmp_path / "flat"
+    (b / "zephyr").mkdir(parents=True)
+    (b / "zephyr" / "edt.pickle").write_text("x")
+    assert kconfig.image_dir(b, "edt.pickle") == b
+    with pytest.raises(FileNotFoundError, match="no zephyr/edt.pickle"):
+        kconfig.image_dir(tmp_path / "empty", "edt.pickle")

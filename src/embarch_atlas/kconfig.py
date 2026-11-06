@@ -32,15 +32,45 @@ MAX_DEFAULTS = 6
 
 # ---------------------------------------------------------------- files every build has
 
-def zephyr_dir(bdir: Path) -> Path:
-    """The dir holding .config and edt.pickle: <bdir>/zephyr, or <bdir>/<app>/zephyr under sysbuild."""
+def _sysbuild_default(bdir: Path) -> str | None:
+    """The application image sysbuild names: `default:` in <bdir>/domains.yaml."""
+    f = bdir / "domains.yaml"
+    if not f.is_file():
+        return None
+    try:
+        import yaml
+        d = yaml.safe_load(f.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return None
+    v = d.get("default") if isinstance(d, dict) else None
+    return v if isinstance(v, str) else None
+
+
+def image_dir(bdir: Path, marker: str, app: str | None = None) -> Path:
+    """The dir of the image an atlas describes, the one holding zephyr/<marker>: <bdir> itself, or one
+    <bdir>/<image> under sysbuild. With several images (app plus MCUboot) the application is the one
+    sysbuild's domains.yaml names as `default:`, else the one named like the app directory (`app`, a
+    name or path); else it is an error naming the candidates. build.py and zephyr_dir() both choose here."""
     bdir = Path(bdir)
-    if (bdir / "zephyr" / ".config").is_file():
+    if (bdir / "zephyr" / marker).is_file():
         return bdir
-    subs = [p.parent.parent for p in bdir.glob("*/zephyr/.config")]
+    subs = sorted(p.parent.parent for p in bdir.glob(f"*/zephyr/{marker}"))
     if len(subs) == 1:
         return subs[0]
-    raise FileNotFoundError(f"no zephyr/.config under {bdir}")
+    names = {p.name: p for p in subs}
+    for want in (_sysbuild_default(bdir), Path(app).name if app else None):
+        if want in names:
+            return names[want]
+    if not subs:
+        raise FileNotFoundError(f"no zephyr/{marker} under {bdir}")
+    raise FileNotFoundError(f"cannot tell which image is the application: found {', '.join(str(p / 'zephyr' / marker) for p in subs)} "
+                            f"under {bdir}, and neither its domains.yaml default nor the app name picks one")
+
+
+def zephyr_dir(bdir: Path, app: str | None = None) -> Path:
+    """The dir holding .config and edt.pickle: <bdir>/zephyr, or <bdir>/<app>/zephyr under sysbuild,
+    the image chosen by image_dir()."""
+    return image_dir(bdir, ".config", app)
 
 
 def read_dotconfig(path: Path) -> dict[str, str]:

@@ -472,12 +472,11 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
     if r.returncode:
         tail = logf.read_text(encoding="utf-8", errors="replace").splitlines()[-30:]
         raise BuildError(f"west build failed ({r.returncode}); last lines of {logf}:\n" + "\n".join(tail))
-    zdir = bdir
-    if not (bdir / "zephyr" / "edt.pickle").is_file():   # sysbuild layout: <bdir>/<app>/zephyr/
-        subs = [p.parent.parent for p in bdir.glob("*/zephyr/edt.pickle")]
-        if len(subs) != 1:
-            raise BuildError(f"no zephyr/edt.pickle under {bdir}")
-        zdir = subs[0]
+    from .kconfig import image_dir
+    try:
+        zdir = image_dir(bdir, "edt.pickle", cfg["app"])    # sysbuild: the application image, not MCUboot's
+    except FileNotFoundError as e:
+        raise BuildError(str(e)) from e
     ev = verify_from_worktree(zdir, fw, wt, ad)
     ev["board_definitions"] = defs
     ev["main_checkout_board_definitions_excluded"] = main_defs
@@ -525,7 +524,7 @@ def extract_kconfig(ad: Path, atlas: Path, log=print) -> Path:
     d = (stamp.get("build") or {}).get("dir")
     bdir = (ad / d) if d else None
     try:
-        zdir = KC.zephyr_dir(bdir) if bdir else None
+        zdir = KC.zephyr_dir(bdir, stamp.get("app")) if bdir else None
     except FileNotFoundError:
         zdir = None
     if zdir is None:

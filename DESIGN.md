@@ -102,6 +102,9 @@ atlases/<target>@<commit12>/
   atlas.json                    the stamp (below)
   build/                        edt.pickle, .config, compile_commands.json, zephyr.elf, zephyr.dts,
                                 zephyr.dts.d, zephyr_modules.txt, build_info.yml
+                                copied from one image: under a multi-image sysbuild (app plus MCUboot)
+                                the application's, picked by `domains.yaml` `default:`, else the app directory's
+                                name, else an error naming the pickles found (`kconfig.image_dir`)
   inputs/, inputs.json          netlist and BOM snapshots the atlas was joined against (for diff); the
                                 manifest fingerprint and file list, and each netlist's source PDF hash,
                                 the join read (`sources`, `source_files`, `schematics`: for staleness;
