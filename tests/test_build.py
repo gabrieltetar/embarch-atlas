@@ -304,3 +304,45 @@ def test_build_dir_follows_the_build_arguments():
     other = build.build_dir_name({**base, "extra_args": ["--no-sysbuild"]}, "abc123abc123")
     assert other != same                                                    # sysbuild <-> plain gets a fresh dir
     assert build.build_dir_name({**base, "extra_args": []}, "abc123abc123") != same
+
+
+class _Reached(Exception):
+    pass
+
+
+def _named_zdir(monkeypatch, tmp_path, build, stamp_app):
+    """Run buildq.named() on `build` and return the image dir it chose (stopping where it would run the build's tools)."""
+    from types import SimpleNamespace
+    from embarch_atlas import buildq, kconfig
+    ad = tmp_path / "atlas" / "t@abc"
+    ad.mkdir(parents=True, exist_ok=True)
+    if stamp_app is not None:
+        (ad / "atlas.json").write_text(json.dumps({"app": stamp_app}))
+    a = SimpleNamespace(dir=tmp_path / "fw" / "embarch" / "atlas", atlas=ad if stamp_app is not None else None)
+
+    def stop(zdir):
+        raise _Reached(zdir)
+    monkeypatch.setattr(kconfig, "ninja_menuconfig", stop)
+    with pytest.raises(_Reached) as e:
+        buildq.named(a, str(build))
+    return e.value.args[0]
+
+
+def test_named_build_picks_the_image_the_atlas_was_built_for(tmp_path, monkeypatch):
+    b = tmp_path / "two"
+    _sysbuild_tree(b, ["mcuboot", "app"], None)
+    assert _named_zdir(monkeypatch, tmp_path, b, "fw/app") == b / "app"
+    b = tmp_path / "flat"
+    (b / "zephyr").mkdir(parents=True)
+    for f in ("edt.pickle", ".config"):
+        (b / "zephyr" / f).write_text(f)
+    assert _named_zdir(monkeypatch, tmp_path, b, "fw/app") == b
+    assert _named_zdir(monkeypatch, tmp_path, b, None) == b
+
+
+def test_named_build_with_no_choosable_image_names_the_pickles(tmp_path, monkeypatch):
+    b = tmp_path / "two"
+    _sysbuild_tree(b, ["mcuboot", "app"], None)
+    with pytest.raises(FileNotFoundError) as e:
+        _named_zdir(monkeypatch, tmp_path, b, "zzz")
+    assert "mcuboot/zephyr/.config" in str(e.value) and "app/zephyr/.config" in str(e.value)

@@ -107,7 +107,9 @@ def named(a, build: str) -> Source:
     fw = a.dir.resolve().parents[1]
     p = Path(build)
     p = p if p.is_absolute() else (fw / p)
-    zdir = KC.zephyr_dir(p)
+    stamp_f = a.atlas / "atlas.json" if getattr(a, "atlas", None) else None
+    app = read_json(stamp_f).get("app") if stamp_f and stamp_f.is_file() else None   # the app the atlas was built for, as `atlas build` picks by
+    zdir = KC.zephyr_dir(p, app)
     env, python, _, _ = KC.ninja_menuconfig(zdir)
     zb = env.get("ZEPHYR_BASE", "")
     app_dir = env.get("APPLICATION_SOURCE_DIR") or str(fw)

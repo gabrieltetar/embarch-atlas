@@ -104,7 +104,8 @@ atlases/<target>@<commit12>/
                                 zephyr.dts.d, zephyr_modules.txt, build_info.yml
                                 copied from one image: under a multi-image sysbuild (app plus MCUboot)
                                 the application's, picked by `domains.yaml` `default:`, else the app directory's
-                                name, else an error naming the pickles found (`kconfig.image_dir`)
+                                name, else an error naming the pickles found (`kconfig.image_dir`). A build dir the caller names
+                                (`buildq.named`) chooses the same way, with the app read from the atlas stamp
   inputs/, inputs.json          netlist and BOM snapshots the atlas was joined against (for diff); the
                                 manifest fingerprint and file list, and each netlist's source PDF hash,
                                 the join read (`sources`, `source_files`, `schematics`: for staleness;
