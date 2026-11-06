@@ -5,8 +5,10 @@ else `drivers_not_built`) and whose part has a translated register map (`registe
 `field` records under `docs/<doc>/records/`). The part comes from the I2C identity
 join (`pins.json`: node -> board part -> its docs), else `boards/bindings.json`
 `compat_parts`, else the compatible's model token against the docs' part names.
-The driver's directory is scanned: every `.c`/`.h` in it, plus the headers they
-include with quotes.
+Only the build's own sources are read: the driver translation units `dt.json` lists
+(the ones in `compile_commands.json`), plus the headers they include with quotes,
+transitively. A sibling `.c`/`.h` in the driver's directory that nothing compiled
+includes is not read (another part's driver there is noise against this part's map).
 
 What is extracted, deterministically (regex plus a small evaluator for C
 preprocessor integer expressions; no libclang):
@@ -527,6 +529,8 @@ UNIT_TOKENS = {"MV", "UV", "NV", "V", "MA", "UA", "NA", "MW", "UW", "W", "OHM", 
                "MS", "US", "NS", "S", "SEC", "HZ", "KHZ", "MHZ", "DEGC", "MDEGC", "PCT", "PERCENT", "MAH", "UAH",
                "MWH", "UWH", "STEP", "STEPS", "MAX", "MIN", "COUNT", "NUM", "LEN", "SIZE", "TIMEOUT", "DELAY",
                "RETRIES", "TRIES", "SCALE", "DIV", "MULT", "FACTOR", "BASE", "OFFSET", "LIMIT", "RANGE", "PPM", "BYTES"}
+QUANTITY_TOKENS = {"MV", "UV", "NV", "UA", "MA", "NA", "MW", "UW", "UAH", "MAH"}
+QUANTITY_INNER = {"MAX", "MIN", "STEP", "STEPS"}
 BOUND_TOKENS = {"MAX", "MIN", "COUNT", "NUM", "FIRST", "LAST", "END", "START", "BASE", "SIZE", "LEN", "CNT"}
 ENCODING_TOKENS = {"MASK", "MSK", "BIT", "BITS", "FLAG", "BLOCK", "SHIFT", "POS"}
 MASK_SUFFIX = {"MASK", "MSK", "FIELD", "FLD", "BITS", "BIT", "BITMASK"}
@@ -559,6 +563,8 @@ def classify(d: Define, reg_names: set[str]) -> str:
         return "unresolved"
     toks = d.short.upper().split("_")
     if is_regish(d.short.upper()):
+        if toks[-1] in QUANTITY_TOKENS or QUANTITY_INNER & set(toks[1:]):
+            return "value"      # `*_UA`, `*_MV`, `*_MAX_*`, `*_STEP_*`: a limit or unit, not an address
         body_id = d.body.strip("() ")
         if re.fullmatch(r"[A-Za-z_]\w*", body_id) and body_id in reg_names:
             return "alias"
@@ -954,11 +960,8 @@ def _dirname(p: str) -> str:
 
 
 def gather_files(src: Sources, drivers: list[str]) -> list[CFile]:
-    """Every .c/.h beside each driver TU, plus quoted includes (transitively)."""
-    queue: list[str] = []
-    for f in drivers:
-        queue += [x for x in src.listdir(_dirname(f)) if x.endswith((".c", ".h"))]
-        queue.append(f)
+    """The compiled driver TUs, plus quoted includes (transitively); never their uncompiled neighbours."""
+    queue: list[str] = list(drivers)
     seen: dict[str, CFile] = {}
     while queue and len(seen) < MAX_FILES:
         p = queue.pop(0)

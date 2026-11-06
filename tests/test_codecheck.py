@@ -389,3 +389,23 @@ def test_nv_backup_mirror_shares_fields():
     assert [f.name for f in rm.fields(0x1b5)] == ["NCELLS"]
     assert rm.fields(0x1b5)[0].rec.get("via_mirror") is True
     assert [f.name for f in rm.fields(0xbd)] == ["NCELLS"]
+
+
+def test_uncompiled_neighbours_are_not_read_but_included_headers_are(tmp_path):
+    ad, atlas = make_atlas(tmp_path)
+    other = tmp_path / "fw" / "drivers" / "demobb"
+    (other / "other_chg.c").write_text("#define OTHER_REG_FOO 0x77\n#define OTHER_REG_BAR 0x78\n", encoding="utf-8")
+    (other / "other_chg.h").write_text("#define OTHER_REG_BAZ 0x79\n", encoding="utf-8")
+    rep = cc.run(ad, atlas, log=lambda *a: None)
+    assert "other_chg" not in str(rep)
+    assert "demo_bb_regs.h" in str(rep)          # included by the compiled driver: still read
+
+
+def test_quantity_constants_are_not_register_addresses():
+    def cls(name, body="5000"):
+        d = cc.Define(name, None, body, "f.h", 1, 1)
+        d.value, d.short = int(body, 0), name
+        return cc.classify(d, set())
+    for n in ("X_REG_ICHG_MAX_UA", "X_REG_VREG_STEP_MV", "X_REG_ILIM_UA", "X_REG_VBAT_UV"):
+        assert cls(n) == "value", n
+    assert cls("X_REG_CTRL1", "0x05") == "register"
