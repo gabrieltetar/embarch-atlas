@@ -324,3 +324,27 @@ def test_a_register_read_at_another_width_is_a_conflict():
     first = {"kind": "register", "name": "R", "addr": "0x10", "width": 16}
     assert sl.compare_one(first, {"found": True, "values": {"addr": "0x10", "width": 32}})[0] == "conflict"
     assert sl.compare_one(first, {"found": True, "values": {"addr": "0x10", "width": "16"}})[0] == "confirmed"
+
+
+def test_a_strap_with_agreeing_address_is_not_a_conflict_over_wording():
+    f = {"kind": "strap", "value": "0x6A", "condition": "fixed"}
+    r = {"found": True, "values": {"value": "0x6A", "condition": "fixed 7-bit address; no address pin or strap shown on this page"}}
+    assert sl.compare_one(f, r)[0] == "confirmed"
+    f = {"kind": "strap", "value": "1101010b", "condition": "SEL = GND"}
+    r = {"found": True, "values": {"value": "0x6A", "condition": "SEL pin connected to ground (LSb = 0)"}}
+    assert sl.compare_one(f, r)[0] == "confirmed"
+    r = {"found": True, "values": {"value": "106", "condition": "tied low through a resistor on the board"}}
+    assert sl.compare_one(f, r)[0] == "confirmed"
+    r = {"found": True, "values": {"value": "0x6A", "condition": "address select behaviour described elsewhere"}}
+    v, why = sl.compare_one(f, r)
+    assert v == "unresolved" and "wording differs" in why[0]
+
+
+def test_a_strap_with_another_address_or_pin_state_is_still_a_conflict():
+    f = {"kind": "strap", "value": "0x6A", "condition": "SEL = GND"}
+    assert sl.compare_one(f, {"found": True, "values": {"value": "0x6B", "condition": "SEL = GND"}})[0] == "conflict"
+    assert sl.compare_one(f, {"found": True, "values": {"value": "0x6A", "condition": "SEL = VDD"}})[0] == "conflict"
+
+
+def test_the_reader_is_told_to_state_only_the_pin_state():
+    assert "only the pin state" in sl.READER_RULES

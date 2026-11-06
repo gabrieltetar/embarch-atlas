@@ -482,7 +482,7 @@ values for a table row).
 Return JSON Lines, one object per item:
 {"id": "<item id>", "reader": "second-look", "found": true|false, "p": <page>,
  "q": "<verbatim text>", "values": {...}, "claim": "supports"|"contradicts"|"not-found"}
-values by kind: limit/timing {"min","typ","max","nom","unit","cond"}; strap {"value","condition"};
+values by kind: limit/timing {"min","typ","max","nom","unit","cond"}; strap {"value","condition"} (condition: only the pin state, e.g. GND, VDD, SDA, floating, or fixed; no commentary);
 pin {"name","dir","type","active","io","flow"} (dir: in/out/io/supply/ground/nc; type: od, pp, analog, supply,
 or "unstated"; an overlined name gets a -bar suffix; flow only when asked: source (delivers power to a rail
 other parts use: a regulator or switch output), sink (draws power: a supply or switch input), bidir (either
@@ -701,6 +701,40 @@ def _condition(first, second, name: str, diffs: list, soft: list) -> None:
         soft.append(f"{name}: first {first!r} vs second {second!r} ({why})")
 
 
+_PIN_STATES = {"fixed": {"fixed"}, "gnd": {"gnd", "ground", "vss", "low"},
+               "vdd": {"vdd", "vcc", "vin", "supply", "high"}, "sda": {"sda"}, "scl": {"scl"},
+               "float": {"float", "floating", "open", "unconnected", "nc"}}
+
+
+def pin_states(s) -> set[str]:
+    """The pin states a strap condition names (`fixed`, `gnd`, `vdd`, `sda`, `scl`, `float`). A
+    condition that says the address is fixed names only that, whatever else it remarks on."""
+    toks = set(re.findall(r"[a-z0-9]+", str(s or "").lower()))
+    found = {k for k, words in _PIN_STATES.items() if toks & words}
+    return {"fixed"} if "fixed" in found else found
+
+
+def _strap_condition(first, second, diffs: list, soft: list, address: bool) -> None:
+    """A strap's condition: the pin state it names, not its wording. Both naming a state: the same
+    one matches and another is a conflict. When either names none, an address strap whose value
+    agrees is only 'wording differs' (unresolved, never a conflict); a mode strap keeps the
+    word-overlap rule."""
+    if not str(first or "").strip() or not str(second or "").strip():
+        return
+    a, b = pin_states(first), pin_states(second)
+    if a and b:
+        if not a & b:
+            diffs.append(f"condition: first {first!r} vs second {second!r} (different pin state)")
+        return
+    if not address:
+        _condition(first, second, "condition", diffs, soft)
+        return
+    tmp: list = []
+    _condition(first, second, "condition", tmp, tmp)
+    if tmp:
+        soft.append("values agree, wording differs: " + tmp[0])
+
+
 def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
     """confirmed / conflict / unresolved, and why. Deterministic: no judgment here."""
     if not reading.get("found", True):
@@ -734,11 +768,12 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
         if a is not None and b is not None:
             if not _same_address(a, b):
                 diffs.append(f"value: first {fv!r} vs second {sv!r}")
+            _strap_condition(first.get("condition"), vals.get("condition"), diffs, soft, address=True)
         else:  # a mode strap ("2S", "2.2 µH ..."): compare meaning, not wording
             v, why = text_value_verdict(fv, sv)
             if v != "confirmed":
                 return v, [f"value: first {fv!r} vs second {sv!r} ({why})"]
-        _condition(first.get("condition"), vals.get("condition"), "condition", diffs, soft)
+            _strap_condition(first.get("condition"), vals.get("condition"), diffs, soft, address=False)
     elif k == "pin":
         # Compare what the join reads: the name (overline included), the direction class, whether
         # the output is open-drain, and the active level. Free-form type words (analog, logic,
