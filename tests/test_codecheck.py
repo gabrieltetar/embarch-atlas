@@ -409,3 +409,14 @@ def test_quantity_constants_are_not_register_addresses():
     for n in ("X_REG_ICHG_MAX_UA", "X_REG_VREG_STEP_MV", "X_REG_ILIM_UA", "X_REG_VBAT_UV"):
         assert cls(n) == "value", n
     assert cls("X_REG_CTRL1", "0x05") == "register"
+
+
+def test_offset_define_is_not_a_register_address():
+    def cls(name, body):
+        d = cc.Define(name, None, body, "f.h", 1, 1)
+        d.value, d.short = int(body, 0), name
+        return cc.classify(d, set())
+    for n in ("CHG_SYS_REG_CTRL_OFFSET", "CHG_SYS_REG_CTRL_SHIFT", "CHG_SYS_REG_CTRL_POS", "CHG_SYS_REG_CTRL_OFS"):
+        assert cls(n, "5") == "encoding", n
+    assert cls("CHG_SYS_REG_CTRL", "0x05") == "register"
+    assert cls("CHG_REG_SHIP_RST", "0x09") == "register"
