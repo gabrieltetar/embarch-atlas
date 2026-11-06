@@ -348,3 +348,20 @@ def test_a_strap_with_another_address_or_pin_state_is_still_a_conflict():
 
 def test_the_reader_is_told_to_state_only_the_pin_state():
     assert "only the pin state" in sl.READER_RULES
+
+
+def test_high_impedance_and_floating_are_the_same_pin_state():
+    for w in ("high-impedance", "hi-z", "High-Z", "high impedance"):
+        assert sl.pin_states(w) == {"float"}
+    f = {"kind": "strap", "value": "0x6A", "condition": "SEL floating"}
+    r = {"found": True, "values": {"value": "0x6A", "condition": "SEL high-impedance"}}
+    assert sl.compare_one(f, r)[0] == "confirmed"
+
+
+def test_open_drain_names_no_pin_state():
+    assert sl.pin_states("open-drain output") == set()
+
+
+def test_a_negated_pin_state_is_not_counted():
+    assert sl.pin_states("SEL not floating") == set()
+    assert sl.pin_states("must not be left floating, tie to VDD") == {"vdd"}

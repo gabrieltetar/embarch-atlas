@@ -706,10 +706,20 @@ _PIN_STATES = {"fixed": {"fixed"}, "gnd": {"gnd", "ground", "vss", "low"},
                "float": {"float", "floating", "open", "unconnected", "nc"}}
 
 
+_HIZ = re.compile(r"\b(?:high|hi)[\s_-]*(?:impedance|z)\b")
+_OPEN_OUTPUT = re.compile(r"\bopen[\s_-]*(?:drain|collector|emitter)\b")
+_NEGATED = re.compile(r"\b(?:not|no|never|isn't|is not)\s+(?:be\s+|left\s+|tied\s+|driven\s+)*[a-z0-9]+")
+
+
 def pin_states(s) -> set[str]:
     """The pin states a strap condition names (`fixed`, `gnd`, `vdd`, `sda`, `scl`, `float`). A
-    condition that says the address is fixed names only that, whatever else it remarks on."""
-    toks = set(re.findall(r"[a-z0-9]+", str(s or "").lower()))
+    condition that says the address is fixed names only that, whatever else it remarks on.
+    High-impedance, hi-z and high-Z name `float`; open-drain names nothing; a negated word is dropped."""
+    text = str(s or "").lower()
+    text = _HIZ.sub(" floating ", text)       # high-impedance is a floating pin, not VDD
+    text = _OPEN_OUTPUT.sub(" ", text)        # an output type, not a pin state
+    text = _NEGATED.sub(" ", text)            # "not floating" is not floating
+    toks = set(re.findall(r"[a-z0-9]+", text))
     found = {k for k, words in _PIN_STATES.items() if toks & words}
     return {"fixed"} if "fixed" in found else found
 

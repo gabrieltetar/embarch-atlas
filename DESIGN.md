@@ -709,7 +709,7 @@ The compare checks every value the reader is asked for that the key covers: a li
 by meaning (`text_value_verdict`: reworded is confirmed, clearly different words or
 quantities are a conflict, an ambiguous overlap is unresolved, a reader that states none is silent), a
 strap's `condition` by the pin state it names (`pin_states`: the same state, or both saying the address is
-fixed, matches; different states conflict; an address strap whose value agrees but whose wording names no
+fixed, matches; different states conflict; high-impedance, hi-z and high-Z name the floating state, open-drain names none, and a negated word ("not floating") is not counted; an address strap whose value agrees but whose wording names no
 state is unresolved as "values agree, wording differs", never a conflict; a mode strap keeps
 `text_value_verdict`), a
 register's `width` numerically. This tightening did **not** bump `CHECKED_VERSION`: verdicts already
