@@ -152,7 +152,9 @@ again after a document change is fresh.
 `build` writes `kconfig.json` while the workspace's Zephyr is the build's; if the extraction fails (the
 build's Python lacks kconfiglib, say) the stamp records `build.kconfig: "not extracted: <reason>"` and the
 build warns. `build` of that commit then says "already built", so the recovery is `embarch-atlas
-kconfig-extract <atlas>`: it reruns the extraction over the build dir the stamp names (`.work/build-*`),
+kconfig-extract <atlas>`: it reruns the extraction over the build dir the stamp names (`.work/build-<target>-<commit12>-<args8>`, where `<args8>` hashes the
+board, app and extra args, so a changed argument list gets a fresh directory: west's `-p auto` does not clear a
+sysbuild-to-plain cache),
 no worktree rebuild, refusing under the same `workspace_mismatch` guard. If the build dir is gone or the
 workspace's Zephyr moved, there is no safe route short of `build <target> --force` (a full rebuild), and
 the command says exactly that. `config` on such an atlas quotes the recorded reason and names the command.

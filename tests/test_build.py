@@ -294,3 +294,13 @@ def test_image_choice_in_a_sysbuild(tmp_path):
     assert kconfig.image_dir(b, "edt.pickle") == b
     with pytest.raises(FileNotFoundError, match="no zephyr/edt.pickle"):
         kconfig.image_dir(tmp_path / "empty", "edt.pickle")
+
+
+def test_build_dir_follows_the_build_arguments():
+    base = {"target": "t", "board": "b", "app": "app", "extra_args": ["--sysbuild"]}
+    same = build.build_dir_name(dict(base), "abc123abc123")
+    assert same == build.build_dir_name(dict(base), "abc123abc123")        # unchanged args reuse the dir
+    assert same.startswith("build-t-abc123abc123-")
+    other = build.build_dir_name({**base, "extra_args": ["--no-sysbuild"]}, "abc123abc123")
+    assert other != same                                                    # sysbuild <-> plain gets a fresh dir
+    assert build.build_dir_name({**base, "extra_args": []}, "abc123abc123") != same

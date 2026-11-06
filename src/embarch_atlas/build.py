@@ -19,6 +19,7 @@ This module also holds the small helpers the other atlas modules share: reading
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
@@ -417,6 +418,18 @@ def west_command(west: str, bdir: Path, board: str, app_dir: Path, extra: list[s
             "--", *cmake_args, "-DZEPHYR_MODULES=" + ";".join(modules)]
 
 
+def build_dir_name(cfg: dict, c12: str) -> str:
+    """`build-<target>-<commit12>-<args8>`: the build dir is keyed on the build arguments too.
+
+    West's `-p auto` does not clear a directory whose cache came from a different CMake source
+    (sysbuild vs a plain build), so the arguments that shape the configure step (board, app and the
+    extra args) are part of the name: a changed argument list gets a fresh directory, an unchanged
+    one reuses its own.
+    """
+    key = json.dumps([cfg["board"], cfg["app"], list(cfg.get("extra_args") or [])], sort_keys=True)
+    return f"build-{cfg['target']}-{c12}-{hashlib.sha256(key.encode()).hexdigest()[:8]}"
+
+
 def _zephyr_base(topdir: Path, west: str) -> Path | None:
     r = subprocess.run([west, "config", "zephyr.base"], cwd=topdir, capture_output=True, text=True)
     zb = r.stdout.strip()
@@ -451,7 +464,8 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
     if len(defs) > 1:
         raise BuildError(f"board {cfg['board']} is defined {len(defs)} times: {defs}")
     main_defs = board_definitions(cfg["board"], board_roots([str(fw)] if is_zephyr_module(fw) else [], None, fw))
-    bdir = ad / ".work" / f"build-{cfg['target']}-{c12}"
+    bdir_name = build_dir_name(cfg, c12)
+    bdir = ad / ".work" / bdir_name
     eng_build = fw / "embarch" / "build"
     if _under(str(bdir), eng_build.resolve()):
         raise BuildError(f"refusing to build into the engineer's {eng_build}")
@@ -463,7 +477,7 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
     if wbin:
         env["PATH"] = wbin + os.pathsep + env.get("PATH", "")
         env.setdefault("VIRTUAL_ENV", str(Path(wbin).parent))
-    logf = ad / ".work" / f"build-{cfg['target']}-{c12}.log"
+    logf = ad / ".work" / f"{bdir_name}.log"
     log(f"west build -> {bdir} (log {logf})")
     with open(logf, "w", encoding="utf-8") as lf:
         lf.write(" ".join(cmd) + "\n")
