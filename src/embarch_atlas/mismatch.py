@@ -22,6 +22,7 @@ import re
 from typing import Any
 
 from embarch_atlas.common import read_jsonl, write_json, write_text
+from embarch_atlas.dt import pin_decoder
 
 # rank order: most actionable first
 ORDER = [
@@ -69,6 +70,15 @@ NOT_RUN = [
 
 
 FOLD_INTENT = "DT node okay with no driver: on purpose (engineer-declared)"
+FOLD_INFRA = "DT node okay with no Zephyr device: SoC infrastructure nrfx drives directly (Nordic)"
+# Nordic SoC blocks that nrfx (or the SoC init) uses without a Zephyr device: DPPIC, PPIB, MPC, UICR, GPIOTE.
+NORDIC_INFRA_RE = re.compile(r"^nordic,nrf-(dppic|ppib|mpc|uicr|gpiote)(\d.*)?(-.*)?$")
+PIN_CHECKS = ["DT pin reaches the board", "I2C device signals land on the DT pins", "one DT owner per pin",
+              "pinctrl function vs net name", "DT pull vs board pull", "GPIO polarity vs net name"]
+
+
+def nordic_infra(compat: str | None) -> bool:
+    return bool(compat) and bool(NORDIC_INFRA_RE.match(compat))
 
 
 def dt_intent(J, *keys: str | None) -> str:
@@ -361,8 +371,11 @@ def run(J, stamp: dict, pins: dict) -> dict:
             drv = u.get("driver") or {}
             ok = bool(u.get("instantiated") or (drv.get("compiled") and drv.get("consumer")))
             meant = not ok and dt_intent(J, own, u.get("label"))
-            R.check("DT node has a driver in the build", "", 1, int(ok or bool(meant)))
-            if meant:
+            infra = not ok and not meant and nordic_infra(u.get("compat"))
+            R.check("DT node has a driver in the build", "", 1, int(ok or bool(meant) or infra))
+            if infra:
+                R.folded[FOLD_INFRA].append(f"{r['port']} {own} ({u.get('compat')})")
+            elif meant:
                 R.folded[FOLD_INTENT].append(f"{r['port']} {own} ({meant})")
             elif not ok:
                 if drv.get("compiled"):
@@ -380,8 +393,11 @@ def run(J, stamp: dict, pins: dict) -> dict:
             continue
         ok = bool(p.get("instantiated") or p.get("touched_by_code"))
         meant = not ok and dt_intent(J, p.get("node"), name)
-        R.check("DT node has a driver in the build", "", 1, int(ok or bool(meant)))
-        if meant:
+        infra = not ok and not meant and nordic_infra(p.get("compatible"))
+        R.check("DT node has a driver in the build", "", 1, int(ok or bool(meant) or infra))
+        if infra:
+            R.folded[FOLD_INFRA].append(f"{name} {p.get('node')} ({p.get('compatible')})")
+        elif meant:
             R.folded[FOLD_INTENT].append(f"{name} {p.get('node')} ({meant})")
         elif not ok:
             R.cand("dt-no-driver", name, f"{name} ({p['node']}, {p['compatible']}) is okay in DT but not instantiated and not touched by code",
@@ -608,7 +624,13 @@ def finish(R: Report, J, stamp: dict) -> dict:
     folded = {k: sorted(set(v)) for k, v in sorted(R.folded.items())}
     summary = (f"{len(checks)} checks, {n_pass}/{n_ran} items passed; "
                f"{sum(by.values())} candidates in {len(by)} classes; {sum(len(v) for v in folded.values())} expected items folded")
+    dtj = getattr(J, "dt", None) or {}
+    decoder = pin_decoder(dtj) if dtj else "stm32"
+    no_input = ([c for c in PIN_CHECKS if c in idle or c not in R.checks] if decoder is None else [])
     rep = {"atlas": stamp["id"], "summary": summary, "checks": checks, "checks_with_nothing_to_check": idle,
+           "pin_checks_no_input": ({"checks": no_input, "why": "no devicetree pin-use decoder for this family "
+                                    "(decoded: STM32, Nordic nRF), so the pin-level checks had nothing to read"}
+                                   if decoder is None else None),
            "not_run": R.not_run, "folded": folded, "candidates": R.candidates, "by_class": dict(by),
            "sections": R.sections}
     write_json(J.atlas / "mismatches.json", rep)
@@ -626,6 +648,10 @@ def render(rep: dict, stamp: dict) -> str:
         L.append(f"| {c['check']} | {c['ran']} | {c['passed']} | {c['candidates']} | {c['sources']} |")
     if rep["checks_with_nothing_to_check"]:
         L += ["", "Ran with nothing to check: " + ", ".join(rep["checks_with_nothing_to_check"]) + "."]
+    if rep.get("pin_checks_no_input"):
+        n = rep["pin_checks_no_input"]
+        L += ["", f"**No input for the pin-level checks ({', '.join(n['checks'])}): {n['why']}.** "
+              "Their empty rows above are not a pass."]
     if rep["folded"]:
         L += ["", "## Folded into counts (expected)", ""]
         for k, v in rep["folded"].items():

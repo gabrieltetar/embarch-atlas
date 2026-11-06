@@ -67,6 +67,42 @@ def stm32_pinmux(v: int) -> dict:
     return {"pin": f"P{port}{line}", "port": port, "line": line, "af": af, "mode": mode}
 
 
+# Nordic pinctrl: `psels = <NRF_PSEL(fun, port, pin)>`. From Zephyr's
+# include/zephyr/dt-bindings/pinctrl/nrf-pinctrl.h: bits 8:0 hold `port * 32 + pin` (NRF_PIN_MSK 0x1FF; all
+# ones = NRF_PIN_DISCONNECTED), bits 31:24 the function (NRF_FUN_*). Pull comes from the group's
+# `bias-pull-up` / `bias-pull-down` properties (nordic,nrf-pinctrl.yaml), not from the word.
+NRF_PIN_MSK = 0x1FF
+NRF_FUN_POS = 24
+NRF_FUN_MSK = 0xFF
+
+
+def nrf_psel(v: int) -> dict | None:
+    """NRF_PSEL(fun, port, pin) -> pin P<port>.<pin:02>, or None for a disconnected pin."""
+    raw = v & NRF_PIN_MSK
+    if raw == NRF_PIN_MSK:
+        return None
+    port, line = raw // 32, raw % 32
+    fun = (v >> NRF_FUN_POS) & NRF_FUN_MSK
+    return {"pin": nordic_pin(port, line), "port": port, "line": line, "af": f"NRF_FUN_{fun}", "mode": fun}
+
+
+def nordic_pin(port: int, line: int) -> str:
+    return f"P{port}.{line:02d}"
+
+
+def gpio_pin_name(ctrl: str, pin: int) -> str:
+    """A pin of a GPIO controller by the value `gpio_controllers` holds: a digit is a Nordic port (P0.04),
+    a letter an STM32-style port (PA4)."""
+    return nordic_pin(int(ctrl), int(pin)) if ctrl.isdigit() else f"P{ctrl}{pin}"
+
+
+def pin_decoder(raw: dict) -> str | None:
+    """Which family's pin use a dt.json decodes: "stm32", "nordic", or None (no decoder for the family)."""
+    if "pin_decoder" in raw:
+        return raw["pin_decoder"]
+    return "stm32" if raw.get("stm32") else None
+
+
 def token(compat: str) -> str:
     """A compatible as DT_DRV_COMPAT spells it."""
     return re.sub(r"[^a-z0-9]", "_", compat.lower())
@@ -126,11 +162,21 @@ def extract_edt(edt, rel: Rel | None = None) -> dict:
             lab = next((l for l in _labels(n) if re.fullmatch(r"gpio[a-z]", l)), None)
             if lab:
                 gpio_ctrl[n.path] = lab[-1].upper()
+        elif "nordic,nrf-gpio" in _compats(n):
+            pv = getattr(n, "props", {}).get("port")
+            port = pv.val if pv is not None and isinstance(pv.val, int) else None
+            if port is None:
+                lab = next((l for l in _labels(n) if re.fullmatch(r"gpio\d+", l)), None)
+                port = int(lab[4:]) if lab else None
+            if port is not None:
+                gpio_ctrl[n.path] = str(port)
         elif getattr(n, "props", {}).get("gpio-controller") and _labels(n):
             lab = next((l for l in _labels(n) if re.fullmatch(r"gpio[a-z]", l)), None)
             if lab:
                 gpio_ctrl[n.path] = lab[-1].upper()
     stm32 = any(c.startswith("st,stm32") for n in edt.nodes for c in _compats(n) if "pinctrl" in c)
+    nordic = any("nordic,nrf-gpio" in _compats(n) or "nordic,nrf-pinctrl" in _compats(n) for n in edt.nodes)
+    decoder = "stm32" if stm32 else ("nordic" if nordic else None)
 
     nodes, uses, devices = {}, [], []
     for n in edt.nodes:
@@ -161,10 +207,19 @@ def extract_edt(edt, rel: Rel | None = None) -> dict:
                 for grp in [conf] + list(getattr(conf, "children", {}).values()):
                     pm = grp.props.get("pinmux")
                     if pm is None:
+                        pm = grp.props.get("psels")
+                    if pm is None:
                         continue
                     vals = pm.val if isinstance(pm.val, list) else [pm.val]
                     for v in vals:
-                        dec = stm32_pinmux(v) if stm32 else {"pin": None, "raw": v}
+                        if "pinmux" in grp.props and stm32:
+                            dec = stm32_pinmux(v)
+                        elif "pinmux" not in grp.props and nordic:
+                            dec = nrf_psel(v)
+                            if dec is None:
+                                continue
+                        else:
+                            dec = {"pin": None, "raw": v}
                         bias = [k for k in BIAS_PROPS if k in grp.props and grp.props[k].val not in (False, None)
                                 and k != "slew-rate"]
                         uses.append({**base, "pin": dec.get("pin"), "kind": "pinctrl", "prop": f"pinctrl-{idx}",
@@ -180,7 +235,7 @@ def extract_edt(edt, rel: Rel | None = None) -> dict:
                     continue
                 pin, fl = cad.data.get("pin"), cad.data.get("flags", 0)
                 loc = _prop_loc(n, pname, rel)
-                uses.append({**base, "pin": f"P{gpio_ctrl[cad.controller.path]}{pin}", "kind": "gpio", "prop": pname,
+                uses.append({**base, "pin": gpio_pin_name(gpio_ctrl[cad.controller.path], pin), "kind": "gpio", "prop": pname,
                              "index": idx, "flags": flags_str(fl), "flags_raw": fl, "loc": loc,
                              "soc_defined": bool(loc and loc.startswith("zephyr:dts/"))})
         # binding-less nodes: edtlib leaves *-gpios untyped; read the raw dtlib cells
@@ -204,7 +259,7 @@ def extract_edt(edt, rel: Rel | None = None) -> dict:
                             nc = 2
                     pin, fl = cells[i + 1], (cells[i + 2] if nc >= 2 and i + 2 < len(cells) else 0)
                     loc = _prop_loc(n, pname, rel)
-                    uses.append({**base, "compat": None, "compats": [], "pin": f"P{gpio_ctrl[cpath]}{pin}",
+                    uses.append({**base, "compat": None, "compats": [], "pin": gpio_pin_name(gpio_ctrl[cpath], pin),
                                  "kind": "gpio", "prop": pname, "index": k, "flags": flags_str(fl), "flags_raw": fl,
                                  "loc": loc, "no_binding": True,
                                  "soc_defined": bool(loc and loc.startswith("zephyr:dts/"))})
@@ -214,7 +269,7 @@ def extract_edt(edt, rel: Rel | None = None) -> dict:
         for k2, i in enumerate(getattr(n, "interrupts", None) or []):
             if i.controller.path in gpio_ctrl:
                 pin = (i.data or {}).get("pin", (i.data or {}).get("irq"))
-                uses.append({**base, "pin": f"P{gpio_ctrl[i.controller.path]}{pin}", "kind": "interrupt",
+                uses.append({**base, "pin": gpio_pin_name(gpio_ctrl[i.controller.path], pin), "kind": "interrupt",
                              "prop": "interrupts", "index": k2, "flags": None, "loc": _prop_loc(n, "interrupts", rel)})
         # bus devices
         if parent is not None and getattr(parent, "buses", None) and regs:
@@ -229,6 +284,7 @@ def extract_edt(edt, rel: Rel | None = None) -> dict:
     return {
         "gpio_controllers": gpio_ctrl,
         "stm32": stm32,
+        "pin_decoder": decoder,
         "nodes": nodes,
         "uses": uses,
         "devices": devices,

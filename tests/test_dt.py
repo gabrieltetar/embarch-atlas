@@ -142,6 +142,54 @@ def test_extract_edt():
     json.dumps(raw)                                             # dt.json must be plain JSON
 
 
+def psel(fun: int, port: int, pin: int) -> int:
+    """NRF_PSEL(fun, port, pin): pin field port*32+pin in bits 8:0, function in bits 31:24 (nrf-pinctrl.h)."""
+    return (fun << 24) | (port * 32 + pin)
+
+
+def nrf_edt() -> EDT:
+    """A Nordic-shaped tree: three nordic,nrf-gpio ports, a pinctrl state with psels, a gpios property."""
+    soc = N("/soc", compats=["simple-bus"])
+    g0 = N("/soc/gpio@50050400", ["gpio0"], ["nordic,nrf-gpio"], parent=soc, ordinal=5,
+           props={"gpio-controller": P("boolean", True), "port": P("int", 0)})
+    g1 = N("/soc/gpio@500d8200", ["gpio1"], ["nordic,nrf-gpio"], parent=soc, ordinal=6,
+           props={"gpio-controller": P("boolean", True), "port": P("int", 1)})
+    g2 = N("/soc/gpio@50050700", ["gpio2"], ["nordic,nrf-gpio"], parent=soc, ordinal=7,
+           props={"gpio-controller": P("boolean", True)})                     # no port property: the label digit
+    pctrl = N("/pin-controller", ["pinctrl"], ["nordic,nrf-pinctrl"], parent=None)
+    grp = N("/pin-controller/i2c20_default/group1", parent=pctrl,
+            props={"psels": P("array", [psel(11, 1, 10), psel(12, 1, 11), 0x1FF | (11 << 24)]),
+                   "bias-pull-up": P("boolean", True)})
+    state = N("/pin-controller/i2c20_default", parent=pctrl, children={"group1": grp})
+    i2c = N("/soc/i2c@c6000", ["i2c20"], ["nordic,nrf-twim"], parent=soc, ordinal=20, buses=["i2c"],
+            pinctrls=[PinCtrl("default", [state])], props={"pinctrl-0": P("phandles", None)})
+    mon = N("/soc/i2c@c6000/mon@44", ["mon0"], ["acme,mon"], parent=i2c, regs=[(0x44, None)], on_buses=["i2c"], ordinal=21,
+            props={"alert-gpios": P("phandle-array", [CAD(g2, {"pin": 4, "flags": 0x10})])})
+    return EDT([soc, g0, g1, g2, pctrl, grp, state, i2c, mon])
+
+
+def test_nordic_pin_use():
+    assert dt.nrf_psel(psel(11, 1, 10)) == {"pin": "P1.10", "port": 1, "line": 10, "af": "NRF_FUN_11", "mode": 11}
+    assert dt.nrf_psel(psel(0, 0, 4))["pin"] == "P0.04"
+    assert dt.nrf_psel(0x1FF | (11 << 24)) is None                              # NRF_PSEL_DISCONNECTED
+    raw = dt.extract_edt(nrf_edt())
+    assert raw["stm32"] is False and raw["pin_decoder"] == "nordic"
+    assert sorted(raw["gpio_controllers"].values()) == ["0", "1", "2"]
+    by = {(u["pin"], u["kind"]): u for u in raw["uses"]}
+    assert set(by) == {("P1.10", "pinctrl"), ("P1.11", "pinctrl"), ("P2.04", "gpio")}
+    scl = by[("P1.10", "pinctrl")]
+    assert scl["af"] == "NRF_FUN_11" and scl["bias"] == ["bias-pull-up"] and scl["flags"] == "bias-pull-up"
+    assert by[("P2.04", "gpio")]["flags"] == "PULL_UP" and "exti_line" not in by[("P2.04", "gpio")]
+    json.dumps(raw)
+
+
+def test_no_decoder_family():
+    soc = N("/soc", compats=["simple-bus"])
+    raw = dt.extract_edt(EDT([soc, N("/soc/gpio@1", ["gpio0"], ["vendor,other-gpio"], parent=soc)]))
+    assert raw["pin_decoder"] is None and raw["gpio_controllers"] == {}
+    assert dt.pin_decoder(raw) is None and dt.pin_decoder({"stm32": True}) == "stm32"      # an older dt.json
+
+
 def test_scan_sources(tmp_path):
     drv = tmp_path / "mon.c"
     drv.write_text(

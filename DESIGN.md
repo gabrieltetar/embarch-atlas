@@ -110,7 +110,11 @@ atlases/<target>@<commit12>/
                                 the join read (`sources`, `source_files`, `schematics`: for staleness;
                                 `missing_boards`: declared boards that had no netlist; `answers`: a hash of
                                 the confirmed and rejected documents, when there are any)
-  dt.json                       pins, devices, buses, IRQ/EXTI from the edt
+  dt.json                       pins, devices, buses, IRQ/EXTI from the edt. Pin use is decoded for
+                                STM32 (`pinmux`, ports `PA4`) and Nordic nRF (`nordic,nrf-gpio` ports,
+                                pinctrl `psels` = `NRF_PSEL(fun, port, pin)`, pins `P0.04`); `pin_decoder`
+                                names which, null for any other family, and `checks.md` then says the
+                                pin-level checks had no input
   kconfig.json                  every Kconfig symbol: value, assigning fragment, depends on (met?),
                                 selected/implied by, the default that applies, where defined.
                                 Written by `build` while the workspace's Zephyr is the build's; for an

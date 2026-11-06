@@ -168,3 +168,37 @@ def test_a_verdict_under_the_checked_key_is_current(tmp_path):
     chk = {c["check"]: c for c in rep["checks"]}["second look agrees with the first pass"]
     assert (chk["ran"], chk["passed"]) == (1, 1)
     assert mismatch.FOLD_OLD_VERDICT not in rep["folded"]
+
+
+def test_nordic_infrastructure_nodes_are_folded_not_candidates(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    iu = read_json(atlas / "in_use.json")
+    for n, c in (("DPPIC", "nordic,nrf-dppic"), ("PPIB", "nordic,nrf-ppib"), ("MPC", "nordic,nrf-mpc"),
+                 ("UICR", "nordic,nrf-uicr"), ("GPIOTE", "nordic,nrf-gpiote")):
+        iu["peripherals"][n] = {"dt_okay": True, "instantiated": False, "touched_by_code": False, "compatible": c,
+                                "node": f"/soc/{n.lower()}@1"}
+    write_json(atlas / "in_use.json", iu)
+    run_join(ad, atlas)
+    rep = read_json(atlas / "mismatches.json")
+    keys = [c["key"] for c in _classes(rep)["dt-no-driver"]]
+    assert keys == ["PA0"]                                         # the STM32 ADC stays a candidate
+    assert len(rep["folded"][mismatch.FOLD_INFRA]) == 5
+    assert rep["pin_checks_no_input"] is None
+
+
+def test_family_without_a_decoder_says_why_the_pin_checks_were_empty(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    d = read_json(atlas / "dt.json")
+    d["stm32"], d["pin_decoder"], d["uses"] = False, None, []
+    write_json(atlas / "dt.json", d)
+    run_join(ad, atlas)
+    rep = read_json(atlas / "mismatches.json")
+    assert "one DT owner per pin" in rep["pin_checks_no_input"]["checks"]
+    text = (atlas / "checks.md").read_text()
+    assert "No input for the pin-level checks" in text and "no devicetree pin-use decoder" in text
+
+
+def test_mcu_port_spellings():
+    from embarch_atlas import join
+    assert join.mcu_port("PA4-WKUP") == "PA4" and join.mcu_port("P0.4") == "P0.04" and join.mcu_port("P1.10/AIN3") == "P1.10"
+    assert join.mcu_port("VDD") is None and join.mcu_port(None) is None

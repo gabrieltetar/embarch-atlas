@@ -31,6 +31,7 @@ from typing import Any, Iterable
 from embarch_atlas import answers, coverage
 from embarch_atlas.common import (read_json, read_jsonl, sha256_file, source_files, sources_fingerprint, write_json,
                                    write_text)
+from embarch_atlas.dt import gpio_pin_name
 
 GROUND_RE = re.compile(r"^(A|D|P|S|C)?GND\w*$|(^|_)(A|D|P|S)?GND(\d+)?(_\w+)?$|^VSS\w*$|^0V$", re.I)
 SUPPLY_RE = re.compile(r"^\+?\d+V\d*(_\w+)?$|^\+?\d+P\d+V?\w*$|^(A|D)?V(DD|CC|EE)\w*$|^V(BAT|SYS|IN|BUS|REF)$", re.I)
@@ -569,9 +570,7 @@ class Join:
     def port_of_key(self, key: str) -> str | None:
         if not self.mcu:
             return None
-        name = self.boards[self.mcu[0]].pin_name.get(key) or ""
-        m = re.match(r"P[A-Z]\d{1,2}(?!\d)", name)
-        return m[0] if m else None
+        return mcu_port(self.boards[self.mcu[0]].pin_name.get(key))
 
     # -- DT
     def dt_use(self, u: dict) -> dict:
@@ -611,6 +610,17 @@ class Join:
 
 # ---------------------------------------------------------------- the pin map
 
+def mcu_port(name: str | None) -> str | None:
+    """The GPIO port name at the start of an MCU pin name: PA4 (STM32-style) or Nordic P0.04 (a one-digit
+    pin is padded, so the datasheet's P0.4 and the devicetree's P0.04 are one spelling)."""
+    name = name or ""
+    m = re.match(r"P[A-Z]\d{1,2}(?!\d)", name)
+    if m:
+        return m[0]
+    m = re.match(r"P(\d)\.(\d{1,2})(?!\d)", name)
+    return f"P{m[1]}.{int(m[2]):02d}" if m else None
+
+
 def build_pin_map(J: Join) -> list[dict]:
     if not J.mcu:
         return []
@@ -630,8 +640,7 @@ def build_pin_map(J: Join) -> list[dict]:
         name = B.pin_name.get(key)
         port = J.port_of_key(key)
         if not port and str(num) in ds_by_num:     # the symbol says NRST, the datasheet's pinout says PF2-NRST
-            m = re.match(r"P[A-Z]\d{1,2}(?!\d)", str(ds_by_num[str(num)][1].get("name") or ""))
-            port = m[0] if m else None
+            port = mcu_port(str(ds_by_num[str(num)][1].get("name") or ""))
         rail = bool(net) and J.is_rail(mb, net)
         far = [] if (net is None or rail) else J.trace(mb, net, (mb, key))
         ds = ds_by_num.get(str(num)) or ds_by_name.get(port or (name or "").split("-")[0])
@@ -953,7 +962,7 @@ def comment_checks(J: Join, stamp: dict, rows: list[dict]) -> list[dict]:
             for m in pat.finditer(line):
                 if m[1] not in ports:
                     continue
-                pin = f"P{ports[m[1]]}{m[2]}"
+                pin = gpio_pin_name(ports[m[1]], int(m[2]))
                 net = by_port.get(pin, {}).get("net")
                 out.append({"loc": f"fw:{f}:{i}", "pin": pin, "comment": m[3], "net": net,
                             "status": "agree" if net == m[3] else "disagree"})
