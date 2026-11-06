@@ -339,3 +339,59 @@ def test_join_reports_the_classes(tmp_path):
     assert text.index("### dt-limit-over-abs-max") < text.index("### dt-limit-outside-ec")        # ranked
     assert "fw:board.dts:50" in text
     assert (atlas / "limits.json").is_file()
+
+
+# ---------------------------------------------------------------- quantity and role of a proposed mapping
+
+def _mini(tmp_path, props, records, bindings=None):
+    ad = tmp_path / "fw" / "embarch" / "atlas"
+    d = ad / "docs" / DOC
+    write_json(d / "doc.json", {"doc_id": DOC, "kind": "datasheet", "part": "DCG100", "file": "x.pdf", "pages": 9})
+    write_jsonl(d / "records" / "limit.jsonl", records)
+    b = {"compat_parts": {"acme,demochg": "DCG100"}}
+    b.update(bindings or {})
+    write_json(ad / "boards" / "bindings.json", b)
+    atlas = ad / "atlases" / "demo@000000000001"
+    write_json(atlas / "atlas.json", {"id": "demo@000000000001", "target": "demo", "board": "b", "commit": "0" * 40,
+                                      "build": {}})
+    write_json(atlas / "dt.json", {"nodes": {NODE: {"labels": ["chg0"], "compats": ["acme,demochg"], "okay": True,
+                                                    "parent": "/", "props": props}}})
+    return limits.run(ad, atlas, log=lambda *a: None)
+
+
+SHIP = _lim("demo-chg.ec.IBAT_SHIP", "ec", "IBAT_SHIP", "µA", max_=5, param="ship-mode battery current")
+OCP = _lim("demo-chg.ec.IBAT_OCP", "ec", "IBAT_OCP", "A", 4, 6, param="battery discharge current limit, overcurrent")
+VRANGE = _lim("demo-chg.ec.VTH_RANGE", "ec", "VTH_RANGE", "V", 3.5, 4.65, param="threshold voltage range")
+VRECH = _lim("demo-chg.ec.VRECH", "ec", "VRECH", "mV", 100, 300, param="recharge threshold offset")
+
+
+def test_a_shared_word_is_not_the_same_quantity(tmp_path):
+    r = _mini(tmp_path, {"battery-discharge-current-limit-milliamp": _p(500, 1),
+                         "re-charge-threshold-millivolt": _p(100, 2)}, [SHIP, VRANGE])
+    for name, rec in (("battery-discharge-current-limit-milliamp", "demo-chg.ec.IBAT_SHIP"),
+                      ("re-charge-threshold-millivolt", "demo-chg.ec.VTH_RANGE")):
+        x = _prop(r, name)
+        assert x["comparisons"] == [] and x["mapped"] == [] and x["status"] == "mapping-uncertain", name
+        assert [u["record"] for u in x["uncertain"]] == [rec]
+    assert not _find(r, "dt-limit-outside-ec")
+    assert r["counts"]["mapping_uncertain"] == 2
+    assert r["folded"][limits.FOLD_UNCERTAIN][0].startswith("chg0.battery-discharge")
+
+
+def test_a_matching_quantity_and_role_is_still_compared(tmp_path):
+    r = _mini(tmp_path, {"battery-discharge-current-limit-milliamp": _p(500, 1),
+                         "recharge-threshold-offset-millivolt": _p(100, 2)}, [SHIP, OCP, VRANGE, VRECH])
+    x = _prop(r, "battery-discharge-current-limit-milliamp")      # 0.5 A against 4..6 A
+    assert [m["record"] for m in x["mapped"]] == ["demo-chg.ec.IBAT_OCP"]
+    assert [u["record"] for u in x["uncertain"]] == ["demo-chg.ec.IBAT_SHIP"]
+    assert x["status"] == "outside"
+    y = _prop(r, "recharge-threshold-offset-millivolt")
+    assert [m["record"] for m in y["mapped"]] == ["demo-chg.ec.VRECH"] and y["status"] == "inside"
+
+
+def test_a_declared_mapping_skips_the_role_test(tmp_path):
+    b = {"prop_limits": {"acme,demochg": {"battery-discharge-current-limit-milliamp": "demo-chg.ec.IBAT_SHIP"}}}
+    r = _mini(tmp_path, {"battery-discharge-current-limit-milliamp": _p(500, 1)}, [SHIP], b)
+    x = _prop(r, "battery-discharge-current-limit-milliamp")
+    assert x["mapping"] == "declared" and x["status"] == "outside" and x["uncertain"] == []
+    assert _find(r, "dt-limit-outside-ec")

@@ -21,8 +21,13 @@ Which records: the part's `limit` and `timing` records, mapped to a property in 
    alternative on its own; `VOUT` reads as `output`) and the first clause of its `param`.
    A shared word scores 1, a record word the property lacks costs 0.5, a matching bound
    0.5; a symbol built from the property (`VOUT`, `VOUTMAX`) equal to the record's scores
-   2, a prefix of it 1. Opposite bounds (`min` vs `max`) exclude. Per group, the rows with
-   the best score at or above 1 are kept.
+   2, a prefix of it 1. Opposite bounds (`min` vs `max`) exclude. A name match must also
+   be the same quantity and role: a record stated in a state the property does not name
+   (`ship`, `shutdown`, `standby`, `sleep`, `quiescent`, `leakage`), or an offset (`offset`,
+   `below`, `above`, `delta`, `hysteresis`, `recharge`) against an absolute value, or the
+   reverse, fails it, and the pair is listed as "mapping uncertain" (`mapping-uncertain`
+   status, `uncertain` in `limits.json`), never compared. Per group, the rows with the best
+   score at or above 1 are kept.
 
 Proposed rows are not compared when: the condition names part numbers other than the
 board's (a variant row); a current row is stated at another sense-resistor value than the
@@ -82,9 +87,15 @@ CLASS_OF = {"error": "dt-limit-over-abs-max", "warn": "dt-limit-outside-recommen
 SEV_RANK = {"error": 0, "warn": 1, "info": 2}
 STRICT = {"abs", "recommended", "register", "application", "esd", "rule"}   # each row on its own
 THRESHOLD = 1.0
+# A name match is also a claim about the quantity and the role: a state the record is stated in (ship mode) that the
+# property does not name, or the property being an offset where the record is an absolute value (or the reverse),
+# makes the pair a different quantity that only shares a word.
+STATE_WORDS = {"ship", "shutdown", "standby", "sleep", "quiescent", "leakage"}
+OFFSET_WORDS = {"offset", "below", "above", "delta", "hysteresis", "recharge"}
 FOLD_NO_LIMIT = "DT limits: no datasheet limit for this property"
 FOLD_NOT_COMPARABLE = ("DT limits: mapped, but no row is comparable (typ only, expression bound, register-setting "
                        "point, other variant or sense resistor)")
+FOLD_UNCERTAIN = "DT limits: mapping uncertain (a name match that fails the quantity or role test; not compared)"
 FOLD_NO_PART = "DT limits: unit properties on nodes with no part datasheet"
 FOLD_DECLARED_NONE = "DT limits: no datasheet limit applies (declared)"
 NOT_PART_DOCS = ("svd", "rm", "reference-manual", "prd", "appnote")
@@ -220,7 +231,7 @@ DIM_WORDS = {"voltage", "volt", "volts", "current", "currents", "amp", "amps", "
 BOUND = {"max": "max", "maximum": "max", "limit": "max", "limits": "max", "lim": "max", "clamp": "max",
          "upper": "max", "ceiling": "max", "min": "min", "minimum": "min", "lower": "min", "floor": "min"}
 NEUTRAL = {"default", "initial", "init", "nominal"}
-COMPOUND = {("soft", "start"): "softstart", ("short", "circuit"): "short", ("over", "voltage"): "overvoltage",
+COMPOUND = {("re", "charge"): "recharge", ("soft", "start"): "softstart", ("short", "circuit"): "short", ("over", "voltage"): "overvoltage",
             ("under", "voltage"): "undervoltage", ("over", "current"): "overcurrent", ("pre", "charge"): "precharge"}
 SYN = {
     "out": "output", "outp": "output", "output": "output", "in": "input", "inp": "input", "input": "input",
@@ -524,6 +535,20 @@ def pick_sense(p: Prop, senses: list[dict]) -> dict | None:
     return max(senses, key=lambda s: (len(s["words"] & p.qset), -senses.index(s)))
 
 
+def role_conflict(p: Prop, row: Row) -> str | None:
+    """Why a name-matched pair is not the same quantity and role, or None when nothing tells them apart."""
+    rw = set(row.pwords).union(*(a[0] for a in row.alts))
+    pw = p.qset
+    st_r, st_p = rw & STATE_WORDS, pw & STATE_WORDS
+    if st_r != st_p:
+        return f"state differs: record {', '.join(sorted(st_r)) or 'none'}, property {', '.join(sorted(st_p)) or 'none'}"
+    off_r, off_p = bool(rw & OFFSET_WORDS), bool(pw & OFFSET_WORDS)
+    if off_r != off_p:
+        return "role differs: " + ("the property is an offset, the record an absolute value" if off_p else
+                                   "the record is an offset, the property an absolute value")
+    return None
+
+
 def score(p: Prop, row: Row) -> tuple[float, str] | None:
     best = None
     for aw, ab, asym in row.alts:
@@ -715,7 +740,7 @@ class Analysis:
                                "raw": p.raw, "dim": p.dim, "si": p.values, "words": sorted(p.qset), "bound": p.bound,
                                "part": info.get("part"), "mpn": info.get("mpn"), "docs": info["docs"],
                                "part_via": info["via"], "sense": sense and {k: v for k, v in sense.items() if k != "words"},
-                               "mapping": None, "mapped": [], "skipped": [], "comparisons": [], "formula": None}
+                               "mapping": None, "mapped": [], "uncertain": [], "skipped": [], "comparisons": [], "formula": None}
         declared, spec = declared_spec(self.bindings, compats, p.prop)
         if declared:
             self.declared(p, rec, spec, rows, forms, props, info)
@@ -725,9 +750,12 @@ class Analysis:
         if comps:
             rec["status"] = "outside" if any(c["status"] == "outside" for c in comps) else "inside"
         elif rec.get("status") is None:
-            rec["status"] = "not-comparable" if rec["mapped"] else "no-limit"
+            rec["status"] = ("not-comparable" if rec["mapped"] else
+                             "mapping-uncertain" if rec["uncertain"] else "no-limit")
         if rec["status"] == "outside":
             self.report_outside(p, rec, sense)
+        elif rec["status"] == "mapping-uncertain":
+            self.folded[FOLD_UNCERTAIN].append(f"{p.key} ({', '.join(u['record'] for u in rec['uncertain'][:3])})")
         elif rec["status"] == "no-limit":
             self.folded[FOLD_NO_LIMIT].append(p.key)
         elif rec["status"] == "not-comparable":
@@ -773,6 +801,10 @@ class Analysis:
                 continue
             s = score(p, r)
             if s and s[0] >= THRESHOLD:
+                bad = role_conflict(p, r)
+                if bad:
+                    rec["uncertain"].append({"record": r.id, "score": s[0], "why": f"{s[1]}; {bad}", "cite": r.cite})
+                    continue
                 best[r.group].append((s[0], r, s[1]))
         picked: list[tuple[float, Row, str]] = []
         for g, lst in sorted(best.items()):
@@ -930,7 +962,7 @@ class Analysis:
                   "unresolved_nodes": len(un_nodes), "mapped": len(mapped), "declared": len(declared),
                   "proposed": len(mapped) - len(declared), "compared": len(compared), "inside": len(inside),
                   "outside": cnt["outside"], "needs_formula": cnt["needs-formula"],
-                  "not_comparable": cnt["not-comparable"], "no_limit": cnt["no-limit"],
+                  "not_comparable": cnt["not-comparable"], "no_limit": cnt["no-limit"], "mapping_uncertain": cnt["mapping-uncertain"],
                   "declared_none": cnt["declared-none"], "severity": dict(sev),
                   "sense_currents": len(sense_cur), "sense_currents_related": len(sense_ok)}
         summary = (f"{len(P)} unit properties on {len(nodes)} node(s) resolved to a part"
@@ -940,7 +972,7 @@ class Analysis:
                    + (f" ({', '.join(f'{v} {k}' for k, v in sorted(sev.items(), key=lambda x: SEV_RANK[x[0]]))})"
                       if sev else "")
                    + f"; {cnt['needs-formula']} need a declared formula; {cnt['not-comparable']} mapped but not "
-                   f"comparable; {cnt['no-limit']} with no datasheet limit")
+                   f"comparable; {cnt['mapping-uncertain']} with a mapping uncertain; {cnt['no-limit']} with no datasheet limit")
         checks = [{"check": CHECK, "sources": SOURCES, "ran": len(compared), "passed": len(inside),
                    "candidates": sum(1 for f in self.findings if f["check"] == CHECK)},
                   {"check": CHECK_SENSE, "sources": SOURCES_SENSE, "ran": len(sense_cur), "passed": len(sense_ok),
