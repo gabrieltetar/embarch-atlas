@@ -111,6 +111,7 @@ class Atlas:
         self.docs = sorted(p for p in (self.dir / "docs").glob("*")
                            if p.is_dir() and any((p / n).exists() for n in ("doc.json", "records", "outline.json")))
         self._pins = None
+        self._cov_part_docs = None
 
     # ---- documents
     def doc_meta(self, docdir: Path) -> dict:
@@ -119,14 +120,38 @@ class Atlas:
     def mpn_docs(self) -> dict[str, set[str]]:
         """MPN -> doc ids, from the atlas's part_docs join and the board netlists."""
         out: dict[str, set[str]] = {}
-        pins = self.pins_json()
-        part_docs = (pins or {}).get("part_docs") or {}
+        part_docs = self.part_docs()
         mpn_of = self.ref_mpns()
         for ref, docs in part_docs.items():
             mpn = mpn_of.get(ref)
             if mpn:
                 out.setdefault(mpn, set()).update(docs)
         return out
+
+    def part_docs(self) -> dict[str, list[str]]:
+        """`board:ref` -> doc ids: the atlas's `pins.json` join when an atlas exists, else (before the
+        first build) the same join made from the netlists and `coverage.py` (`Coverage.part_docs`)."""
+        if self.atlas is not None:
+            return (self.pins_json() or {}).get("part_docs") or {}
+        if self._cov_part_docs is None:
+            from .join import Docs
+            docs = Docs(self.dir)
+            cov = self.coverage()
+            self._cov_part_docs = {}
+            for nl in sorted((self.dir / "boards").glob("*/netlist.json")):
+                for ref, c in ((_json(nl, {}) or {}).get("components") or {}).items():
+                    ids = cov.part_docs(c.get("mpn"), docs) if c.get("mpn") else []
+                    if ids:
+                        self._cov_part_docs[f"{nl.parent.name}:{ref}"] = ids
+        return self._cov_part_docs
+
+    def coverage(self):
+        """`coverage.load` of this atlas dir; a malformed answers.toml reads as no answers."""
+        from . import coverage
+        try:
+            return coverage.load(self.dir)
+        except ValueError:
+            return coverage.load(self.dir, {}, {})
 
     def ref_mpns(self) -> dict[str, str]:
         out = {}
@@ -198,11 +223,18 @@ def part_card(a: Atlas, part: str, board: str | None = None, offset: int = 0) ->
     """The part's card.md; with `board`, the refs of that part on the boards and their nets."""
     d = a.find_doc(part)
     if not d:
+        if a.atlas is None:
+            undistilled = _covered_undistilled(a, part, board)
+            if undistilled:
+                return _cap(undistilled, "part_card", offset)
         return _missing(f"part {part!r}", "Try an MPN from MAP.md, a doc id from docs/, or see inventory/missing.md "
                         "for parts without a supplied datasheet.")
     card = d / "card.md"
     body = card.read_text(encoding="utf-8") if card.is_file() else "(no card.md yet: run /atlas-translate-docs)\n"
-    out = _header(f"{d.name} card", extra=_pdf_extra(a, d)) + body
+    extra = _pdf_extra(a, d)
+    if a.atlas is None:
+        extra = f"{extra} {NO_ATLAS_NOTE}".strip()
+    out = _header(f"{d.name} card", extra=extra) + body
     if board is not None:
         # "all" (and "" from the CLI) is every board; anything else is a board label
         every = board.strip().lower() in ("", "all")
@@ -215,9 +247,40 @@ def _pdf_extra(a: Atlas, d: Path) -> str:
     return f"pdf={p}" if p else ""
 
 
+NO_ATLAS_NOTE = "(no atlas built: part-to-document from coverage, refs and nets from the netlists)"
+
+
+def _covered_undistilled(a: Atlas, part: str, board: str | None) -> str:
+    """No atlas, and the MPN is on a board but its document has no distillation: say which file covers
+    it (`coverage.py`), that it is not translated yet, and with `board` the refs and nets. "" when the
+    part is on no board."""
+    n = _norm(part)
+    refs = {r: m for r, m in a.ref_mpns().items() if n and (_norm(m).startswith(n) or n.startswith(_norm(m)))}
+    if not refs:
+        return ""
+    cov = a.coverage()
+    mpns = sorted(set(refs.values()))
+    files = sorted({d["file"] for m in mpns for d in cov.documents(m)})
+    head = _header(f"boards netlist.json + coverage of {', '.join(mpns)}", extra=NO_ATLAS_NOTE)
+    if files:
+        body = (f"{', '.join(mpns)} is on the boards and covered by {', '.join(files)}, which is not translated yet: "
+                "there is no card. Run /atlas-translate-docs.\n")
+    else:
+        body = (f"{', '.join(mpns)} is on the boards and no document in the manifest covers it: see "
+                "inventory/missing.md.\n")
+    if board is not None:
+        every = board.strip().lower() in ("", "all")
+        body += "\n## On the boards\n\n" + _ref_lines(a, sorted(r for r in refs if every or r.startswith(board + ":")))
+    return head + body
+
+
 def _bindings(a: Atlas, doc_id: str, board: str | None) -> str:
-    part_docs = (a.pins_json() or {}).get("part_docs") or {}
+    part_docs = a.part_docs()
     refs = sorted(r for r, ids in part_docs.items() if doc_id in ids and (not board or r.startswith(board + ":")))
+    return _ref_lines(a, refs)
+
+
+def _ref_lines(a: Atlas, refs: list[str]) -> str:
     if not refs:
         return "(no board ref is mapped to this document)\n"
     lines = []
@@ -964,13 +1027,39 @@ def stacks(a: Atlas, build: str | None = None, offset: int = 0) -> str:
 def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
     """Checks run and passed first, then candidates (claim, evidence, what would settle it)."""
     if not a.atlas:
-        return _missing("atlas", "Run /atlas-build first.")
+        return _mismatch_no_atlas(a, scope, cls, offset)
     m = _json(a.atlas / "mismatches.json")
     if not m:
         md = a.atlas / "checks.md"
         return _cap(_header(f"{a.atlas.name} checks.md") + (md.read_text(encoding="utf-8") if md.is_file() else ""),
                     "mismatch_report", offset)
     out = [_header(f"{a.atlas.name} mismatches.json").rstrip("\n"), ""]
+    return _cap("\n".join(_mismatch_body(m, out, scope, cls)) + "\n", "mismatch_report", offset)
+
+
+def _mismatch_no_atlas(a: Atlas, scope: str | None, cls: str | None, offset: int) -> str:
+    """Before the first build: the checks that read only the netlists, the BOM and the distillations,
+    run now, and each check that needs a devicetree, an ELF or a build listed under Not run."""
+    from . import mismatch, nettrace, project
+    if not any((a.dir / "boards").glob("*/netlist.json")):
+        return _missing("atlas", "Run /atlas-build first (no board netlist yet either: "
+                        "run atlas-translate-docs on the schematics).")
+    J = nettrace.load(a.dir, None, _json)
+    try:                                   # the configured MCU family finds the MCU when the part count would not
+        part = (project.load_config(a.dir).get("mcu") or {}).get("part")
+    except (OSError, ValueError):
+        part = None
+    if part:
+        J.mcu = J._find_mcu(part, None) or J.mcu
+    m = mismatch.run_netlist_only(J)
+    labels = ",".join(sorted(J.boards))
+    out = [_header(f"boards/{labels} netlist.json + BOM + coverage + distillations, no atlas",
+                   extra="(only the checks that need no build; the rest are under Not run)").rstrip("\n"), ""]
+    return _cap("\n".join(_mismatch_body(m, out, scope, cls)) + "\n", "mismatch_report", offset)
+
+
+def _mismatch_body(m: dict, out: list[str], scope: str | None, cls: str | None) -> list[str]:
+    """The summary, checks, Not run and candidate lines of a mismatch report, appended to `out`."""
     summ = m.get("summary")
     if summ:
         out.append(f"summary: {json.dumps(summ, sort_keys=True) if not isinstance(summ, str) else summ}")
@@ -992,7 +1081,7 @@ def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, 
             continue
         ev = "; ".join(c.get("evidence") or [])
         out.append(f"- [{c.get('class')}] {c.get('summary')} | evidence: {ev} | settle: {c.get('settle')}")
-    return _cap("\n".join(out) + "\n", "mismatch_report", offset)
+    return out
 
 
 TOOLS = {

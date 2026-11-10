@@ -306,8 +306,8 @@ document's page, beside this one's; a number on neither cited page still fails. 
   commands that match the `[live] read_only` list (default: `device list`, `kernel thread stacks`,
   `kernel uptime`, `i2c read *`, `i2c read_byte *`; `i2c scan` stays out, it addresses every device
   on the bus) and refuses any other, naming `shell_run`. `reg_read` carries it and refuses
-  `allow_clear=true`, naming `reg_read_clear`. `shell_run` (any command) and `reg_read_clear`
-  declare no hint, so the host asks. The CLI keeps one verb each (it has no hint). Core's hardware
+  `allow_clear=true`, naming `reg_read_clear`. `shell_run` (any command), `reg_read_clear` and
+  `reg_read_bank` (a page select is a write) declare no hint, so the host asks. The CLI keeps one verb each (it has no hint). Core's hardware
   lock serializes the live calls Claude Code runs in parallel. (Replaces the 2026-10-06 choice to
   give `shell` the hint; field use showed the shell is mostly a write path.)
 - `init` writes both files and adds them to the fw repo's `.git/info/exclude`, so no
@@ -317,7 +317,11 @@ document's page, beside this one's; a number on neither cited page still fails. 
 
 `query.py` holds the thirteen lookups as plain functions returning markdown: `part_card` (`board="all"`
 adds every board's refs and nets, a label one board's; no tool documents an empty string as a value: a model
-writes `"board": }` for it, and the call never reaches the server),
+writes `"board": }` for it, and the call never reaches the server. **With no atlas** it still answers a board
+MPN: the MPN-to-document join `pins.json` would hold is made from the netlists and `coverage.py`
+(`Coverage.part_docs`), refs and nets come from the netlists, and the `src:` line says
+`(no atlas built: ...)`; an MPN whose document is covered but not distilled answers with the covering file
+and "not translated yet"),
 `doc_toc` (`under` takes an id, a title, or a word of a title, which resolves to the one
 matching section that holds all the others, else lists the matches; no match lists the nearest titles),
 `doc_section` (a toc section with no `s/` file answers its title, pages and the next call, and an RM register
@@ -343,7 +347,14 @@ that `mcu vote --header` recorded in the RM doc's `vote*.json`: no recorded head
 read from the netlists through the join at query time: members across connector mates, then
 what feeds the net from datasheet pin records with `flow` only, the feeding parts' enables and
 their MCU port or pull, and the datasheets still needed; a part the engineer answered with a generic
-card is walked through and its hop marked `[generic card, engineer-declared]`), `mismatch_report`, `config` (a
+card is walked through and its hop marked `[generic card, engineer-declared]`), `mismatch_report`
+(a stored atlas's report, as written; **with no atlas** it runs, in memory and writing nothing, the checks
+that read only the netlists, the BOM, the interface mating rules and the distillations' pin and conflict
+records: net names across a board connector, DNI parts on the MCU's paths, pulls against the MCU's I/O
+supply, the MCU symbol against its datasheet, far-end output level against pin tolerance, driver claims
+against the datasheet. Every check that needs a devicetree, an ELF, driver sources or a build (`mismatch.NEEDS_BUILD`) is
+listed under "Not run" with what it lacked, never counted as passed; the `src:` line says
+`boards/<labels> netlist.json + BOM + coverage + distillations, no atlas`), `config` (a
 Kconfig symbol, or a `*` pattern) and `dt_node` (a node by path, label, alias, chosen name or
 compatible), `footprint` (flash image and RAM from the ELF's sections, against the flash, SRAM
 and code partition the devicetree's chosen nodes give; the largest contributors by dir, file or

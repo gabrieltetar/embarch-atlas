@@ -69,6 +69,26 @@ NOT_RUN = [
 ]
 
 
+_NO_DT = "no devicetree: it comes from a build (`/atlas-build`)"
+# What `run` reads that a build makes, by check name: before an atlas exists these are not run, and
+# `run_netlist_only` lists each one with what it lacked. Everything else in `run` reads only the
+# netlists, the BOM, the interface mating rules and the distillations' pin and conflict records.
+NEEDS_BUILD = [
+    ("pinctrl function vs net name", _NO_DT), ("GPIO polarity vs net name", _NO_DT),
+    ("DT pull vs board pull", _NO_DT), ("DT pin reaches the board", _NO_DT),
+    ("connected pin has a DT use", _NO_DT), ("one DT owner per pin", _NO_DT),
+    ("DT node has a binding", _NO_DT),
+    ("DT node has a driver in the build", "no devicetree, ELF or compile_commands.json: they come from a build"),
+    ("one armed port per EXTI line", _NO_DT),
+    ("I2C parts per family on the bus vs DT nodes", _NO_DT), ("I2C strap addresses vs DT reg", _NO_DT),
+    ("I2C device identity by address strap", _NO_DT), ("I2C device signals land on the DT pins", _NO_DT),
+    ("DT resistor values vs BOM", _NO_DT), ("DT comment net names vs netlist", "no devicetree and no firmware DTS sources"),
+    ("open-drain far end has a pull", "the pull may be a DT flag, and no devicetree is read"),
+    ("register constants vs the datasheet register map (reg-* classes)", "no firmware driver sources or devicetree: they come from a build"),
+    ("DT unit properties vs the part's limits (dt-limit-* classes)", _NO_DT),
+    ("second look agrees with the first pass", "no atlas: second_look.jsonl is kept in an atlas"),
+]
+
 FOLD_INTENT = "DT node okay with no driver: on purpose (engineer-declared)"
 FOLD_INFRA = "DT node okay with no Zephyr device: SoC infrastructure nrfx drives directly (Nordic)"
 # Nordic SoC blocks that nrfx (or the SoC init) uses without a Zephyr device: DPPIC, PPIB, MPC, UICR, GPIOTE.
@@ -183,7 +203,18 @@ class Report:
             self.checks[check]["candidates"] += 1
 
 
-def run(J, stamp: dict, pins: dict) -> dict:
+def run_netlist_only(J) -> dict:
+    """The report before any atlas exists: only the checks that read the netlists, the BOM and the
+    distillations. Nothing is written; each check that needs a devicetree, an ELF or a build is listed
+    under Not run with what it lacked (`NEEDS_BUILD`)."""
+    from embarch_atlas.join import build_pin_map
+    rows = build_pin_map(J)
+    pins = {"pins": rows, "i2c": {}, "values": [], "comments": []}
+    return run(J, {"id": "no atlas"}, pins, netlist_only=True)
+
+
+def run(J, stamp: dict, pins: dict, netlist_only: bool = False) -> dict:
+    dt_known = not netlist_only
     R = Report()
     rows = pins["pins"]
     mcu = J.mcu
@@ -268,7 +299,9 @@ def run(J, stamp: dict, pins: dict) -> dict:
                 R.cand("dt-pin-not-connected", key, f"DT uses {port} but its net {mb}:{net} reaches no part ({len(tps)} test point(s))",
                        [f"DT {u['label']}.{u['prop']} @ {u['loc']}" for u in r["dt"]] + [f"schematic {r['key']} net {mb}:{net}"],
                        "DT pin reaches the board")
-        if port and (ic or conn) and not r["rail"]:
+        if not dt_known:
+            pass    # no DT was read: "no DT use" would be every pin
+        elif port and (ic or conn) and not r["rail"]:
             R.check("connected pin has a DT use", "", 1, int(bool(r["dt"])))
             if not r["dt"]:
                 if EXPECTED_RE.search(r["name"] or "") or EXPECTED_RE.search(net or ""):
@@ -298,7 +331,7 @@ def run(J, stamp: dict, pins: dict) -> dict:
                        [r.get("ds_cite") or ""], "MCU symbol pin name vs datasheet")
 
     # ---- open-drain far ends (needs pin records)
-    if have_pin_recs:
+    if have_pin_recs and dt_known:
         R.check("open-drain far end has a pull", "datasheet pin records, netlist, DT flags")
         for r in rows:
             pulls = [f for f in r["far"] if f["kind"] in ("pull-up", "pull-down") and not f.get("dni")]
@@ -316,7 +349,7 @@ def run(J, stamp: dict, pins: dict) -> dict:
                            f"{f.get('pin_name')} is open-drain and neither the board nor DT pulls the line",
                            [f"datasheet {pr[0]} {_cite(pr[1])}", "schematic: no pull on the net", f"DT flags {[u.get('flags') for u in r['dt']]}"],
                            "open-drain far end has a pull")
-    else:
+    elif dt_known:
         R.not_run.append({"check": "open-drain far end has a pull",
                           "why": "no `pin` records for any part yet (translate the far-end parts' datasheets)"})
 
@@ -519,27 +552,28 @@ def run(J, stamp: dict, pins: dict) -> dict:
             R.check("driver claims vs datasheet", "", 1, 0)
             R.cand("driver-vs-datasheet", rec.get("id") or d, rec.get("text") or "driver and datasheet disagree",
                    [f"{s}" for s in srcs] + [_cite(rec, d)], "driver claims vs datasheet")
-    # ---- register constants in the driver sources vs the datasheet register map
-    from embarch_atlas import codecheck
-    cc = codecheck.run_join(J, stamp, pins)
-    for c in cc["checks"]:
-        R.check(c["check"], c["sources"], c["ran"], c["passed"])
-    for f in cc["findings"]:
-        R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
-    R.not_run += cc["not_run"]
-    # ---- DT unit properties vs the part's limit/timing records
-    from embarch_atlas import limits
-    lm = limits.run_join(J, stamp, pins)
-    for c in lm["checks"]:
-        R.check(c["check"], c["sources"], c["ran"], c["passed"])
-    for f in lm["findings"]:
-        R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
-    for k, v in lm["folded"].items():
-        R.folded[k] += v
-    R.not_run += lm["not_run"]
-    R.sections.append(lm["section"])
-    sl = J.atlas / "second_look.jsonl"
-    if sl.is_file():
+    if dt_known:
+        # ---- register constants in the driver sources vs the datasheet register map
+        from embarch_atlas import codecheck
+        cc = codecheck.run_join(J, stamp, pins)
+        for c in cc["checks"]:
+            R.check(c["check"], c["sources"], c["ran"], c["passed"])
+        for f in cc["findings"]:
+            R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
+        R.not_run += cc["not_run"]
+        # ---- DT unit properties vs the part's limit/timing records
+        from embarch_atlas import limits
+        lm = limits.run_join(J, stamp, pins)
+        for c in lm["checks"]:
+            R.check(c["check"], c["sources"], c["ran"], c["passed"])
+        for f in lm["findings"]:
+            R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
+        for k, v in lm["folded"].items():
+            R.folded[k] += v
+        R.not_run += lm["not_run"]
+        R.sections.append(lm["section"])
+    sl = None if netlist_only else J.atlas / "second_look.jsonl"
+    if sl is not None and sl.is_file():
         R.check("second look agrees with the first pass", "second_look.jsonl")
         for v in current_verdicts(J, read_jsonl(sl), R):
             ok = v.get("verdict") == "confirmed"
@@ -554,14 +588,18 @@ def run(J, stamp: dict, pins: dict) -> dict:
                            f"{' (' + v['cond'] + ')' if v.get('cond') else ''} where the first pass has {v.get('first')}".strip())
                 R.cand("document-reading-conflict", str(v.get("id")), summary,
                        [f"{v.get('doc') or ''} p{v.get('p')}", f"quote: {v.get('q')}"], "second look agrees with the first pass")
-    else:
+    elif dt_known:
         R.not_run.append({"check": "second look agrees with the first pass",
                           "why": "no second_look.jsonl yet (`second-look queue`, then `second-look record`)"})
     for name, why in NOT_RUN:
         R.not_run.append({"check": name, "why": why})
     if not mcu:
         R.not_run.insert(0, {"check": "every pin check", "why": "no MCU found on the schematic boards (set [mcu] part or --mcu-ref)"})
-
+    if netlist_only:
+        for name, why in NEEDS_BUILD:
+            R.checks.pop(name, None)
+            R.not_run.append({"check": name, "why": why})
+        return report(R, stamp)
     return finish(R, J, stamp)
 
 
@@ -614,6 +652,14 @@ def _cite(rec: dict, doc: str | None = None) -> str:
 
 
 def finish(R: Report, J, stamp: dict) -> dict:
+    rep = report(R, stamp, J)
+    write_json(J.atlas / "mismatches.json", rep)
+    write_text(J.atlas / "checks.md", render(rep, stamp))
+    return rep
+
+
+def report(R: Report, stamp: dict, J=None) -> dict:
+    """The report dict from a finished `Report`; `J` None is the no-atlas report (no DT decoder note)."""
     rank = {c: i for i, c in enumerate(ORDER)}
     R.candidates.sort(key=lambda c: (rank.get(c["class"], len(ORDER)), c["key"] or "", c["summary"]))
     checks = sorted((c for c in R.checks.values() if c["ran"]), key=lambda c: (-(c["ran"] - c["passed"] == 0), c["check"]))
@@ -624,7 +670,7 @@ def finish(R: Report, J, stamp: dict) -> dict:
     folded = {k: sorted(set(v)) for k, v in sorted(R.folded.items())}
     summary = (f"{len(checks)} checks, {n_pass}/{n_ran} items passed; "
                f"{sum(by.values())} candidates in {len(by)} classes; {sum(len(v) for v in folded.values())} expected items folded")
-    dtj = getattr(J, "dt", None) or {}
+    dtj = (getattr(J, "dt", None) or {}) if J is not None else {}
     decoder = pin_decoder(dtj) if dtj else "stm32"
     no_input = ([c for c in PIN_CHECKS if c in idle or c not in R.checks] if decoder is None else [])
     rep = {"atlas": stamp["id"], "summary": summary, "checks": checks, "checks_with_nothing_to_check": idle,
@@ -633,8 +679,6 @@ def finish(R: Report, J, stamp: dict) -> dict:
                                    if decoder is None else None),
            "not_run": R.not_run, "folded": folded, "candidates": R.candidates, "by_class": dict(by),
            "sections": R.sections}
-    write_json(J.atlas / "mismatches.json", rep)
-    write_text(J.atlas / "checks.md", render(rep, stamp))
     return rep
 
 
