@@ -865,3 +865,43 @@ def test_a_malformed_answers_file_is_said_everywhere(world, capsys):
     assert "`document` needs a `file`" in capsys.readouterr().err
     assert ask(adir, "--confirm-all") == 2
     assert nettrace.load(adir, None, read_json).answers_error    # the lookups go on without it, and say so
+
+
+def _prep_into(adir: Path, src: Path, name: str) -> Path:
+    from embarch_atlas import pdftext
+    pdftext.prep(src / name, adir, log=lambda *_: None)
+    return next((adir / "docs").glob("*/doc.json"))
+
+
+def test_a_kind_override_reaches_a_prepped_documents_doc_json(tmp_path, capsys):
+    adir, src = project_with(tmp_path, {"U2": part("ZX123456")})
+    make_pdf(src / "guide.pdf", [f"User guide\nUsing the ZX123456\n{FILLER}"])
+    inv.run(adir)
+    dj = _prep_into(adir, src, "guide.pdf")
+    assert read_json(dj)["kind"] == "appnote"
+    capsys.readouterr()
+    assert ask(adir, "--kind", "guide.pdf", "datasheet") == 0
+    assert read_json(dj)["kind"] == "datasheet"
+    assert "kind appnote -> datasheet" in capsys.readouterr().out
+    man = read_json(adir / "inventory" / "manifest.json")
+    assert [d["kind"] for d in man["documents"]] == ["datasheet"]
+
+
+def test_a_kind_override_on_a_document_not_prepped_yet_leaves_no_doc_json(tmp_path, capsys):
+    adir, src = project_with(tmp_path, {"U2": part("ZX123456")})
+    make_pdf(src / "guide.pdf", [f"User guide\nUsing the ZX123456\n{FILLER}"])
+    inv.run(adir)
+    assert ask(adir, "--kind", "guide.pdf", "datasheet") == 0
+    assert not (adir / "docs").exists() or not list((adir / "docs").glob("*/doc.json"))
+    from embarch_atlas import pdftext
+    pdftext.prep(src / "guide.pdf", adir, log=lambda *_: None)
+    assert read_json(next((adir / "docs").glob("*/doc.json")))["kind"] == "datasheet"
+
+
+def test_confirming_the_reference_manual_reaches_a_prepped_doc_json(tmp_path):
+    adir, src = project_with(tmp_path, {"U2": part("ZX123456")})
+    make_pdf(src / "rm.pdf", [f"Reference manual\n{FILLER}"])
+    inv.run(adir)
+    dj = _prep_into(adir, src, "rm.pdf")
+    assert ask(adir, "--confirm", ms.RM_TOKEN, "--file", "rm.pdf") == 0
+    assert read_json(dj)["kind"] == "reference-manual"

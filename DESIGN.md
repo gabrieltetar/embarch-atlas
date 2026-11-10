@@ -642,7 +642,7 @@ An atlas id is `<target>@<commit12>`.
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
 | `missing [--answer <MPN> supplied \| not-needed --why <text> \| standard-function <fn> --pins <map>]` | `missing` | the proposed matches, then the missing-documents questions from BOM vs manifest, open ones ranked by net_trace walks stopped, then the documents nothing uses; `--answer` records the engineer's answer in `answers.toml` |
 | `missing --confirm <MPN> [--file <file>]` / `--confirm-all` / `--reject <MPN> --file <file>` | `missing` | accept or refuse a document for a part, recorded in `answers.toml` (`--confirm` with no file takes the part's strongest proposal; `--confirm-all` the first row of each part and the MCU row). `reference-manual` in place of `<MPN>` answers the MCU row |
-| `missing --kind <file> <kind>` | `missing` | override a document's kind, recorded in `answers.toml`; the manifest is rewritten at once |
+| `missing --kind <file> <kind>` | `missing` | override a document's kind, recorded in `answers.toml`; the manifest, and a prepped document's `doc.json`, are rewritten at once |
 | `doc prep <pdf>` | `pdftext` | doc.json, pages/, toc, page classes |
 | `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; then checks A–T on the rest (U finds the unit on the cited page as a token, so `ua` inside `guaranteed` is not `µA`, and reads a CamelCase symbol such as `LoadReg` whole rather than by its first letter), writes checks.json, sets `prov` |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
@@ -749,7 +749,9 @@ newer freeze of the same files marks the older entry `superseded` (kept, never d
 
 `--kind <file> <kind>` overrides the classifier, in `[documents."<sha256[:12]>"]`. It applies at inventory
 time, `manifest.md` shows it beside the kind, and it ends when the file's content changes. The manifest stays
-byte-identical across runs with an override present.
+byte-identical across runs with an override present. `missing --kind` (and `--confirm reference-manual`) also
+rewrites `kind` in the `docs/<doc_id>/doc.json` of an already-prepped document with the same sha256 and says so;
+a document not prepped yet gets the manifest's kind from `doc prep`.
 
 ### Covered, proposed, missing
 

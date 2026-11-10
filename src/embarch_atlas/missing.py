@@ -519,6 +519,23 @@ def _refresh_manifest(adir: Path) -> None:
         inventory.run(adir, inventory.sources_of(adir, man))
     except FileNotFoundError as e:
         print(f"manifest not rewritten ({e}); the next `embarch-atlas inventory` applies the kind")
+        return
+    _sync_doc_json(adir)
+
+
+def _sync_doc_json(adir: Path) -> None:
+    """A prepped document's doc.json carries the manifest's kind: `doc prep` is the only other writer of it."""
+    man = common.read_json(adir / "inventory" / "manifest.json")
+    for rec in man.get("documents") or []:
+        path = adir / "docs" / str(rec.get("doc_id")) / "doc.json"
+        if not rec.get("kind") or not path.is_file():
+            continue
+        meta = common.read_json(path)
+        if meta.get("sha256") != rec.get("sha256") or meta.get("kind") == rec["kind"]:
+            continue
+        old, meta["kind"] = meta.get("kind"), rec["kind"]
+        common.write_json(path, meta)
+        print(f"{path.relative_to(adir)}: kind {old} -> {rec['kind']}")
 
 
 JOIN_HINT = "net_trace reads this now; `embarch-atlas join <atlas>` carries it into pins.json and MAP.md."
