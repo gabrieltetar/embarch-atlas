@@ -106,6 +106,9 @@ def test_units_and_order():
     assert check.check_unit({"sym": "V(CVBUS)", "unit": "V", "param": "capacitor rating"}) is None
     assert check.check_unit({"sym": "INL", "unit": "LSB"}) is None
     assert check.check_unit({"sym": "RθJA", "unit": "°C/W"}) is None
+    assert check.check_unit({"sym": "LoadReg", "unit": "A", "param": "x"}) is None
+    assert check.check_unit({"sym": "LoadReg", "unit": "V", "param": "x"}) is None
+    assert check.check_unit({"sym": "Lx", "unit": "V", "param": "x"}) is not None
     rec = {"id": "a.b.c", "kind": "limit", "p": 1, "min": 5, "typ": 3, "max": 4, "group": "other", "src": "text"}
     assert "order" in check.record_checks(_Fake(), rec)["O"]
 
@@ -747,3 +750,19 @@ def test_non_object_line_survives_a_save_and_is_reported(doc):
     assert out[1] == "[1, 2,   3]" and out[-1] == '"stray"' and len(out) == len(lines)
     msgs = [i for x in rep["records"] for i in x["issues"] if i.startswith("V:") and "not a JSON object" in i]
     assert any("zz-regs.jsonl:2:" in m for m in msgs) and any(f"zz-regs.jsonl:{len(lines)}:" in m for m in msgs)
+
+
+def test_unit_is_found_as_a_token(tmp_path):
+    docdir = tmp_path / "docs" / "demo-switch@A"
+    common.write_json(docdir / "doc.json", {"doc_id": "demo-switch@A", "pages": 4, "file": "x.pdf", "path": "none"})
+    (docdir / "pages").mkdir(parents=True)
+    for i, t in enumerate(["Not guaranteed over temperature", "IQ 5 µA typical", "IQ 5 uA typical",
+                           "RON 10 ohm and 100mA"], 1):
+        (docdir / "pages" / f"p{i:03d}.txt").write_text(t + "\n")
+    doc = check.DocText(docdir, use_pdf=False)
+
+    def u(unit, p):
+        rec = {"id": "a.b.c", "kind": "limit", "p": p, "group": "other", "src": "text", "unit": unit}
+        return check.record_checks(doc, rec)["U"]
+    assert "not on the cited page" in u("µA", 1)
+    assert u("µA", 2) == "ok" and u("µA", 3) == "ok" and u("ohm", 4) == "ok" and u("mA", 4) == "ok"

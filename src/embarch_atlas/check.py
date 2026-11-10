@@ -553,6 +553,16 @@ def _unit_forms(u: str) -> list[str]:
     return sorted(a for a in alts if a)
 
 
+# A CamelCase name (`LoadReg`) is read whole: its first letter says nothing about its dimension.
+_WORD_SYM = re.compile(r"[A-Za-z][a-z]{2,}[A-Z]")
+
+
+def unit_on_page(unit: str, page: str) -> bool:
+    """A unit spelling stands as a token: `ua` inside `guaranteed` is not the unit. Digits may
+    touch it (`100mA`); letters may not."""
+    return any(re.search(rf"(?<![^\W\d_]){re.escape(f)}(?![^\W\d_])", page) for f in _unit_forms(unit))
+
+
 def unit_dim(u: str | None) -> str | None:
     if not u:
         return None
@@ -566,6 +576,8 @@ def check_unit(rec: dict) -> str | None:
     if not dim or not sym or "lsb" in normalize(u or "") or "/" in (u or ""):
         return None
     if not re.match(r"[A-Za-z]", sym) or sym.startswith(("Rθ", "RΘ", "Ψ", "Θ", "Δ")) or "θ" in sym:
+        return None
+    if _WORD_SYM.match(sym):                  # `LoadReg`: a name, not an electrical symbol
         return None
     exp = SYM_DIM.get(sym[0])
     if exp is None or dim in exp:
@@ -643,7 +655,7 @@ def record_checks(doc: DocText, rec: dict) -> dict:
     if rec.get("unit") and kind in ("limit", "timing"):
         why = check_unit(rec)
         page = doc.page_text(ps)
-        on_page = any(f in page for f in _unit_forms(rec["unit"]))
+        on_page = unit_on_page(rec["unit"], page)
         if why:
             out["U"] = why
         elif not on_page and rec.get("src") not in ("figure", "equation"):
