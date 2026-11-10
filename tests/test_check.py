@@ -776,3 +776,28 @@ def test_unit_is_found_as_a_token(tmp_path):
         return check.record_checks(doc, rec)["U"]
     assert "not on the cited page" in u("µA", 1)
     assert u("µA", 2) == "ok" and u("µA", 3) == "ok" and u("ohm", 4) == "ok" and u("mA", 4) == "ok"
+
+
+# ---------------------------------------------------------------- M: a cite naming another document
+
+def _mini_doc(root, name, pages):
+    d = root / "docs" / name
+    common.write_json(d / "doc.json", {"doc_id": name, "pages": len(pages), "file": "x.pdf", "path": "none"})
+    (d / "pages").mkdir(parents=True)
+    for i, txt in enumerate(pages, 1):
+        (d / "pages" / f"p{i:03d}.txt").write_text(txt + "\n")
+    return d
+
+
+def test_markdown_cite_naming_another_document_anchors_there(tmp_path):
+    a = _mini_doc(tmp_path, "demo-a@1", ["Limit is 111 mA here.", "nothing"])
+    _mini_doc(tmp_path, "demo-b@1", ["x", "Limit is 222 mA there."])
+    f = a / "card.md"
+    f.write_text("# card\n\n"
+                 "| Conflict | Sources | p |\n|---|---|---|\n"
+                 "| c1 | demo-b@1 p.2: says 222 mA, demo-a@1 p.1: says 111 mA | p.1 |\n"
+                 "| c2 | demo-b@1 p.2: says 333 mA | p.1 |\n"
+                 "| c3 | demo-b@1 p.1: says 222 mA | p.1 |\n")
+    m = check.check_markdown_file(check.DocText(a), f, {})
+    assert sorted(b["number"] for b in m["unanchored"]) == [222, 333]
+    assert {b["line"] for b in m["unanchored"]} == {6, 7}

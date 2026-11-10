@@ -128,6 +128,26 @@ def cited_pages(s: str) -> set[int]:
     return out
 
 
+_CITE_DOC = re.compile(r"([A-Za-z0-9_][A-Za-z0-9_.@\-]*)\s+$")
+
+
+def split_cites(s: str, known) -> tuple[set[int], dict[str, set[int]]]:
+    """A line's cited pages: (this document's, {other document: its pages}). A cite is another
+    document's when the token before it names one `known` says exists (`other-doc p.7`, the shape
+    a conflict's Sources cell has)."""
+    own: set[int] = set()
+    other: dict[str, set[int]] = {}
+    for m in PAGE_CITE.finditer(s):
+        a = int(m.group(1))
+        b = int(m.group(2)) if m.group(2) else a
+        if not (b >= a and b - a < 400):
+            continue
+        d = _CITE_DOC.search(s[:m.start()])
+        name = d.group(1) if d and known(d.group(1)) else None
+        (other.setdefault(name, set()) if name else own).update(range(a, b + 1))
+    return own, other
+
+
 # ---------------------------------------------------------------- quotes split with `...`
 
 SHORT_PART = 24     # a part this short (chars) must sit on the same or the adjacent line as its neighbour
@@ -1063,6 +1083,21 @@ def check_markdown_file(doc: DocText, path: Path, rec_values: dict[int, list[flo
     anchors on any page, the old behaviour). A number held only by a record on a page the line does
     not cite is a warning, not an anchor."""
     by_page = rec_values if isinstance(rec_values, dict) else {}
+    siblings: dict[str, DocText | None] = {}
+
+    def sibling(name: str) -> "DocText | None":
+        """The other document a cite names: a directory beside this one, by name or by doc_id."""
+        if name not in siblings:
+            siblings[name] = None
+            if name != doc.doc_id and name != doc.dir.name:
+                for d in sorted(doc.dir.parent.glob("*/doc.json")):
+                    meta = common.read_json(d)
+                    if d.parent.name == name or (meta.get("doc_id") or meta.get("id")) == name:
+                        if int(meta.get("pages") or 0):
+                            siblings[name] = DocText(d.parent, use_pdf=False)
+                        break
+        return siblings[name]
+
     everywhere = [x for vs in by_page.values() for x in vs] if by_page else list(rec_values)
     heads: list[tuple[int, set[int]]] = []
     stats = {"numbers": 0, "anchored_page": 0, "anchored_record": 0, "derived": 0, "figure": 0, "svd": 0,
@@ -1101,8 +1136,11 @@ def check_markdown_file(doc: DocText, path: Path, rec_values: dict[int, list[flo
         claims = md_claims(s, cols, rendered)
         if not claims:
             continue
-        pages = cited_pages(s) or (heads[-1][1] if heads else set())
+        own_pages, other_pages = split_cites(s, lambda n: sibling(n) is not None)
+        pages = own_pages or (heads[-1][1] if heads and not other_pages else set())
         pnums = doc.page_numbers(sorted(pages))
+        for name, ps in other_pages.items():
+            pnums += sibling(name).page_numbers(sorted(ps))
         cited_vals = [x for p in sorted(pages) + [0] for x in by_page.get(p, [])] if by_page else everywhere
         for x, tag in claims:
             stats["numbers"] += 1

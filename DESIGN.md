@@ -261,7 +261,8 @@ tag (`(derived)`, `(figure)`, `(equation)`, `(inference)`) covers the numbers be
 its clause and those inside its own parentheses; a number equal to a verified record's
 value anchors only when that record is on a page the line cites. Rendered structure
 (bits, widths, enum keys, check expressions) is not a numeric claim, nor is a step marker
-`(1)`, `(2)` inside a clause; a real number in parentheses, `(5 V)`, still is. A non-PDF source
+`(1)`, `(2)` inside a clause; a real number in parentheses, `(5 V)`, still is. A cite that names another document (`other-doc p.7`, the shape a conflict row's Sources cell has) is anchored on that
+document's page, beside this one's; a number on neither cited page still fails. A non-PDF source
 (an SVD) gets only the record-level checks.
 
 ## How a session sees the atlas
