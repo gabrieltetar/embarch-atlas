@@ -883,10 +883,11 @@ def check_registers(recs: list[dict]) -> dict:
 # ---------------------------------------------------------------- markdown (M, S, T)
 
 # Prose that carries numbers which are not claims about the document: a numbered-list marker, an
-# atlas tier label, a token count (index lines), a backticked identifier or file name (`LINE0_1`,
+# step marker `(1)`, an atlas tier label, a token count (index lines), a backticked identifier or file name (`LINE0_1`,
 # `s/9.4.16-9.8.md`). rm-check blanks these too (rm.number_claims).
 NOT_CLAIMS = [
     re.compile(r"^\s*(?:[-*+]\s+)?\d+[.)](?=\s)"),                              # 3. / 3) at line start
+    re.compile(r"\(\s*\d{1,2}\s*\)"),                                        # a step marker (1), (2); (5 V) keeps its 5
     re.compile(r"\bTier\s+\d+\b"),
     re.compile(r"\b\d{1,3}(?:,\d{3})+(?:\s+raw)?\s+tokens?\b|\b\d+(?:\s+raw)?\s+tokens?\b", re.I),
     re.compile(r"`[^`\s]*[A-Za-z][^`\s]*`"),                                  # no whitespace, a letter

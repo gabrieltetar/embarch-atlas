@@ -546,6 +546,15 @@ def test_refs_resolve_against_every_doc_under_docs(doc):
     assert r == ["R: ref demo.reg.OTHER.NOPE resolves to no record in docs/"]     # the sibling doc's id resolves
 
 
+def test_md_step_markers_are_not_claims_but_real_numbers_in_parens_are():
+    c = check.md_claims
+    assert c("(1) set A (2) set B") == []
+    assert c("(1) set A (2) set B (p.3)") == []
+    assert c("the rail is (5 V) (p.3)") == [(5, None)]
+    assert c("the flag is cleared (fn 13) (p.3)") == []
+    assert c("field [7:5] selects the mode (p.3)") == []
+
+
 def test_md_rm_prose_list_markers_tiers_tokens_identifiers_and_svd_cites():
     c = check.md_claims
     assert c("3. The pending bit is set only when the mask is open (p.3)") == []

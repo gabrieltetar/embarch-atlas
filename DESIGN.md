@@ -260,7 +260,8 @@ The prose check (M) anchors every number in `card.md` and `s/*.md` to a cited pa
 tag (`(derived)`, `(figure)`, `(equation)`, `(inference)`) covers the numbers before it in
 its clause and those inside its own parentheses; a number equal to a verified record's
 value anchors only when that record is on a page the line cites. Rendered structure
-(bits, widths, enum keys, check expressions) is not a numeric claim. A non-PDF source
+(bits, widths, enum keys, check expressions) is not a numeric claim, nor is a step marker
+`(1)`, `(2)` inside a clause; a real number in parentheses, `(5 V)`, still is. A non-PDF source
 (an SVD) gets only the record-level checks.
 
 ## How a session sees the atlas
