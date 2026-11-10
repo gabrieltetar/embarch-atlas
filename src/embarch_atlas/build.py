@@ -149,13 +149,14 @@ def resolve_commit(fw: Path, commit: str) -> str:
     return _git(fw, "rev-parse", "--verify", f"{commit}^{{commit}}")
 
 
-def ensure_worktree(fw: Path, ad: Path, commit: str) -> Path:
+def ensure_worktree(fw: Path, ad: Path, commit: str, name: str | None = None) -> Path:
     """Detached worktree at `<ad>/.work/<commit12>/<fw basename>`; reused when present and clean.
 
     The basename matches the fw repo's so the Zephyr module keeps its name
-    (zephyr_module.py names a module without `name:` after its directory).
+    (zephyr_module.py names a module without `name:` after its directory). When `fw` is a linked worktree
+    whose folder is named otherwise, `name` is the configured repo's basename.
     """
-    wt = ad / ".work" / commit[:12] / fw.name
+    wt = ad / ".work" / commit[:12] / (name or fw.name)
     if wt.exists():
         if not (wt / ".git").exists():
             raise BuildError(f"{wt} exists but is not a git worktree; remove it and re-run")
@@ -283,16 +284,17 @@ def _yml_paths(text: str) -> list[str]:
     return re.findall(r"'(/[^']+)'", text) + re.findall(r'"(/[^"]+)"', text)
 
 
-def verify_from_worktree(bdir: Path, fw: Path, wt: Path, ad: Path) -> dict:
+def verify_from_worktree(bdir: Path, fw: Path, wt: Path, ad: Path, also: Path | None = None) -> dict:
     """Prove every fw-repo input of the build came from the worktree. Raises BuildError otherwise.
 
     A path is a leak when it is under the main checkout but under neither the
     worktree nor the atlas dir (the build dir itself lives in the atlas dir).
     """
     fw, wt, ad = fw.resolve(), wt.resolve(), ad.resolve()
+    roots = [fw] + ([also.resolve()] if also and also.resolve() != fw else [])   # `also`: the linked worktree the session runs in
 
     def leak(p: str) -> bool:
-        return _under(p, fw) and not _under(p, wt) and not _under(p, ad)
+        return any(_under(p, r) for r in roots) and not _under(p, wt) and not _under(p, ad)
 
     ev: dict[str, Any] = {"worktree": str(wt)}
     leaks: list[str] = []
@@ -346,7 +348,7 @@ def verify_from_worktree(bdir: Path, fw: Path, wt: Path, ad: Path) -> dict:
         ev["app_build_version"] = m[1] if m else None
     if leaks:
         raise BuildError("the build did not come (only) from the worktree:\n  " + "\n  ".join(leaks))
-    if ev.get("board_dir") and _under(ev["board_dir"], fw) and not _under(ev["board_dir"], wt):
+    if ev.get("board_dir") and any(_under(ev["board_dir"], r) for r in roots) and not _under(ev["board_dir"], wt):
         raise BuildError(f"board dir {ev['board_dir']} is in the main checkout")
     return ev
 
@@ -473,8 +475,10 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
         if not cfg.get(k):
             raise BuildError(f"{k} unknown: set it in atlas.toml or pass {flag}"
                              + (" (a target with no Zephyr board yet says so with `no_board = true`)" if k == "board" else ""))
-    fw = Path(cfg["fw"]).resolve()
-    commit = resolve_commit(fw, commit_ref)
+    fw = Path(cfg["fw"]).resolve()          # the configured repo: names the worktree, the west module, the sources
+    from .project import resolve_fw
+    cur = resolve_fw(fw).resolve()          # the checkout this process runs in: where the commit comes from
+    commit = resolve_commit(cur, commit_ref)
     c12 = commit[:12]
     atlas_id = f"{cfg['target']}@{c12}"
     out = ad / "atlases" / atlas_id
@@ -494,7 +498,7 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
     west = find_west(cfg)
     projects = west_projects(west, topdir)
     zb = _zephyr_base(topdir, west)
-    wt = ensure_worktree(fw, ad, commit)
+    wt = ensure_worktree(cur, ad, commit, fw.name)
     log(f"worktree {wt}")
     mods = module_list(projects, fw, wt, zb)
     app_dir = wt / cfg["app"]
@@ -531,7 +535,7 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
         zdir = image_dir(bdir, "edt.pickle", cfg["app"])    # sysbuild: the application image, not MCUboot's
     except FileNotFoundError as e:
         raise BuildError(str(e)) from e
-    ev = verify_from_worktree(zdir, fw, wt, ad)
+    ev = verify_from_worktree(zdir, fw, wt, ad, also=cur)
     ev["board_definitions"] = defs
     ev["main_checkout_board_definitions_excluded"] = main_defs
     dst = out / "build"
@@ -548,7 +552,7 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
     extra = {"build": {"worktree": os.path.relpath(wt, ad), "dir": os.path.relpath(bdir, ad),
                        "command": [os.path.relpath(c, ad) if c.startswith(str(ad)) else c for c in cmd],
                        "zephyr_modules": mods, "artifacts": copied, "tools": tools,
-                       "zephyr_base": str(zb) if zb else None, "west_topdir": str(topdir), "fw": str(fw),
+                       "zephyr_base": str(zb) if zb else None, "west_topdir": str(topdir), "fw": str(fw), "fw_checkout": str(cur),
                        "from_worktree": ev}}
     # Kconfig now, while the workspace's Zephyr is the tree this build used (kconfig.py)
     from .dt import rel_bases

@@ -346,3 +346,13 @@ def test_named_build_with_no_choosable_image_names_the_pickles(tmp_path, monkeyp
     with pytest.raises(FileNotFoundError) as e:
         _named_zdir(monkeypatch, tmp_path, b, "zzz")
     assert "mcuboot/zephyr/.config" in str(e.value) and "app/zephyr/.config" in str(e.value)
+
+
+def test_worktree_keeps_the_configured_repo_name_when_fw_is_a_linked_worktree(tmp_path):
+    _top, fw, c1, _ = workspace(tmp_path)
+    ad = fw / "embarch" / "atlas"
+    linked = tmp_path / "linked-EMB-19"
+    git(fw, "worktree", "add", "-q", "--detach", str(linked), c1)
+    wt = build.ensure_worktree(linked, ad, c1, fw.name)
+    assert wt == ad / ".work" / c1[:12] / fw.name != ad / ".work" / c1[:12] / linked.name
+    assert (wt / ".git").exists()

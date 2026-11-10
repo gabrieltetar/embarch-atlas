@@ -15,7 +15,9 @@ no longer hashes to what its stamp recorded.
 """
 from __future__ import annotations
 
+import functools
 import json
+import os
 import re
 import subprocess
 import sys
@@ -44,10 +46,46 @@ def load_config(atlas_dir: Path) -> dict[str, Any]:
         return tomllib.load(f)
 
 
-def fw_dir(atlas_dir: Path, cfg: dict[str, Any]) -> Path:
-    """The firmware repo: `[project] fw`, else the atlas dir's grandparent (`<fw>/embarch/atlas`)."""
+FW_ENV = "EMBARCH_ATLAS_FW"
+
+
+def configured_fw(atlas_dir: Path, cfg: dict[str, Any]) -> Path:
+    """The firmware repo `atlas.toml` names: `[project] fw`, else the atlas dir's grandparent (`<fw>/embarch/atlas`)."""
     fw = (cfg.get("project") or {}).get("fw")
     return Path(fw) if fw else Path(atlas_dir).resolve().parents[1]
+
+
+def _git_path(cwd: str, *args: str) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", cwd, "rev-parse", "--path-format=absolute", *args],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return os.path.realpath(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+
+
+@functools.lru_cache(maxsize=64)
+def _worktree_top(configured: str, cwd: str) -> str | None:
+    common_dir = _git_path(cwd, "--git-common-dir")
+    if common_dir is None or common_dir != _git_path(configured, "--git-common-dir"):
+        return None
+    return _git_path(cwd, "--show-toplevel")
+
+
+def resolve_fw(configured: Path, cwd: Path | None = None) -> Path:
+    """The firmware checkout this process works on. `EMBARCH_ATLAS_FW`, when set, wins. Otherwise, when the
+    working directory is inside a git worktree of the configured repo (same `git rev-parse --git-common-dir`),
+    that worktree's top; anywhere else, the configured repo unchanged. `atlas.toml` is never edited."""
+    env = os.environ.get(FW_ENV)
+    if env:
+        return Path(env)
+    top = _worktree_top(str(configured), str(cwd or Path.cwd()))
+    return Path(top) if top else configured
+
+
+def fw_dir(atlas_dir: Path, cfg: dict[str, Any]) -> Path:
+    """The firmware checkout for this process: the configured repo, or the worktree the process runs in (`resolve_fw`)."""
+    return resolve_fw(configured_fw(atlas_dir, cfg))
 
 
 def sources_dir(atlas_dir: Path, cfg: dict[str, Any]) -> Path:
@@ -398,7 +436,8 @@ def status(atlas_dir: Path) -> dict[str, Any]:
         cfg = load_config(atlas_dir)
     except FileNotFoundError:
         cfg = {}
-    fw = fw_dir(atlas_dir, cfg)
+    main_fw = configured_fw(atlas_dir, cfg)
+    fw = resolve_fw(main_fw)
     head, dirty = git_head(fw)
     man = atlas_dir / "inventory" / "manifest.json"
     manifest_sha = common.sources_fingerprint(man)
@@ -426,7 +465,8 @@ def status(atlas_dir: Path) -> dict[str, Any]:
         common.write_json(cur_path, current)
     if head:
         mark_map(atlas_dir, head, rows)
-    return {"fw": str(fw), "head": head, "dirty": dirty, "manifest_sha256": manifest_sha, "atlases": rows,
+    return {"fw": str(fw), "fw_configured": str(main_fw), "fw_is_worktree": fw.resolve() != Path(main_fw).resolve(),
+            "head": head, "dirty": dirty, "manifest_sha256": manifest_sha, "atlases": rows,
             "current": current}
 
 
@@ -487,7 +527,8 @@ def _cmd_status(args) -> int:
     st = status(adir)
     head = st["head"]
     print(f"atlas dir: {adir}")
-    print(f"fw: {st['fw']}  HEAD {head[:12] if head else '(not a git repo)'}{'  (working tree dirty: not in any atlas)' if st['dirty'] else ''}")
+    wt = f" (worktree; atlas.toml names {st['fw_configured']})" if st["fw_is_worktree"] else ""
+    print(f"fw: {st['fw']}{wt}  HEAD {head[:12] if head else '(not a git repo)'}{'  (working tree dirty: not in any atlas)' if st['dirty'] else ''}")
     print(f"inventory/manifest.json: {st['manifest_sha256'][:12] if st['manifest_sha256'] else 'missing'}")
     if not st["atlases"]:
         print("no atlases yet (atlases/*/atlas.json)")

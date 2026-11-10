@@ -181,6 +181,32 @@ is itself a Zephyr module and west lists the *main* checkout, so `build` passes
 no TU, include path or DTS input from the main checkout (`atlas.json`
 `build.from_worktree`). A leak fails the build.
 
+### Which `fw` a process uses
+
+`[project] fw` names the main clone, but a session may run in a linked git worktree of it (the desk's Start
+work makes one beside the clone and links the clone's untracked `embarch/` folder and `.mcp.json` into it).
+`project.resolve_fw` picks the checkout per process, `atlas.toml` untouched:
+
+1. `EMBARCH_ATLAS_FW`, when set, wins (an explicit override; there is no `--fw` form of it, `--fw` stays the
+   configured repo).
+2. Else, when the working directory is inside a git worktree of the configured repo (same
+   `git rev-parse --git-common-dir`), that worktree's top.
+3. Else the configured `fw`, as before.
+
+Every reader goes through it (`fw_dir`: `status`, the staleness check behind every MCP move, `inventory`,
+`live`, `build`), so the HEAD the atlas is compared with is the worktree's branch. `status` names the worktree
+(`fw: <path> (worktree; atlas.toml names <main>)`; the JSON has `fw_is_worktree`, `fw_configured`).
+
+`build` takes the commit and makes its build worktree from the resolved checkout, but keeps the *configured*
+repo's basename for `.work/<commit12>/<basename>` (a linked worktree's folder is named otherwise), excludes the
+configured repo from the west module list (west lists the main clone), and counts an input from either the main
+clone or the linked worktree as a leak. `atlas.json` `build.fw_checkout` records the checkout used.
+
+The `embarch/` folder is the main clone's in every worktree, so there is **one atlas folder**: a `build` from a
+worktree writes the atlas the main clone's sessions read. It is one atlas set pinned to whichever commit was
+built last; `status` in the other checkout then reports the atlas stale (commit differs from HEAD) until it
+builds its own. One atlas folder per worktree is not done.
+
 ### A target with no Zephyr board yet
 
 Bring-up of a new PCB is when the atlas has most to answer and when no west build exists. A target says so
@@ -700,7 +726,7 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
 
 ```toml
 [project]
-fw = "/abs/path/to/fw-repo"          # the firmware git repo
+fw = "/abs/path/to/fw-repo"          # the firmware git repo (a process in a linked worktree of it uses that worktree: "Which `fw` a process uses")
 west_topdir = "/abs/path/to/ws"      # the west workspace holding .west/
 west = "/abs/path/to/west"           # optional: the west executable
 sources = "embarch/hardware"         # where the engineer drops documents, relative to fw

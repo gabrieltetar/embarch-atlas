@@ -262,3 +262,56 @@ def test_skill_and_placeholder_name_the_same_next_steps():
         assert command in step1
     assert step1.index("/atlas-translate-docs") < step1.index("/atlas-build")
     assert "stop" in step1
+
+
+def test_fw_follows_the_linked_worktree_the_process_runs_in(tmp_path, monkeypatch):
+    fw = make_fw(tmp_path)
+    project.init(fw)
+    adir = fw / "embarch" / "atlas"
+    main_head = git(fw, "rev-parse", "HEAD")
+    wt = tmp_path / "ws" / "fw-EMB-19"          # not named like the repo, as Start work names it
+    git(fw, "worktree", "add", "-q", "-b", "feature", str(wt))
+    (wt / "new.txt").write_text("x\n")
+    git(wt, "add", "new.txt")
+    git(wt, "commit", "-q", "-m", "feature")
+    wt_head = git(wt, "rev-parse", "HEAD")
+    other = tmp_path / "other"
+    other.mkdir()
+    cfg = project.load_config(adir)
+    monkeypatch.delenv(project.FW_ENV, raising=False)
+    # from the linked worktree (its top or a subdirectory): that worktree
+    monkeypatch.chdir(wt / "apps")
+    assert project.fw_dir(adir, cfg).resolve() == wt.resolve()
+    st = project.status(adir)
+    assert st["head"] == wt_head and st["fw_is_worktree"] and Path(st["fw"]).resolve() == wt.resolve()
+    # from the main clone, and from somewhere unrelated: as today
+    for cwd in (fw / "apps", other):
+        monkeypatch.chdir(cwd)
+        assert project.fw_dir(adir, cfg) == Path(cfg["project"]["fw"])
+        st = project.status(adir)
+        assert st["head"] == main_head and not st["fw_is_worktree"]
+    # a worktree of some other repo is not ours
+    elsewhere = tmp_path / "elsewhere"
+    subprocess.run(["git", "init", "-q", str(elsewhere)], check=True)
+    git(elsewhere, "commit", "-q", "--allow-empty", "-m", "i")
+    monkeypatch.chdir(elsewhere)
+    assert project.fw_dir(adir, cfg) == Path(cfg["project"]["fw"])
+    # the environment override wins over the working directory
+    monkeypatch.chdir(wt)
+    monkeypatch.setenv(project.FW_ENV, str(fw))
+    assert project.fw_dir(adir, cfg) == fw
+
+
+def test_status_command_names_the_worktree(tmp_path, monkeypatch, capsys):
+    fw = make_fw(tmp_path)
+    project.init(fw)
+    adir = fw / "embarch" / "atlas"
+    wt = tmp_path / "ws" / "fw-wt"
+    git(fw, "worktree", "add", "-q", "-b", "b", str(wt))
+    monkeypatch.delenv(project.FW_ENV, raising=False)
+    monkeypatch.chdir(wt)
+    assert cli.main(["--atlas-dir", str(adir), "status"]) == 0
+    assert "(worktree; atlas.toml names" in capsys.readouterr().out
+    monkeypatch.chdir(fw)
+    assert cli.main(["--atlas-dir", str(adir), "status"]) == 0
+    assert "worktree;" not in capsys.readouterr().out
