@@ -1,6 +1,6 @@
 ---
 name: atlas-use
-description: How to answer a hardware question in a firmware repo that has an embarch-atlas (an `embarch/atlas/MAP.md` exists) - which pin, net, part, register, limit, timing or quirk; what the schematic, a datasheet or the MCU reference manual says; whether the devicetree or a driver agrees with the hardware. Use before writing or reviewing a driver, a devicetree node or board code, and whenever a question depends on the hardware.
+description: How to answer a hardware question in a firmware repo that has an embarch-atlas (an `embarch/atlas/MAP.md` exists; if it is the "No hardware atlas is built yet" placeholder, there is no atlas yet) - which pin, net, part, register, limit, timing or quirk; what the schematic, a datasheet or the MCU reference manual says; whether the devicetree or a driver agrees with the hardware. Use before writing or reviewing a driver, a devicetree node or board code, and whenever a question depends on the hardware.
 ---
 
 # Using the hardware atlas
@@ -17,6 +17,10 @@ PDFs whole, and never answer a hardware question from memory.
    peripherals in use, the boards and their interfaces, and where the pin map and the
    mismatch report are. If its first lines say it is **stale** (HEAD moved past the
    atlas's commit), say so in your answer and suggest `/atlas-update`.
+   **If its first line is `# No hardware atlas is built yet`, there is no atlas**: no
+   cards, no pins, no facts. Say so, name the next steps (`/atlas-translate-docs`, then
+   `/atlas-build`), do not answer the hardware question from memory, and **stop** - do
+   not go on to step 2 or look for cards.
 2. **Card** (`docs/<doc_id>/card.md`, ≤ 1.5K tokens). The part's role, key limits,
    register summary, the **quirks**, and a section index.
 3. **Section** (`docs/<doc_id>/s/<secid>.md`). Tables follow one condition per row with

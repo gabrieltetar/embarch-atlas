@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tomllib
 from pathlib import Path
@@ -249,3 +250,15 @@ def test_init_writes_a_placeholder_map_that_join_replaces_and_status_leaves_alon
     mp.write_text(real)
     assert cli.main(["init", str(fw)]) == 0
     assert mp.read_text() == real                                   # and never overwrites a real map
+
+
+def test_skill_and_placeholder_name_the_same_next_steps():
+    skill = (Path(__file__).resolve().parent.parent / "skills" / "atlas-use" / "SKILL.md").read_text()
+    step1 = skill.split("1. **MAP**")[1].split("2. **Card**")[0]
+    assert project.NO_ATLAS_HEAD in step1
+    commands = re.findall(r"`(/atlas-[a-z-]+)`", project.NO_ATLAS_MAP)
+    assert commands == ["/atlas-translate-docs", "/atlas-build"]
+    for command in commands:
+        assert command in step1
+    assert step1.index("/atlas-translate-docs") < step1.index("/atlas-build")
+    assert "stop" in step1

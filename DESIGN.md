@@ -281,6 +281,8 @@ document's page, beside this one's; a number on neither cited page still fails. 
   `embarch/atlas/MAP.md` (never over an existing one) saying no atlas is built, not to answer hardware
   questions from memory, and to run `/atlas-translate-docs` then `/atlas-build`. Its first line is not an
   atlas header, so `mark_map` leaves it alone and the first `join` that makes an atlas current replaces it.
+  The `atlas-use` skill's step 1 knows the placeholder: it says no atlas is built, names the same two
+  steps and stops before step 2; `tests/test_project.py` reads both and fails if the steps drift.
 - When an atlas becomes current (its commit equals HEAD), `embarch/atlas/MAP.md` is
   replaced by that atlas's MAP. When HEAD moves past it (or a source changes), `status`
   puts a `> **Stale:**` line first in that MAP with the reasons and `/atlas-update`; the line
