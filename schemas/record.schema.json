@@ -1205,6 +1205,26 @@
             },
             "additionalProperties": false
           }
+        },
+        "bank_select": {
+          "description": "how a host puts a paged part on a bank: the 8-bit select register (an address in the part's register map) and the value that selects each bank, keyed by the `bank` the register records state. The live module reads this register first, writes the bank's value, reads, and writes the first value back",
+          "type": "object",
+          "required": [
+            "reg",
+            "values"
+          ],
+          "properties": {
+            "reg": {
+              "type": "string"
+            },
+            "values": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
@@ -1224,7 +1244,8 @@
           "iface",
           "byte_order",
           "reg_addr_bytes",
-          "windows"
+          "windows",
+          "bank_select"
         ]
       }
     },

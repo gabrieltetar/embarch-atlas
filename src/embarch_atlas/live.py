@@ -450,13 +450,14 @@ def clock_gate(svd: "Svd", periph: str) -> tuple[str, dict] | str | None:
 
 # --------------------------------------------------------------------------- the tool
 
-def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None) -> str:
+def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None,
+             allow_bank_select: bool = False) -> str:
     """`PERIPH.REG` or a whole `PERIPH` read on the running board, decoded field by field."""
     svds = _docs_of_kind(atlas_dir, "svd")
     head = target.partition(".")[0]
     svd = Svd(svds[0]) if svds else None
     if svd is None or _norm(head) not in svd.periphs():
-        return ext_reg_read(atlas_dir, target, allow_clear, role)
+        return ext_reg_read(atlas_dir, target, allow_clear, role, allow_bank_select)
     try:
         periph, regs = svd.resolve(target)
     except LookupError as e:
@@ -1065,8 +1066,10 @@ def _ext_decode(recs: list[dict], v: int, fields_of: dict[str, list[dict]], labe
     return decode(r, v, fields, all_fields)
 
 
-def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None) -> str:
-    """`<label or part>.<REG>`, or a whole small part, read with `i2c read` on the board's shell."""
+def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None,
+                 allow_bank_select: bool = False) -> str:
+    """`<label or part>.<REG>`, or a whole small part, read with `i2c read` on the board's shell. A banked
+    register on a part whose `bus` record states `bank_select` is read select, read, restore, with `allow_bank_select`."""
     from .query import Atlas
     head, _, reg = target.partition(".")
     reg, _, bank = reg.partition("@")
@@ -1101,11 +1104,62 @@ def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: 
     except LiveError as e:
         return f"src: none\n\nThe read failed: {e}\n"
     rab = int(bus.get("reg_addr_bytes") or 1)
-    out, skipped = [], []
+    out, skipped, unselected = [], [], []
+    sel = bus.get("bank_select") or {}
+    banked = [g for g in groups if _bank(g[0]) is not None]
+    if banked and sel and not allow_bank_select:
+        if single:
+            return (f"src: none\n\nRefused: {label}.{groups[0][0].get('name')} is on bank {_bank(groups[0][0])}, and "
+                    f"selecting a bank writes {sel.get('reg')} on the part (then writes the previous page back).\n"
+                    "Call again with allow_bank_select=true if that write is acceptable.\n")
+        unselected = [g for g in banked]
+    page = {"prev": None}                    # the select register's value before this read wrote it
+
+    def run_cmd(verb: str, byte: int, dev: int, extra: str = "") -> str:
+        return con.run(f"i2c {verb} {inst['bus_dev']} 0x{dev:02X} 0x{byte:0{2 * rab}X}{extra}")
+
+    def select(bank: str) -> str | None:
+        """Write the bank's select value, first reading the current page once to put back."""
+        if bank not in {str(k) for k in (sel.get("values") or {})}:
+            return (f"{doc.name} states no select value for bank {bank}; it has "
+                    f"{', '.join(sorted(str(k) for k in sel.get('values') or {}))}. Nothing was written.")
+        val = _int(next(v for k, v in sel["values"].items() if str(k) == bank))
+        dev, byte = _route(bus, inst, _int(sel.get("reg")))
+        try:
+            if page["prev"] is None:
+                page["prev"] = _parse_read(run_cmd("read_byte", byte, dev), 1)[0]
+            run_cmd("write_byte", byte, dev, f" 0x{val:02X}")
+        except LiveError as e:
+            return f"the page select ({sel.get('reg')}) failed: {e}. The previous page was not changed or is restored below."
+        return None
+
+    def restore() -> str | None:
+        if page["prev"] is None:
+            return None
+        dev, byte = _route(bus, inst, _int(sel.get("reg")))
+        try:
+            run_cmd("write_byte", byte, dev, f" 0x{page['prev']:02X}")
+        except LiveError as e:
+            return (f"! the previous page ({sel.get('reg')} = 0x{page['prev']:02X}) could NOT be written back: {e}. "
+                    "The part may be left on another page.")
+        return None
+
+    fail = None
+    cur_bank = None
     for g in groups:
         if effects[id(g)] and not allow_clear:
             skipped.append((g, effects[id(g)]))
             continue
+        if g in unselected:
+            continue
+        bk = _bank(g[0])
+        if bk is not None and not sel:
+            unselected.append(g)
+        elif bk is not None and bk != cur_bank:
+            fail = select(bk)
+            if fail:
+                break
+            cur_bank = bk
         vals = []
         try:
             for r in g:
@@ -1119,22 +1173,41 @@ def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: 
                 vals.append(sum(b << (8 * i) for i, b in enumerate(order)))
         except LiveError as e:
             if "command not found" in str(e):
-                return (f"src: {con.src()}\n\nThe image on the board has no I2C shell ({e}): build it with "
+                fail = (f"src: {con.src()}\n\nThe image on the board has no I2C shell ({e}): build it with "
                         "`CONFIG_I2C_SHELL=y`. Nothing was read; the bus was not tried.\n")
+                break
             state = _device_state(con, inst)
             hint = f"; the board lists {inst['name']} as ({state})" if state else ""
-            return (f"src: {con.src()}\n\nThe read of {label}.{g[0].get('name')} failed: {e}{hint}. "
+            fail = (f"src: {con.src()}\n\nThe read of {label}.{g[0].get('name')} failed: {e}{hint}. "
                     f"Nothing answered at 0x{dev:02X} on {inst['bus_dev']}.\n")
+            break
         v = vals[0] if len(vals) == 1 else (vals[1] << 8) | vals[0]
         out += _ext_decode(g, v, fields_of, label, all_fields=single)
         if effects[id(g)]:
             out.append("  ! this read cleared: " + "; ".join(effects[id(g)]))
+    lost = restore()
+    if fail:
+        if not fail.startswith("src:"):
+            fail = f"src: {con.src()}\n\nThe read of {label} was not done: {fail}\n"
+        return fail + (f"{lost}\n" if lost else "")
     head_line = (f"src: {con.src()}; {label} = {inst['node']} at 0x{inst['addr']:02X} on {inst['bus_dev']}"
                  f" ({', '.join(inst['refs'])}); decoded with {doc.name}")
     lines = [head_line, ""] + out
+    if page["prev"] is not None:
+        lines += ["", f"Bank select: wrote {sel.get('reg')} to read bank {cur_bank}; put it back to the previous "
+                      f"page, 0x{page['prev']:02X}."]
+    if lost:
+        lines += ["", lost]
     if skipped:
         lines += ["", "Not read (reading changes the part; allow_clear=true reads them):"]
         lines += [f"- {re.sub(r'_(LSB|MSB)$', '', g[0].get('name') or '')}: " + "; ".join(w) for g, w in skipped]
+    if unselected and sel:
+        lines += ["", "Not read (on a bank; selecting it writes the part; allow_bank_select=true reads them):"]
+        lines += [f"- {g[0].get('name')}@{_bank(g[0])}" for g in unselected]
+    elif unselected:
+        lines += ["", "Page not selected: " + f"{doc.name} states no bank select, so "
+                  + ", ".join(f"{g[0].get('name')}@{_bank(g[0])}" for g in unselected)
+                  + " came from whatever page the part is on."]
     if not single:
         lines += ["", "`*` marks a field not at its reset value; ask for <label>.<REG> for every field."]
     return "\n".join(lines) + "\n"
@@ -1307,7 +1380,8 @@ def live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = No
 
 def _cmd_reg_read(args) -> int:
     from . import common
-    out = reg_read(common.atlas_dir(args.atlas_dir), args.target, args.allow_clear, args.role)
+    out = reg_read(common.atlas_dir(args.atlas_dir), args.target, args.allow_clear, args.role,
+                   getattr(args, "allow_bank_select", False))
     print(out, end="")
     return 1 if out.startswith("src: none") or re.search(r"^The read of .* failed: |^The image on the board has no I2C",
                                                          out, re.M) else 0
@@ -1342,6 +1416,8 @@ def register(sub, groups) -> None:
     p.add_argument("target")
     p.add_argument("--allow-clear", action="store_true",
                    help="read a register even though reading it clears something")
+    p.add_argument("--allow-bank-select", action="store_true",
+                   help="read a banked register of a paged part: writes its bank-select register, then the previous page back")
     p.add_argument("--role", help="the enrolled role to read from (default [live] role, else dut)")
     p.set_defaults(func=_cmd_reg_read)
     p = g.add_parser("stacks", help="every thread's stack peak on the board, joined to its stack symbol and option")

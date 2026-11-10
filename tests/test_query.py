@@ -226,8 +226,8 @@ def test_mcp_server_lists_seven_tools_and_answers(atlas_dir):
     tools = asyncio.run(server.list_tools())
     assert sorted(t.name for t in tools) == sorted(query.TOOLS)
     live_tools = asyncio.run(build_server(atlas_dir, live=True).list_tools())
-    assert sorted(t.name for t in live_tools) == sorted([*query.TOOLS, "reg_read", "reg_read_clear", "shell", "shell_run", "live_stacks", "core_state"])
-    writes = {"shell_run", "reg_read_clear"}
+    assert sorted(t.name for t in live_tools) == sorted([*query.TOOLS, "reg_read", "reg_read_clear", "reg_read_bank", "shell", "shell_run", "live_stacks", "core_state"])
+    writes = {"shell_run", "reg_read_clear", "reg_read_bank"}
     for t in live_tools:
         hint = bool(t.annotations and t.annotations.read_only_hint)
         assert hint == (t.name not in writes), t.name

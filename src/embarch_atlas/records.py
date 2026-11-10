@@ -43,7 +43,7 @@ FACT_KEYS = {
     "requirement": ("rid", "modality", "priority", "order", "text", "fw_relevant"),
     "conflict": ("refs", "sources", "text"),
     "check": ("expr", "expect", "why"),
-    "bus": ("iface", "byte_order", "reg_addr_bytes", "windows"),
+    "bus": ("iface", "byte_order", "reg_addr_bytes", "windows", "bank_select"),
     "variant": ("mpn", "options"),
 }
 _SKIP_IN_FACTS = {"id", "kind", "doc", "p", "q", "prov", "fn", "note", "src"}

@@ -223,7 +223,7 @@ Kinds and their own fields:
 | `strap` | `pin`, `condition`, `value` (address or mode straps; a fixed address has condition `fixed`) |
 | `variant` | `mpn` (the orderable part number), `options` (an object of option name to value: `{"vout": "3.3 V", "package": "SOT-23-5"}`; at least one). One record per orderable part, from the ordering table. A `variant` lists the parts; a `rule` is behaviour; a `quirk` of class `variant` flags a datasheet row whose value differs by variant without listing them |
 | `passthrough` | `from_pin`, `to_pin`, `when` (transparent-part map: switches, shunts, buffers) |
-| `bus` | `iface`, `byte_order` (lsb-first, msb-first), `reg_addr_bytes`, `windows` ([{from, to, addr, base}]: register ranges per bus address, for a part with more than one) |
+| `bus` | `iface`, `byte_order` (lsb-first, msb-first), `reg_addr_bytes`, `windows` ([{from, to, addr, base}]: register ranges per bus address, for a part with more than one), `bank_select` ({reg, values}: the 8-bit page-select register and the value that selects each `bank` the register records state, for a paged part) |
 | `check` | `expr`, `expect`, `why` (an invariant the checker evaluates) |
 | `requirement` | `rid`, `text`, `fw_relevant`, `modality` (shall, should, may, nice-to-have), `priority`, `order` (PRD) |
 | `conflict` | `refs`, `sources` (`"<doc> <loc>: <says>"`), `text` |
@@ -585,6 +585,17 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   extra exchange). A device that does not answer
   gets the state the board's `device list` gives it (`off` when its power domain is suspended).
   A whole part is read when it has at most 24 registers, one shell command each.
+  A banked register (`<label>.<REG>@<bank>`) is the record of that bank, read from the address
+  alone unless the part's `bus` record states `bank_select` (the select register and a value per
+  bank). With it, a read is select, read, restore: `i2c read_byte` of the select register (the
+  previous page, once), `i2c write_byte` of the bank's value, the reads (consecutive registers on
+  one bank share one select), then `i2c write_byte` of the previous page back, which runs even
+  when a read failed; a restore that fails is said in the answer. A page select is a write, so it
+  needs `allow_bank_select` (CLI `--allow-bank-select`, MCP `reg_read_bank`, which a host asks
+  before running), as `allow_clear` gates a read that clears: without it a single banked register
+  is refused naming the opt-in and a whole-part read lists those registers under "Not read". A
+  part with no `bank_select` reads as before and the answer says the page was not selected.
+  A bank with no value in `bank_select`, or an unreadable select register, writes nothing.
 - **Live stacks.** `live_stacks` runs `kernel thread stacks` and joins each thread to its stack
   symbol, the line that defined it and the `*_STACK_SIZE` option (the static `stacks` pairing).
   The join needs the ELF the board runs: 16 words at the start, middle and end of the image's

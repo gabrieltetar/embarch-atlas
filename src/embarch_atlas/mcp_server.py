@@ -157,6 +157,13 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             and says what the read cleared. Not read-only: a host asks before it runs."""
             return live_mod.reg_read(atlas_dir, target, True, role)
 
+        @server.tool(annotations=WRITE)
+        def reg_read_bank(target: str, role: str | None = None) -> str:
+            """Live: `reg_read` of a banked register (`<label>.<REG>@<bank>`) on a paged external part, with
+            allow_bank_select=true: writes the part's page-select register to the bank, reads, then writes the
+            previous page back (even when the read fails). Not read-only: a host asks before it runs."""
+            return live_mod.reg_read(atlas_dir, target, False, role, True)
+
         @server.tool(annotations=READ_ONLY)
         def live_stacks(build: str | None = None, role: str | None = None) -> str:
             """Live: every thread's stack peak on the board (`kernel thread stacks` over the shell), joined to

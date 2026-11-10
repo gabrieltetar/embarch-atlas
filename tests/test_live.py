@@ -274,6 +274,11 @@ elif words[0] == "i2c":
     reg = int(words[4], 16)
     if regs is None:
         out = "\\x1b[1;31mFailed to read from device: %s\\x1b[0m\\r\\n" % words[3]
+    elif words[1] == "write_byte":
+        regs[str(reg)] = int(words[5], 16)
+        (here / "devices.json").write_text(json.dumps(devs))
+    elif str(reg) in devs.get("_fail", []) and words[1] in ("read_byte", "read"):
+        out = "\\x1b[1;31mFailed to read from device: %s\\x1b[0m\\r\\n" % words[3]
     elif words[1] == "read_byte":
         out = "Output: 0x%x\\r\\n" % regs.get(str(reg), 0)
     else:
@@ -1018,3 +1023,69 @@ def test_ext_regs_pick_the_record_for_a_bank(tmp_path):
     with pytest.raises(LookupError):
         pick("HUBONLY", "embedded")
     assert {x[0]["id"] for x in live._ext_regs(doc, None, "hub")} == {"part.reg.HUB"}
+
+
+# ---------------------------------------------------------------- a paged part: select, read, restore
+
+def _paged(tmp: Path, select: bool = True, fail: list[str] | None = None) -> Path:
+    """The `sense` part with a banked register: PAGED at 0x30 on bank 1, page select at 0x7F."""
+    devs = dict(SENSE, _fail=fail or [])
+    devs["i2c@40005800/0x44"] = dict(SENSE["i2c@40005800/0x44"], **{"127": 0x02, "48": 0xAB})
+    ad = make_ext(tmp, devs)
+    d = ad / "docs" / "sense@A" / "records"
+    write_jsonl(d / "register.jsonl", [json.loads(x) for x in (d / "register.jsonl").read_text().splitlines()] + [
+        {"kind": "register", "id": "sense.reg.PAGED", "name": "PAGED", "addr": "0x30", "bank": "1", "width": 8,
+         "reset": "0x00", "doc": "sense@A"}])
+    if select:
+        bus = json.loads((d / "bus.jsonl").read_text())
+        bus["bank_select"] = {"reg": "0x7F", "values": {"0": "0x00", "1": "0x01"}}
+        write_jsonl(d / "bus.jsonl", [bus])
+    return ad
+
+
+def test_a_banked_read_is_refused_without_the_opt_in_and_writes_nothing(tmp_path):
+    ad = _paged(tmp_path)
+    out = live.reg_read(ad, "sense_vbus.PAGED@1")
+    assert "Refused" in out and "allow_bank_select=true" in out
+    assert shell_log(ad) == []                                  # not even the page was read
+
+
+def test_a_banked_read_selects_reads_and_restores_the_previous_page(tmp_path):
+    ad = _paged(tmp_path)
+    out = live.reg_read(ad, "sense_vbus.PAGED@1", allow_bank_select=True)
+    assert "0xAB" in out and "previous page, 0x02" in out
+    assert shell_log(ad) == ["i2c read_byte i2c@40005800 0x44 0x7F", "i2c write_byte i2c@40005800 0x44 0x7F 0x01",
+                             "i2c read_byte i2c@40005800 0x44 0x30", "i2c write_byte i2c@40005800 0x44 0x7F 0x02"]
+    assert json.loads((ad / "devices.json").read_text())["i2c@40005800/0x44"]["127"] == 0x02
+
+
+def test_a_failing_banked_read_still_restores_the_previous_page(tmp_path):
+    ad = _paged(tmp_path, fail=["48"])
+    out = live.reg_read(ad, "sense_vbus.PAGED@1", allow_bank_select=True)
+    assert "The read of sense_vbus.PAGED failed" in out
+    assert shell_log(ad)[-1] == "i2c write_byte i2c@40005800 0x44 0x7F 0x02"
+    assert json.loads((ad / "devices.json").read_text())["i2c@40005800/0x44"]["127"] == 0x02
+
+
+def test_a_bank_with_no_select_value_writes_nothing(tmp_path):
+    ad = _paged(tmp_path)
+    d = ad / "docs" / "sense@A" / "records"
+    rows = [json.loads(x) for x in (d / "register.jsonl").read_text().splitlines()]
+    rows[-1]["bank"] = "9"
+    write_jsonl(d / "register.jsonl", rows)
+    out = live.reg_read(ad, "sense_vbus.PAGED@9", allow_bank_select=True)
+    assert "no select value for bank 9" in out and shell_log(ad) == []
+
+
+def test_a_part_with_no_bank_select_reads_as_before_and_says_the_page_was_not_selected(tmp_path):
+    ad = _paged(tmp_path, select=False)
+    out = live.reg_read(ad, "sense_vbus.PAGED@1")
+    assert "0xAB" in out and "Page not selected" in out
+    assert shell_log(ad) == ["i2c read_byte i2c@40005800 0x44 0x30"]
+
+
+def test_a_whole_part_read_leaves_banked_registers_out_without_the_opt_in(tmp_path):
+    ad = _paged(tmp_path)
+    out = live.reg_read(ad, "sense_vbus")
+    assert "allow_bank_select=true reads them" in out and "- PAGED@1" in out
+    assert not any("write_byte" in c for c in shell_log(ad))
