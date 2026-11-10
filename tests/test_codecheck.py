@@ -455,3 +455,20 @@ def test_bit_offset_define_adds_no_phantom_register_findings(tmp_path):
         assert row["register"] == "0x05", row
     assert not [f for f in r["findings"] if f["class"] in ("reg-field-in-other-register", "reg-mask-vs-field")
                 and ("0x09" in str(f) or "DEMOBB_REG_CTRL1_OFS" in str(f))]
+
+
+def test_regmap_keys_on_bank_and_address():
+    from embarch_atlas.codecheck import RegMap
+    regs = [{"id": "d.reg.MAIN", "kind": "register", "name": "MAIN", "addr": "0x01", "width": 8},
+            {"id": "d.reg.EMB", "kind": "register", "name": "EMB", "addr": "0x01", "width": 8, "bank": "embedded"},
+            {"id": "d.reg.HUB", "kind": "register", "name": "HUB", "addr": "0x01", "width": 16, "bank": "hub"},
+            {"id": "d.reg.ONLY", "kind": "register", "name": "ONLY", "addr": "0x02", "width": 8, "bank": "hub"}]
+    fields = [{"id": "d.reg.EMB.X", "kind": "field", "reg": "d.reg.EMB", "name": "X", "bits": [3, 0]},
+              {"id": "d.reg.MAIN.M", "kind": "field", "reg": "d.reg.MAIN", "name": "M", "bits": [7, 4]}]
+    rm = RegMap("d@1", regs, fields)
+    assert rm.reg(1)["name"] == "MAIN"                          # no bank: the main map, as before
+    assert rm.reg(1, "embedded")["name"] == "EMB" and rm.reg(1, "hub")["name"] == "HUB"
+    assert rm.reg(1, "nope") is None and rm.reg(2)["name"] == "ONLY"
+    assert rm.width(1, "hub") == 16 and rm.width(1) == 8
+    assert [f.name for f in rm.fields(1)] == ["M"]
+    assert [f.name for f in rm.fields(1, "embedded")] == ["X"] and rm.fields(1, "hub") == []

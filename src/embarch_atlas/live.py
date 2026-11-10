@@ -861,9 +861,32 @@ def _instance(atlas_dir: Path, head: str) -> tuple[dict | None, str]:
     return None, f"no MCU peripheral, DT label or part named {head!r}"
 
 
-def _ext_regs(doc: Path, reg: str | None) -> list[list[dict]]:
-    """Registers of the part to read, each as its records: one, or an `_LSB` + `_MSB` pair."""
+def _bank(r: dict) -> str | None:
+    """The bank a register record states, as a string; None for the main map."""
+    return None if r.get("bank") is None else str(r["bank"])
+
+
+def _pick_bank(recs: list[dict], bank: str | None, what: str) -> list[dict]:
+    """The records of `recs` (one name) on `bank`. With no bank asked for, the main map's, else the
+    only bank that has one; a name on several banks and none on the main map needs the bank said."""
+    if bank is not None:
+        return [r for r in recs if _bank(r) == bank]
+    main = [r for r in recs if _bank(r) is None]
+    if main or not recs:
+        return main or recs
+    banks = sorted({_bank(r) for r in recs})
+    if len(banks) > 1:
+        raise LookupError(f"register {what!r} is on banks {', '.join(banks)}; name one as {what}@<bank>")
+    return recs
+
+
+def _ext_regs(doc: Path, reg: str | None, bank: str | None = None) -> list[list[dict]]:
+    """Registers of the part to read, each as its records: one, or an `_LSB` + `_MSB` pair.
+    `bank` picks the records on that bank; the live module never writes a page-select register,
+    so a read of a banked register is the right record, not a device that is on that page."""
     regs = [r for r in _jsonl(doc / "records" / "register.jsonl") if r.get("kind") == "register"]
+    if bank is not None:
+        regs = [r for r in regs if _bank(r) == bank]
     if reg is None:
         pairs: dict[str, dict] = {}
         out = []
@@ -877,11 +900,11 @@ def _ext_regs(doc: Path, reg: str | None) -> list[list[dict]]:
                 out.append([r])
         return out
     rn = _norm(reg)
-    one = [r for r in regs if _norm(r.get("name")) == rn]
+    one = _pick_bank([r for r in regs if _norm(r.get("name")) == rn], bank, reg)
     if one:
         return [one[:1]]
-    lsb = [r for r in regs if _norm(r.get("name")) == rn + "lsb"]
-    msb = [r for r in regs if _norm(r.get("name")) == rn + "msb"]
+    lsb = _pick_bank([r for r in regs if _norm(r.get("name")) == rn + "lsb"], bank, reg)
+    msb = _pick_bank([r for r in regs if _norm(r.get("name")) == rn + "msb"], bank, reg)
     if lsb and msb:
         return [[lsb[0], msb[0]]]
     names = ", ".join(sorted({re.sub(r"_(LSB|MSB)$", "", r.get("name") or "") for r in regs})[:60])
@@ -928,7 +951,7 @@ def _ext_effects(doc: Path, recs: list[dict]) -> list[str]:
     for r in regs:
         a = _int(r.get("addr"))
         if a is not None:
-            reg_of_addr.setdefault(a, r.get("id"))
+            reg_of_addr.setdefault((_bank(r), a), r.get("id"))
     named: dict[str, str] = {}            # an underscore name -> the register it belongs to
     for r in regs:
         short = re.sub(r"_(LSB|MSB)$", "", str(r.get("name") or ""), flags=re.I)
@@ -939,13 +962,15 @@ def _ext_effects(doc: Path, recs: list[dict]) -> list[str]:
             named[str(f["name"])] = f.get("reg")
 
     def target(sent: str, m: re.Match, own_reg: str, own_name: str) -> tuple[str | None, str | None]:
-        """(register id charged, field name charged) for a sentence found in `own_reg`'s text."""
+        """(register id charged, field name charged) for a sentence found in `own_reg`'s text.
+        A `REG0x..` in it names an address on the register's own bank."""
+        own_bank = next((_bank(r) for r in regs if r.get("id") == own_reg), None)
         other = []
         for t in named:
             if t != own_name and named[t] != own_reg and re.search(r"\b" + re.escape(t) + r"\b", sent):
                 other.append((m_pos(sent, t), t, named[t]))
         for rm in _REG_REF.finditer(sent):
-            rid = reg_of_addr.get(int(rm[1], 16))
+            rid = reg_of_addr.get((own_bank, int(rm[1], 16)))
             if rid and rid != own_reg:
                 other.append((rm.start(), next((str(r.get("name")) for r in regs if r.get("id") == rid), None), rid))
         own_regname = next((str(r.get("name")) for r in regs if r.get("id") == own_reg), "")
@@ -1044,6 +1069,7 @@ def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: 
     """`<label or part>.<REG>`, or a whole small part, read with `i2c read` on the board's shell."""
     from .query import Atlas
     head, _, reg = target.partition(".")
+    reg, _, bank = reg.partition("@")
     inst, why = _instance(atlas_dir, head)
     if inst is None:
         return f"src: none\n\n{why}.\n"
@@ -1051,7 +1077,7 @@ def ext_reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: 
     if doc is None:
         return f"src: none\n\nNo document with register records for {inst['node']} ({', '.join(inst['refs'])}).\n"
     try:
-        groups = _ext_regs(doc, reg or None)
+        groups = _ext_regs(doc, reg or None, bank or None)
     except LookupError as e:
         return f"src: none\n\n{e}.\n"
     if len(groups) > MAX_EXCHANGES:

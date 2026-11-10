@@ -833,7 +833,7 @@ def merge_reserved(fields: list[dict]) -> list[dict]:
 
 def _structure(regs: list[dict], fields_by_reg: dict[str, list[dict]]) -> list[dict]:
     issues = []
-    seen: dict[int, str] = {}
+    seen: dict[tuple[str | None, int], str] = {}
     for r in regs:
         w = r.get("width") or 0
         cover: list[str | None] = [None] * w
@@ -860,9 +860,11 @@ def _structure(regs: list[dict], fields_by_reg: dict[str, list[dict]]) -> list[d
                 issues.append({"id": r["id"], "issue": f"field resets compose to {comp:#x}, register reset {r['reset']}"})
         a = R.to_int(r.get("addr"))
         if a is not None:
-            if a in seen and seen[a] != r["name"]:
-                issues.append({"id": r["id"], "issue": f"address {a:#x} is also {seen[a]}"})
-            seen[a] = r["name"]
+            bank = None if r.get("bank") is None else str(r["bank"])
+            where = f"address {a:#x}" if bank is None else f"address {a:#x} on bank {bank}"
+            if (bank, a) in seen and seen[(bank, a)] != r["name"]:
+                issues.append({"id": r["id"], "issue": f"{where} is also {seen[(bank, a)]}"})
+            seen[(bank, a)] = r["name"]
     return issues
 
 

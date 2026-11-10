@@ -714,6 +714,19 @@
             }
           ]
         },
+        "bank": {
+          "description": "the page or bank the register is on, when the part has paged register maps (`embedded-func`, `sensor-hub`, `1`); absent for the main map. Two registers at one address on different banks are two registers; a field has no bank of its own and takes its register's",
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
         "width": {
           "type": "integer",
           "minimum": 1
@@ -763,6 +776,7 @@
           "note",
           "name",
           "addr",
+          "bank",
           "width",
           "reset",
           "access",

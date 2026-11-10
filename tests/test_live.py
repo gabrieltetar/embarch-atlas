@@ -996,3 +996,25 @@ def test_an_enable_named_field_in_a_non_enable_rcc_register_is_not_the_clock_sta
     gate = live.clock_gate(live.Svd(ad / "docs" / "demo-svd"), "UART1")
     assert gate[0]["name"] == "APBENR1"               # lowest address no longer wins when it is not an enable register
     assert "clock on (RCC.APBENR1.UART1EN = 1)" in live.reg_read(ad, "UART1.BRR")
+
+
+def test_ext_regs_pick_the_record_for_a_bank(tmp_path):
+    import pytest
+    doc = tmp_path / "part"
+    (doc / "records").mkdir(parents=True)
+
+    def r(i, name, addr, **kw):
+        return {"kind": "register", "id": f"part.reg.{i}", "name": name, "addr": addr, "width": 8, **kw}
+    write_jsonl(doc / "records" / "register.jsonl", [
+        r("MAIN", "CTRL", "0x10"), r("EMB", "CTRL", "0x10", bank="embedded"), r("HUB", "HUBONLY", "0x11", bank="hub"),
+        r("E2", "TWIN", "0x12", bank="a"), r("H2", "TWIN", "0x12", bank="b")])
+    pick = lambda reg, bank=None: live._ext_regs(doc, reg, bank)[0][0]["id"]
+    assert pick("CTRL") == "part.reg.MAIN"                       # no bank: the main map's, as before
+    assert pick("CTRL", "embedded") == "part.reg.EMB"
+    assert pick("HUBONLY") == "part.reg.HUB"                     # one bank has it, none asked
+    assert pick("TWIN", "b") == "part.reg.H2"
+    with pytest.raises(LookupError, match="TWIN@<bank>"):
+        pick("TWIN")
+    with pytest.raises(LookupError):
+        pick("HUBONLY", "embedded")
+    assert {x[0]["id"] for x in live._ext_regs(doc, None, "hub")} == {"part.reg.HUB"}

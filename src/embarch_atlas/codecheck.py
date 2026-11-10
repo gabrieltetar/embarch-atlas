@@ -721,23 +721,38 @@ class Fld:
         return self.hi - self.lo + 1
 
 
+def bank_of(r: dict) -> str | None:
+    """The bank a register record states, as a string; None for the main map."""
+    b = r.get("bank")
+    return None if b is None else str(b)
+
+
 class RegMap:
-    """One document's register/field records, keyed by address; twins merged, deterministic first."""
+    """One document's register/field records, keyed by (bank, address); twins merged, deterministic first.
+
+    A register with no `bank` is on the main map (bank None). `regs_at` / `fields_at` are the default
+    view a driver constant without a bank resolves in: the main map's register at an address, else the
+    first bank that has one. `reg(a, bank)` / `fields(a, bank)` reach a banked register; a field takes
+    its register's bank."""
 
     def __init__(self, doc: str, regs: list[dict], fields: list[dict]):
         self.doc = doc
-        self.regs_at: dict[int, list[dict]] = collections.defaultdict(list)
+        self.regs_in: dict[tuple[str | None, int], list[dict]] = collections.defaultdict(list)
         for r in sorted(regs, key=_rank):
             a = parse_int(r.get("addr"))
-            if a is not None and all(x.get("id") != r.get("id") or _rank(x) != _rank(r) for x in self.regs_at[a]):
-                self.regs_at[a].append(r)
-        self.regs_at = {a: v for a, v in self.regs_at.items() if v}
+            k = (bank_of(r), a)
+            if a is not None and all(x.get("id") != r.get("id") or _rank(x) != _rank(r) for x in self.regs_in[k]):
+                self.regs_in[k].append(r)
+        self.regs_in = {k: v for k, v in self.regs_in.items() if v}
+        self.regs_at: dict[int, list[dict]] = {}
+        for (b, a), v in sorted(self.regs_in.items(), key=lambda kv: (kv[0][1], kv[0][0] is not None, kv[0][0] or "")):
+            self.regs_at.setdefault(a, v)
         by_reg: dict[str, list[dict]] = collections.defaultdict(list)
         for f in sorted(fields, key=_rank):
             by_reg[f.get("reg")].append(f)
-        self.fields_at: dict[int, list[Fld]] = {}
+        self.fields_in: dict[tuple[str | None, int], list[Fld]] = {}
         placed = set()
-        for a, rs in self.regs_at.items():
+        for k, rs in self.regs_in.items():
             out, seen = [], set()
             for rid in dict.fromkeys(r.get("id") for r in rs):
                 placed.add(rid)
@@ -751,7 +766,8 @@ class RegMap:
                         continue
                     seen.add(key)
                     out.append(Fld(f.get("id") or "?", f.get("name") or "?", hi, lo, parse_int(f.get("reset")), f))
-            self.fields_at[a] = out
+            self.fields_in[k] = out
+        self.fields_at = {a: self.fields_in.get((bank_of(rs[0]), a), []) for a, rs in self.regs_at.items()}
         self.orphan_fields = sum(len(v) for k, v in by_reg.items() if k not in placed)
         self._inherit_mirrors()
 
@@ -772,20 +788,20 @@ class RegMap:
                     self.fields_at[dst] = [Fld(f.id, f.name, f.hi, f.lo, f.reset, dict(f.rec, via_mirror=True))
                                            for f in self.fields_at[src]]
 
-    def reg(self, a: int) -> dict | None:
-        rs = self.regs_at.get(a)
+    def reg(self, a: int, bank: str | int | None = None) -> dict | None:
+        rs = self.regs_at.get(a) if bank is None else self.regs_in.get((str(bank), a))
         return rs[0] if rs else None
 
-    def width(self, a: int) -> int:
-        r = self.reg(a) or {}
+    def width(self, a: int, bank: str | int | None = None) -> int:
+        r = self.reg(a, bank) or {}
         w = r.get("width")
         return w if isinstance(w, int) and w > 0 else 8
 
-    def reset(self, a: int) -> int | None:
-        return parse_int((self.reg(a) or {}).get("reset"))
+    def reset(self, a: int, bank: str | int | None = None) -> int | None:
+        return parse_int((self.reg(a, bank) or {}).get("reset"))
 
-    def fields(self, a: int) -> list[Fld]:
-        return self.fields_at.get(a, [])
+    def fields(self, a: int, bank: str | int | None = None) -> list[Fld]:
+        return self.fields_at.get(a, []) if bank is None else self.fields_in.get((str(bank), a), [])
 
     def all_fields(self) -> list[tuple[int, Fld]]:
         return [(a, f) for a in sorted(self.fields_at) for f in self.fields_at[a]]

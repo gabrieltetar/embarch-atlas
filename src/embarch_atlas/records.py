@@ -34,7 +34,7 @@ FACT_KEYS = {
     "timing": ("group", "sym", "param", "cond", "min", "nom", "typ", "max", "unit", "edge", "guar"),
     "pin": ("pin", "name", "dir", "type", "active", "pull", "desc"),
     "rule": ("cond", "text", "recover", "steps"),
-    "register": ("name", "addr", "width", "reset", "access", "summary", "desc"),
+    "register": ("name", "addr", "bank", "width", "reset", "access", "summary", "desc"),
     "field": ("reg", "name", "bits", "reset", "access", "enum", "desc"),
     "quirk": ("class", "text", "why", "refs"),
     "figure": ("fig", "caption", "what"),

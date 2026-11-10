@@ -869,3 +869,16 @@ def test_a_cite_outside_the_document_fails_naming_unit_and_page(doc, capsys):
     check.print_summary(rep)
     out = capsys.readouterr().out
     assert f"P s/9.9.md: cites page 0, {n + 1}, outside 1-{n}" in out and "syn1234.ec.VOL.isink" in out
+
+
+def test_register_banks_key_the_address_check():
+    def reg(i, name, addr, **kw):
+        return {"id": f"d.reg.{i}", "kind": "register", "name": name, "addr": addr, "width": 8, **kw}
+    other_bank = [reg("A", "A", "0x01", bank="embedded"), reg("B", "B", "0x01", bank="sensor-hub"),
+                  reg("C", "C", "0x01")]
+    assert not [x for x in check.check_registers(other_bank)["structure"] if "address" in x["issue"]]
+    same_bank = [reg("A", "A", "0x01", bank="embedded"), reg("B", "B", "0x01", bank="embedded")]
+    issues = [x["issue"] for x in check.check_registers(same_bank)["structure"]]
+    assert issues == ["address 0x1 on bank embedded is also A"]
+    int_bank = [reg("A", "A", "0x01", bank=1), reg("B", "B", "0x01", bank="1")]
+    assert any("is also A" in x["issue"] for x in check.check_registers(int_bank)["structure"])

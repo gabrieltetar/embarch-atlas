@@ -134,3 +134,11 @@ def test_variant_validates_renders_and_refuses_a_bare_record():
     assert "3.3 V" in line and "SOT-23-5" in line and line.endswith("cite=demo-reg@A p1; prov=llm-unverified")
     md = "\n".join(render.RENDERERS["variant"]([v], {}))
     assert "DEMO-REG-33" in md and "vout=3.3 V; package=SOT-23-5" in md
+
+
+def test_register_bank_is_accepted():
+    base = next(r for r in GOOD if r["kind"] == "register")
+    assert R.validate(dict(base, bank="embedded-func")) == []
+    assert R.validate(dict(base, bank=2)) == []
+    assert R.validate(dict(base, bank=""))
+    assert "bank=sensor-hub" in R.facts_line(dict(base, bank="sensor-hub"))
