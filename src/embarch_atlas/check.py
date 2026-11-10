@@ -1163,7 +1163,9 @@ def check_tables(path: Path, rel: str) -> list[dict]:
                 plain = re.sub(r"<[^>]+>", " ", c)
                 if re.search(r"\d+\.\d+\.\d+|\d-\d+(?:\.\d+)?%?$", plain) and not re.search(r"[A-Za-z]{2,}", plain):
                     out.append({"file": rel, "check": "glued", "cell": r[i]})
-                if "<br>" not in c and len(NUM_RE.findall(plain)) > 1 and not re.search(r"[A-Za-z=x]", plain):
+                # a dimension "1.5 × 2.0" is one value: count numbers per ×-joined part
+                if ("<br>" not in c and not re.search(r"[A-Za-z=x]", plain)
+                        and max(len(NUM_RE.findall(part)) for part in plain.split("×")) > 1):
                     out.append({"file": rel, "check": "packed", "cell": r[i]})
             if scol is not None and scol < len(r) and re.match(r"^\s*[VIRCTP]\s*(<br>|\s+\d)", r[scol]):
                 out.append({"file": rel, "check": "orphan-subscript", "cell": r[scol]})

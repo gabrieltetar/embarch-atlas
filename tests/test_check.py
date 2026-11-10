@@ -212,6 +212,16 @@ def test_table_structure_checks(doc):
     assert {"fused-header", "packed", "glued", "orphan-subscript"} <= kinds
 
 
+def test_packed_cell_spares_a_dimension(doc):
+    _, docdir = doc
+    (docdir / "s").mkdir(exist_ok=True)
+    (docdir / "s" / "6.5.md").write_text(
+        "# Pkg (p.2)\n\n| Param | Sym | Min | Typ | Max |\n|---|---|---|---|---|\n"
+        "| Body | D | 1.5 × 2.0 |  |  |\n| Bad | B | 1.0 2.0 |  |  |\n")
+    packed = [x["cell"] for x in check.run_check(docdir)["S"] if x["check"] == "packed"]
+    assert packed == ["1.0 2.0"]
+
+
 def test_cli_exit_codes(doc, capsys):
     atlas, docdir = doc
     assert cli.main(["--atlas-dir", str(atlas), "doc", "check", ds.DOC_ID]) == 0
