@@ -835,3 +835,18 @@ def test_k_reads_a_lone_typ_column(tmp_path):
     assert _k(doc, r) == "ok"
     k = _k(doc, dict(r, typ=7.8))
     assert isinstance(k, dict) and "typ" in k["disagree"]
+
+
+def test_k_says_when_it_did_not_run_on_a_document_with_no_column_header(tmp_path):
+    docdir = _table_doc(tmp_path, [[(40, 60, "Cell data"), (40, 96, "VIN"), (110, 96, "IN to GND -0.3 to 29 V")]])
+    rec = dict(_lim("abs.VIN", "IN to GND -0.3 to 29 V", 1, group="abs", min=-0.3, max=29, unit="V"))
+    rep = {"doc": "syn5678@1", "records": [], "G": {}, "M": [], "S": [], "T": {},
+           "summary": {"records": 1, "verified": 0, "failed": 0, "unverifiable": 0,
+                       "A": {"anchored": 0, "of": 0}, "N": {"ok": 0, "of": 0},
+                       "K": {"agree": 0, "disagree": 0, "not_checkable": 1, "unit_seen": 0, "no_header": 1},
+                       "C": {"ok": 0, "of": 0}, "U": {"ok": 0, "of": 0}, "O": {"ok": 0, "of": 0},
+                       "X": {"as_expected": 0, "of": 0}, "G": {}, "prov_changed": 0, "rendered": False, "exit": 0}}
+    assert check.DocText(docdir).columns(rec) == {"status": "no-header"}
+    out = io.StringIO()
+    check.print_summary(rep, out=out)
+    assert "K did not run" in out.getvalue() and "1 rows have no MIN/TYP/MAX" in out.getvalue()

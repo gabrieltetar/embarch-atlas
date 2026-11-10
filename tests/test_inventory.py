@@ -503,3 +503,30 @@ def test_document_pages_reads_the_file_when_the_cache_is_gone(world, monkeypatch
     cache.unlink()
     (src / "mx9999.pdf").write_bytes(b"other content")
     assert inv.document_pages(adir, doc, man) is None      # the file moved on: nothing to read
+
+
+# ---------------------------------------------------------------- a document's own header
+
+HEADER_PAGE = "SYN Cell Specification\nREV. A    DOC NO. 001\n" + FILLER
+
+
+def test_a_header_naming_its_revision_and_number_gives_both_to_the_manifest_and_doc_json(tmp_path):
+    from embarch_atlas import pdftext
+
+    src = tmp_path / "hardware"
+    src.mkdir()
+    make_pdf(src / "cell-spec.pdf", [HEADER_PAGE])
+    man = inv.run(tmp_path / "atlas", src)
+    rec = man["documents"][0]
+    assert (rec["rev"], rec["doc_no"]) == ("A", "001")
+    d = pdftext.prep(src / "cell-spec.pdf", tmp_path / "atlas", log=lambda *_: None)
+    meta = common.read_json(d / "doc.json")
+    assert (meta["rev"], meta["doc_no"]) == ("A", "001")
+
+
+def test_the_header_form_does_not_match_prose():
+    prose = "The cell uses rev. a of the board; see REV. A of the board and the doc no. 5 note."
+    d = inv.detect_ids("datasheet", {}, [prose])
+    assert d["rev"] is None and d["doc_no"] is None
+    two_lines = inv.detect_ids("datasheet", {}, ["Cell\nREV. B\nDOC NO. 7-2\n"])
+    assert (two_lines["rev"], two_lines["doc_no"]) == ("B", "7-2")

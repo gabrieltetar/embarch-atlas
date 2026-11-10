@@ -185,6 +185,10 @@ no TU, include path or DTS input from the main checkout (`atlas.json`
   number is never a part token. A Word file and the PDF exported from it share a doc_id;
   only the PDF is prepped. `update` finds a translation by content when a doc_id moved
   (`distillation_of`).
+- Revision and document number also come from a page-one header block of the form
+  `REV. A` / `DOC NO. 001` (upper-case, line-anchored; prose never matches), in the
+  manifest and in `doc.json`, when no vendor convention named them. `doc check` prints
+  `K did not run` when no record was compared with a column (no MIN/TYP/MAX header).
 - Pages are **1-based physical PDF page indices** (what `Read(pages=N)` takes).
   The printed label is stored only where it differs.
 - Section ids are the document's own numbering (`32.9.5`, `7.6.6`); a title slug

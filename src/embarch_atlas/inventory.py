@@ -45,7 +45,7 @@ from typing import Any
 from xml.etree import ElementTree as ET
 
 from . import __version__, answers, common, project
-from .pdftext import text_layer, text_layer_of_pdf
+from .pdftext import HEADER_DOC_NO, HEADER_REV, text_layer, text_layer_of_pdf
 
 TOOL = f"embarch-atlas/{__version__} inventory"
 PART_LIMIT = 6          # part-number tokens kept per document
@@ -308,6 +308,13 @@ def detect_ids(kind: str, info: dict[str, str], pages: list[str]) -> dict[str, A
     m = MICROCHIP_DOC.search(first) or MICROCHIP_DOC.search(last)
     if m and not d["doc_no"]:
         found(doc_no=m.group(1), rev=m.group(2), why=f"'{m.group(0)}'")
+    head = "\n".join(pages[:1])
+    m = HEADER_REV.search(head)
+    if m and not d["rev"]:
+        found(rev=m.group(1), why=f"p1 header '{m.group(0).strip()}'")
+    m = HEADER_DOC_NO.search(head)
+    if m and not d["doc_no"]:
+        found(doc_no=m.group(1), why=f"p1 header '{m.group(0).strip()}'")
     if d["doc_no"] and re.match(r"(DS|RM|ES|AN|UM|PM|TN)\d{4,5}$", d["doc_no"]) and not d["date"]:
         dates = ST_HIST_DATE.findall("\n".join(pages[-8:]))
         if dates:

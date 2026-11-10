@@ -221,6 +221,12 @@ _PART_RE = re.compile(r"[A-Za-z]{1,6}\d{2,}[A-Za-z0-9]*")
 _TI_LIT = re.compile(r"\b(S[A-Z]{3}[0-9A-Z]{3})([A-Z])?\b")
 _ST_DOC = re.compile(r"\b((?:DS|RM|AN|ES|UM|PM)\d{4,5})\b")
 _REV_TEXT = re.compile(r"\bRev(?:ision)?\.?\s*:?\s*([0-9]{1,3}(?:\.[0-9]+)?[a-z]?|[A-Z](?![A-Za-z]))(?![\w.])")
+# A document's own header block: `REV. A` and `DOC NO. 001`, upper-case, each at the start of a
+# line or after a gap of two spaces (or, for the number, right after the revision), and ending
+# the line or a gap. Prose ("rev. a of the board") has neither the case nor the line shape.
+HEADER_REV = re.compile(r"(?m)(?:^[ \t]*|[ \t]{2,})REV\.?[ \t]*:?[ \t]*([A-Z0-9]{1,3})(?=[ \t]*$|[ \t]{2,}|[ \t]+DOC\b)")
+HEADER_DOC_NO = re.compile(r"(?m)(?:^[ \t]*|[ \t]+)DOC(?:UMENT)?\.?[ \t]*NO\.?[ \t]*:?[ \t]*"
+                           r"([A-Z0-9][A-Z0-9._/-]{0,24})(?=[ \t]*$|[ \t]{2,})")
 
 
 def _manifest_entry(atlas: Path, pdf: Path, sha: str) -> dict | None:
@@ -271,13 +277,16 @@ def derive_identity(pdf: Path, meta: dict, first: str, last: str) -> dict:
     if rev is None and tail:
         rev = tail.group(1)
     if rev is None:
+        m = HEADER_REV.search(first[:3000])
+        rev = m.group(1) if m else None
+    if rev is None:
         for text in (first, last):
             m = _REV_TEXT.search(text)
             if m:
                 rev = m.group(1)
                 break
     if doc_no is None:
-        m = _ST_DOC.search(first[:3000] + " " + last[-3000:])
+        m = _ST_DOC.search(first[:3000] + " " + last[-3000:]) or HEADER_DOC_NO.search(first[:3000])
         doc_no = m.group(1) if m else None
     return {"part": part, "rev": rev or "norev", "doc_no": doc_no}
 

@@ -1420,6 +1420,7 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
         "K": {"agree": letter("K"), "disagree": Kd, "not_checkable": ran("K") - letter("K") - Kd,
               "unit_seen": sum(1 for x in results if x["checks"].get("K_unit_seen")),
               "row_not_found": letter("K", "not checkable: row-not-found"),
+              "no_header": letter("K", "not checkable: no-header"),
               "unreadable": sum(letter("K", f"not checkable: {st}") for st in K_WARN if st != "row-not-found")},
         "C": {"ok": letter("C"), "of": ran("C")},
         "U": {"ok": letter("U"), "of": ran("U")},
@@ -1469,6 +1470,10 @@ def print_summary(rep: dict, out=None, limit: int = 12) -> None:
       f"K agree {s['K']['agree']}, disagree {s['K']['disagree']}, not checkable {s['K']['not_checkable']} "
       f"(unit column seen {s['K']['unit_seen']}) | C {s['C']['ok']}/{s['C']['of']} | U {s['U']['ok']}/{s['U']['of']} | "
       f"O {s['O']['ok']}/{s['O']['of']} | X {s['X']['as_expected']}/{s['X']['of']}")
+    if s["records"] and not s["K"]["agree"] and not s["K"]["disagree"]:
+        why = (f"{s['K']['no_header']} rows have no MIN/TYP/MAX (or VALUE) header on their page"
+               if s["K"].get("no_header") else "no table row was eligible")
+        w(f"K did not run: no record was compared with a column ({why}); it checked nothing here")
     if s["G"]:
         w(f"G registers: {s['G']}")
     shown = 0
