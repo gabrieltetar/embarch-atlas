@@ -281,11 +281,29 @@ def test_init_board_hint_uses_the_same_evidence(tmp_path):
     ("note.pdf", ["Features\n" + FILLER, FILLER + "\nTN9988 Rev 3"], None),
     ("an9988-bus-layout.pdf", ["Features\n" + FILLER], None),
     ("note.pdf", ["UM9988\nUser manual\nFeatures\n" + FILLER], None),
+    ("report.pdf", ["Application Report\nFeatures\n" + FILLER], None),
+    ("report.pdf", ["Features\n" + FILLER], {"title": "ZX1234 Application Report: bus layout"}),
+    ("zx1234-application-report.pdf", ["Features\n" + FILLER], None),
+    ("guide.pdf", ["ZX1234 User's Guide\nSee the ZX1234 Reference Manual for the registers.\n" + FILLER], None),
     ("note.pdf", ["Application note\nSee the reference manual for the registers.\n" + FILLER], None),
 ])
 def test_appnote_is_checked_before_the_datasheet_rule(tmp_path, name, pages, meta):
     rec = inv.inventory_file(make_pdf(tmp_path / name, pages, meta), name)
     assert rec["kind"] == "appnote"
+
+
+@pytest.mark.parametrize("name,pages,meta", [
+    ("zx1234-user-guide.pdf", ["ZX1234 Reference Manual\nRegister map\n" + FILLER], None),
+    ("guide.pdf", ["ZX1234 User's Guide\nZX1234 Reference Manual\n" + FILLER], None),
+    ("guide.pdf", ["ZX1234 Series\nUser Guide and Reference Manual\n" + FILLER], {"title": "ZX1234 User's Guide"}),
+])
+def test_a_users_guide_that_is_a_reference_manual_is_one(tmp_path, name, pages, meta):
+    assert inv.inventory_file(make_pdf(tmp_path / name, pages, meta), name)["kind"] == "reference-manual"
+
+
+def test_an_application_note_naming_a_manual_is_not_one(tmp_path):
+    pdf = make_pdf(tmp_path / "guide.pdf", ["User's Guide\nApplication Note\nZX1234 Reference Manual\n" + FILLER])
+    assert inv.inventory_file(pdf, "guide.pdf")["kind"] == "appnote"
 
 
 def test_a_datasheet_citing_an_appnote_stays_a_datasheet(tmp_path):

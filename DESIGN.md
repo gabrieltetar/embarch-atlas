@@ -745,7 +745,7 @@ newer freeze of the same files marks the older entry `superseded` (kept, never d
 - **`schematic`** needs real evidence (`project.schematic_evidence`, the one test, for `inventory` and for
   `init`'s board hint): an EDA tool named as a word in the Creator or Producer, `.SchDoc` in the text, or net
   information in the outline. `Acrobat Web Capture` and `Allegro MicroSystems` are not EDA tools.
-- **`appnote`**: `application note`, `app note`, `user guide`, `technical note` or `tech note` in the title,
+- **`appnote`**: `application note`, `application report`, `app note`, `user guide`, `technical note` or `tech note` in the title,
   the file name or the top of page 1, or an ST `AN`/`UM`/`TN` document number. It is tested before the datasheet
   rule, and before a "reference manual" mentioned in the first page's text, which a note may well cite; only a
   title saying reference manual comes first. What a document calls itself beats what its first page cites: a
@@ -755,6 +755,12 @@ newer freeze of the same files marks the older entry `superseded` (kept, never d
   material**, shown beside the part in `missing.md` and `MAP.md`, and the join reads no pin record or limit from
   it. Its translation uses the datasheet procedure, and its card says which part it supports. `--confirm` refuses
   one and names the way: `--kind <file> datasheet`, if the kind is wrong.
+  **A user's guide that is a reference manual is `reference-manual`**: "user's guide" is the only note wording
+  it has (no application note or report, no technical note, no `AN`/`UM`/`TN` number) and a line at the top of
+  page 1, at most 80 characters and not citing one ("see", "refer", "in the" ...), calls it a reference manual.
+  Chosen because a kit's plain user's guide often cites the MCU's manual on page 1, but as a sentence, not as
+  its own title line; a citing line keeps it `appnote`. Tested before the appnote rule
+  (`inventory.guide_is_reference_manual`).
 - **A `.docx` or `.doc`** whose name or title says PRD or requirements is `prd` with `needs_export: true`, and
   `missing.md` asks for it as a PDF. The tool does not convert it. Any other Word file is `other`. Once a PDF of
   the same stem is in the sources folder the Word file is `superseded_by` it and the question goes away.

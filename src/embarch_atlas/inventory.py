@@ -87,7 +87,11 @@ PACKAGE = re.compile(r"^(?:LQFP|TQFP|UFBGA|WLCSP|UFQFPN|TSSOP|SSOP|MSOP|QFN|WQFN
                      r"SOD|TO)\d{1,4}$")
 # A vendor's internal or application-note number: a short prefix and five or more digits starting at zero.
 VENDOR_NUMBER = re.compile(r"^[A-Z]{2,3}0\d{4,}$")
-APPNOTE_WORDS = re.compile(r"\bapp(?:lication)?\.?\s+notes?\b|\buser'?s?\s+guide\b|\btech(?:nical)?\.?\s+notes?\b", re.I)
+APPNOTE_WORDS = re.compile(r"\bapp(?:lication)?\.?\s+(?:notes?|reports?)\b|\buser'?s?\s+guide\b|\btech(?:nical)?\.?\s+notes?\b", re.I)
+USER_GUIDE = re.compile(r"\buser'?s?\s+guide\b", re.I)
+# A first-page line that cites a reference manual rather than being one.
+MANUAL_CITE = re.compile(r"\b(?:see|refer|consult|described|detailed|documented|per|in the|of the|to the)\b", re.I)
+MANUAL_LINE = 80        # a title line saying "reference manual" is short; a sentence citing one is not
 APPNOTE_NUMBER = re.compile(r"^\s*(?:an|um|tn)[-_ ]?\d{4,5}(?![a-z0-9])", re.I)
 DATASHEET_WORDS = re.compile(r"\bdata\s?sheet\b", re.I)
 APPNOTE_HEAD = 400      # a datasheet's later text may cite an application note; a note says so at the top
@@ -224,6 +228,22 @@ def is_appnote(path: Path, title: str, head: str) -> bool:
     return bool(m) and m.group(1)[:2] in ("AN", "UM", "TN")
 
 
+def guide_is_reference_manual(path: Path, title: str, head: str) -> bool:
+    """A user's guide that is the MCU's reference manual: "user's guide" is the only note wording it has
+    (no application note, report or technical note, no AN/UM/TN number), and a short line at the top of
+    its first page calls it a reference manual without citing one."""
+    name = re.sub(r"[-_.]+", " ", path.stem)
+    top = head[:APPNOTE_HEAD]
+    if not any(USER_GUIDE.search(t) for t in (title, name, top)) or APPNOTE_NUMBER.match(path.stem) \
+            or APPNOTE_NUMBER.match(head):
+        return False
+    if any(not USER_GUIDE.fullmatch(m.group(0)) for t in (title, name, top)
+           for m in APPNOTE_WORDS.finditer(t)):
+        return False
+    return any("reference manual" in ln.lower() and len(ln.strip()) <= MANUAL_LINE and not MANUAL_CITE.search(ln)
+               for ln in top.splitlines())
+
+
 def classify(path: Path, info: dict[str, str], head: str) -> str:
     ext = path.suffix.lower()
     if ext in (".xlsx", ".xlsm", ".xls", ".csv", ".ods"):
@@ -238,6 +258,8 @@ def classify(path: Path, info: dict[str, str], head: str) -> str:
     if project.schematic_evidence(path, " ".join(info.get(k, "") for k in ("Creator", "Producer")), head):
         return "schematic"
     if "reference manual" in title:
+        return "reference-manual"
+    if "errata" not in title and guide_is_reference_manual(path, title, head):
         return "reference-manual"
     if "errata" not in title and is_appnote(path, title, head):     # may cite a reference manual on its first page
         return "appnote"
