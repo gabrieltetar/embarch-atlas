@@ -850,3 +850,22 @@ def test_k_says_when_it_did_not_run_on_a_document_with_no_column_header(tmp_path
     out = io.StringIO()
     check.print_summary(rep, out=out)
     assert "K did not run" in out.getvalue() and "1 rows have no MIN/TYP/MAX" in out.getvalue()
+
+
+def test_a_cite_outside_the_document_fails_naming_unit_and_page(doc, capsys):
+    atlas, docdir = doc
+    n = common.read_json(docdir / "doc.json")["pages"]
+    assert check.out_of_range([0, 1, n, n + 1], n) == [0, n + 1] and check.out_of_range([0, 99], 0) == []
+    _rewrite(docdir, "syn1234.ec.VHYS", p=0)
+    _rewrite(docdir, "syn1234.ec.VOL.isink", p=[1, n + 1])
+    (docdir / "s").mkdir(exist_ok=True)
+    (docdir / "s" / "9.9.md").write_text(f"# Odd (p.0)\n\nA cite past the end (p.{n + 1}).\n")
+    rep = check.run_check(docdir, render=False)
+    assert rep["summary"]["exit"] == 1
+    zero = result(rep, "syn1234.ec.VHYS")
+    assert zero["status"] == "failed" and zero["issues"][0].startswith("V:")   # the schema already refuses p 0
+    assert any(i == f"P: cites page {n + 1}, outside 1-{n}" for i in result(rep, "syn1234.ec.VOL.isink")["issues"])
+    assert rep["P"] == [{"file": "s/9.9.md", "pages": [0, n + 1], "of": n}]
+    check.print_summary(rep)
+    out = capsys.readouterr().out
+    assert f"P s/9.9.md: cites page 0, {n + 1}, outside 1-{n}" in out and "syn1234.ec.VOL.isink" in out

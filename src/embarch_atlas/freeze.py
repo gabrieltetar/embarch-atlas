@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from . import common, records as R
-from .check import cited_pages
+from .check import cited_pages, out_of_range as _out_of_range
 from .pdftext import page_file
 from .render import END, INVARIANTS, START, invariants_stub
 from .rm import page_sha
@@ -160,7 +160,7 @@ def freeze(atlas: Path, doc_id: str, model: str | None = None, note: str | None 
     cited = sorted({p for u in us.values() for p in u["pages"]})
     # A cite outside 1..pages is a fault in the unit, not a page of the document: it stays in the unit's
     # pages (its key reads "missing", so fixing the cite thaws it) and is listed, but is not counted as a page.
-    out_of_range = {uid: [p for p in u["pages"] if not 1 <= p <= n_pages] for uid, u in us.items()}
+    out_of_range = {uid: _out_of_range(u["pages"], n_pages) for uid, u in us.items()}
     out_of_range = {uid: ps for uid, ps in out_of_range.items() if ps}
     entry = {
         "kind": ENTRY_KIND, "doc": doc_id, "doc_kind": meta.get("kind") or "datasheet", "procedure": proc,

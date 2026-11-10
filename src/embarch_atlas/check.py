@@ -43,6 +43,8 @@ Markdown checks (card.md, s/*.md):
   S  table structure the ground-truth-free converter checks of spike 10 on value columns: glued numbers,
                      packed cells, fused MIN/TYP/MAX header, orphaned subscript, min <= typ <= max
   T  budgets         card.md <= 1.5K tokens, each s/*.md <= 4K (o200k)
+  P  page cites      a record (`p`) or a card.md / s/*.md `p.N` cite of a page outside 1..pages of doc.json
+                     fails, naming the unit and the page; `doc freeze` keeps such a page out of its count
 
 Then `prov` is set: an LLM record that passes becomes llm-verified, one that fails llm-unverified
 (it is never deleted); a figure or equation fact stays llm-unverified, since only a second look can
@@ -128,6 +130,11 @@ def cited_pages(s: str) -> set[int]:
         if b >= a and b - a < 400:
             out.update(range(a, b + 1))
     return out
+
+
+def out_of_range(pages, n: int) -> list[int]:
+    """The cited pages outside 1..n, the page count of the document (n == 0: no pages to be outside of)."""
+    return sorted({p for p in pages if n and not 1 <= p <= n})
 
 
 _CITE_DOC = re.compile(r"([A-Za-z0-9_][A-Za-z0-9_.@\-]*)\s+$")
@@ -1353,6 +1360,8 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
         invalid = i in bad
         res = record_checks(doc, r) if r.get("kind") and not invalid else {}
         extra = [f"V: {e}" for e in verrs[i]]
+        if not invalid and not isinstance(r, R.RawLine) and (oor := out_of_range(R.pages(r), doc.n)):
+            extra.append(f"P: cites page {', '.join(map(str, oor))}, outside 1-{doc.n}")
         if _key(r.get("id")) in dup:
             extra.append(f"R: duplicate id {r.get('id')}")
         for ref in ([] if invalid else r.get("refs") or []):
@@ -1398,6 +1407,8 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     md_files = ([docdir / "card.md"] if (docdir / "card.md").exists() else []) + sorted((docdir / "s").glob("*.md"))
     # A non-PDF source has no pages to anchor prose to: its markdown is generated, not written.
     M = [check_markdown_file(doc, f, values) for f in md_files] if doc.n else []
+    P = [{"file": str(f.relative_to(docdir)), "pages": oor, "of": doc.n} for f in md_files
+         if (oor := out_of_range(cited_pages(f.read_text(encoding="utf-8")), doc.n))]
     S = [x for f in md_files for x in check_tables(f, str(f.relative_to(docdir)))]
     T: dict[str, Any] = {}
     for f in md_files:
@@ -1432,10 +1443,11 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
               "unanchored": sum(m["stats"]["unanchored"] for m in M),
               "record_elsewhere": sum(m["stats"]["record_elsewhere"] for m in M)},
         "S": len(S),
+        "P": len(P) + sum(1 for x in results if any(i.startswith("P:") for i in x["issues"])),
         "T_over": [k for k, v in T.items() if v["over"]],
         "prov_changed": prov_changed, "rendered": rendered,
     }
-    failing = summary["failed"] or summary["M"]["unanchored"] or S or summary["T_over"]
+    failing = summary["failed"] or summary["M"]["unanchored"] or S or P or summary["T_over"]
     summary["exit"] = 1 if failing else 0
     warnings = []
     if documented_resets:
@@ -1453,7 +1465,7 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     summary["warnings"] = len(warnings)
     report = {"doc": doc.doc_id, "tool": f"embarch-atlas {__version__}",
               "pdf": doc.pdf_note, "summary": summary, "warnings": warnings, "records": results, "X": xs,
-              "G": {k: v for k, v in greg.items() if k != "verdict"}, "M": M, "S": S, "T": T,
+              "G": {k: v for k, v in greg.items() if k != "verdict"}, "M": M, "S": S, "P": P, "T": T,
               "files_written": written}
     if write:
         common.write_json(docdir / "checks.json", report)
@@ -1498,6 +1510,8 @@ def print_summary(rep: dict, out=None, limit: int = 12) -> None:
         for b in m.get("record_elsewhere", [])[:2]:
             w(f"   line {b['line']}: {b['number']:g} not on p{b['pages']}, in a record on p{b['record_pages']}: "
               f"{b['text'][:70]}")
+    for x in rep.get("P", [])[:limit]:
+        w(f"P {x['file']}: cites page {', '.join(map(str, x['pages']))}, outside 1-{x['of']}")
     for x in rep["S"][:limit]:
         w(f"S {x['file']}: {x['check']}: {x['cell'][:80]}")
     for k, v in rep["T"].items():
