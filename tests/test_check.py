@@ -801,3 +801,37 @@ def test_markdown_cite_naming_another_document_anchors_there(tmp_path):
     m = check.check_markdown_file(check.DocText(a), f, {})
     assert sorted(b["number"] for b in m["unanchored"]) == [222, 333]
     assert {b["line"] for b in m["unanchored"]} == {6, 7}
+
+
+# ---------------------------------------------------------------- K: side-by-side groups, a lone TYP column
+
+GROUPS_PAGE = [
+    (40, 60, "PARAMETER"), (150, 60, "MIN"), (190, 60, "TYP"), (230, 60, "MAX"), (270, 60, "UNIT"),
+    (330, 60, "PARAMETER"), (440, 60, "MIN"), (480, 60, "TYP"), (520, 60, "MAX"), (560, 60, "UNIT"),
+    (40, 76, "Alpha delay"), (150, 76, "1.1"), (190, 76, "2.2"), (230, 76, "3.3"), (270, 76, "ms"),
+    (330, 76, "Beta delay"), (440, 76, "4.4"), (480, 76, "5.5"), (520, 76, "6.6"), (560, 76, "us"),
+]
+LONE_PAGE = [
+    (40, 60, "PARAMETER"), (300, 60, "TYP"), (400, 60, "UNIT"),
+    (40, 76, "Gamma offset"), (300, 76, "7.7"), (400, 76, "mV"),
+]
+
+
+def test_k_reads_each_side_by_side_group(tmp_path):
+    doc = check.DocText(_table_doc(tmp_path, [GROUPS_PAGE]))
+    a = _lim("t.alpha", "Alpha delay 1.1 2.2 3.3 ms", 1, group="ec", min=1.1, typ=2.2, max=3.3, unit="ms")
+    b = _lim("t.beta", "Beta delay 4.4 5.5 6.6 us", 1, group="ec", min=4.4, typ=5.5, max=6.6, unit="us")
+    for r in (a, b):
+        r["kind"] = "timing"
+        assert _k(doc, r) == "ok", (r["id"], _k(doc, r))
+    bad = dict(b, typ=5.6)
+    assert "typ" in _k(doc, bad)["disagree"]
+
+
+def test_k_reads_a_lone_typ_column(tmp_path):
+    doc = check.DocText(_table_doc(tmp_path, [LONE_PAGE]))
+    r = _lim("t.gamma", "Gamma offset 7.7 mV", 1, group="ec", typ=7.7, unit="mV")
+    r["kind"] = "timing"
+    assert _k(doc, r) == "ok"
+    k = _k(doc, dict(r, typ=7.8))
+    assert isinstance(k, dict) and "typ" in k["disagree"]

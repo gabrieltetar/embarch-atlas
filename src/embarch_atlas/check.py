@@ -13,7 +13,9 @@ Record checks (per record, against the text layer of the pages it cites):
                      is one); it must agree. `±X` in MIN or MAX is min -X, max X; `±X` in TYP is a
                      magnitude (the record keeps the string `"±X"`, or X); `X%` is X with unit %; `a to
                      b` in a VALUE column is min a, max b. A record value kept as an expression string
-                     is not compared. A row K cannot find is a warning, counted per document
+                     is not compared. Two MIN/TYP/MAX groups side by side in one header band are read
+                     one at a time (the record is held to the group that holds its numbers); a lone TYP
+                     column beside a UNIT header is a header. A row K cannot find is a warning, counted per document
   C  conditions      every number in `cond` is on a cited page
   U  units           the unit's dimension fits the symbol (V, I, t, R, T, f, C, P, L) or the parameter,
                      and the unit string is on the cited page
@@ -342,6 +344,51 @@ class DocText:
                     best = cand
         return None if best is None else (best[3], best[1])
 
+    def _read_group(self, hdr: dict, hws: list, words: list, n: int, starts: list, rec: dict):
+        """(det, pct, score) for one MIN/TYP/MAX (or VALUE) group of a header band, or a K status string.
+        score counts the record's numbers the reading agrees with, which picks the group of a band that
+        holds two side by side."""
+        det: dict[str, Any] = {}
+        pct = False
+        if "value" in hdr:
+            vx = hdr["value"]
+            xs = sorted((w[0] + w[2]) / 2 for w in hws)
+            k = xs.index(min(xs, key=lambda x: abs(x - vx)))
+            lo = max(vx - 45, (xs[k - 1] + vx) / 2 if k > 0 else vx - 45)
+            hi = min(vx + 45, (xs[k + 1] + vx) / 2 if k + 1 < len(xs) else vx + 45)
+            cell = [w[4] for w in words if lo <= (w[0] + w[2]) / 2 <= hi]
+            det, pct = _value_cell(cell)
+            if det is None:
+                return "cell-unparsed"
+        else:
+            left = min(hdr.values()) - 30
+            right = min((x for x in starts if x > left), default=None)   # the next group's left edge
+            # a value printed right of the last value column, before the Unit header, is that column's
+            last = max(hdr, key=lambda k: hdr[k])
+            unit_left = min((w[0] for w in hws if w[4].upper() in ("UNIT", "UNITS") and w[0] > hdr[last]),
+                            default=None)
+            seen: dict[str, list] = {}
+            for w in words:
+                xc = (w[0] + w[2]) / 2
+                c = _cell_num(w[4]) if xc >= left and (right is None or xc < right) else None
+                if c is None:
+                    continue
+                col = min(hdr, key=lambda k: abs(hdr[k] - xc))
+                if abs(hdr[col] - xc) < 28 or (col == last and unit_left is not None
+                                               and hdr[col] < xc < unit_left and xc - hdr[col] < PAST_LAST):
+                    seen.setdefault(col, []).append(c[0])
+                    pct |= c[1]
+            for col, vs in seen.items():
+                if n > 1 and len({repr(v) for v in vs}) > 1:
+                    return "row-ambiguous"   # two stacked lines put two values in one column
+                v = vs[0]
+                if isinstance(v, tuple) and col in ("min", "max"):
+                    det.setdefault("min", -v[1])
+                    det.setdefault("max", v[1])
+                else:
+                    det[col] = v
+        return det, pct, _agree(rec, det)
+
     def columns(self, rec: dict) -> dict:
         """Independent min/nom/typ/max (and unit) for a record's row, from word x-positions under the
         nearest MIN/TYP/MAX (or VALUE) header above the row that holds the quote (find_row).
@@ -358,14 +405,14 @@ class DocText:
             return {"status": "no-words"}
         headers = []
         for yc, ws in bands:
-            h = {HDR[w[4].upper()]: (w[0] + w[2]) / 2 for w in ws if w[4].upper() in HDR}
-            if len(h) >= 2:
-                headers.append((yc, h, ws))
+            groups = _hdr_groups(ws)
+            if groups:
+                headers.append((yc, groups, ws))
                 continue
             up = [w[4].upper() for w in ws]
             if len(ws) <= 8 and any(u in VALUE_HDR for u in up) and any(u in ("UNIT", "UNITS") for u in up):
                 v = next(w for w in ws if w[4].upper() in VALUE_HDR)
-                headers.append((yc, {"value": (v[0] + v[2]) / 2}, ws))
+                headers.append((yc, [{"value": (v[0] + v[2]) / 2}], ws))
         if not headers:
             return {"status": "no-header"}
         row = self.find_row(bands, qn)
@@ -378,47 +425,24 @@ class DocText:
         above = [h for h in headers if h[0] < yc]
         if not above:
             return {"status": "no-header-above"}
-        hy, hdr, hws = above[-1]
-        det: dict[str, Any] = {}
-        pct = False
-        if "value" in hdr:
-            vx = hdr["value"]
-            xs = sorted((w[0] + w[2]) / 2 for w in hws)
-            k = xs.index(min(xs, key=lambda x: abs(x - vx)))
-            lo = max(vx - 45, (xs[k - 1] + vx) / 2 if k > 0 else vx - 45)
-            hi = min(vx + 45, (xs[k + 1] + vx) / 2 if k + 1 < len(xs) else vx + 45)
-            cell = [w[4] for w in words if lo <= (w[0] + w[2]) / 2 <= hi]
-            det, pct = _value_cell(cell)
-            if det is None:
-                return {"status": "cell-unparsed"}
+        hy, groups, hws = above[-1]
+        starts = sorted(min(g.values()) - 30 for g in groups)
+        best: tuple | None = None
+        for gi, hdr in enumerate(groups):
+            r = self._read_group(hdr, hws, words, n, starts, rec)
+            if isinstance(r, str):
+                return {"status": r}
+            det, pct, score = r
+            if det and (best is None or score > best[0]):
+                best = (score, det, pct, hdr)
+        if best is None:
+            det, pct, hdr = {}, False, groups[0]
         else:
-            left = min(hdr.values()) - 30
-            # a value printed right of the last value column, before the Unit header, is that column's
-            last = max(hdr, key=lambda k: hdr[k])
-            unit_left = min((w[0] for w in hws if w[4].upper() in ("UNIT", "UNITS") and w[0] > hdr[last]),
-                            default=None)
-            seen: dict[str, list] = {}
-            for w in words:
-                xc = (w[0] + w[2]) / 2
-                c = _cell_num(w[4]) if xc >= left else None
-                if c is None:
-                    continue
-                col = min(hdr, key=lambda k: abs(hdr[k] - xc))
-                if abs(hdr[col] - xc) < 28 or (col == last and unit_left is not None
-                                               and hdr[col] < xc < unit_left and xc - hdr[col] < PAST_LAST):
-                    seen.setdefault(col, []).append(c[0])
-                    pct |= c[1]
-            for col, vs in seen.items():
-                if n > 1 and len({repr(v) for v in vs}) > 1:
-                    return {"status": "row-ambiguous"}   # two stacked lines put two values in one column
-                v = vs[0]
-                if isinstance(v, tuple) and col in ("min", "max"):
-                    det.setdefault("min", -v[1])
-                    det.setdefault("max", v[1])
-                else:
-                    det[col] = v
+            _, det, pct, hdr = best
         unit = None
-        uh = [w for w in hws if w[4].upper() in ("UNIT", "UNITS")]
+        gx = max(hdr.values())
+        uh = sorted((w for w in hws if w[4].upper() in ("UNIT", "UNITS")),
+                    key=lambda w: (w[0] < gx, abs(w[0] - gx)))
         if uh:
             ux = (uh[0][0] + uh[0][2]) / 2
 
@@ -443,6 +467,32 @@ class DocText:
         if unit is None and pct:
             unit = "%"
         return {"status": "ok", "det": det, "unit": unit}
+
+
+def _hdr_groups(ws: list) -> list[dict]:
+    """The MIN/TYP/MAX groups of one band, left to right: a word whose key the current group has
+    already starts the next (two groups side by side). One group counts only with two or more
+    words, or a lone one beside a UNIT header (a table whose only value column is TYP)."""
+    groups: list[dict] = []
+    for w in sorted((w for w in ws if w[4].upper() in HDR), key=lambda w: w[0]):
+        k = HDR[w[4].upper()]
+        if not groups or k in groups[-1]:
+            groups.append({})
+        groups[-1][k] = (w[0] + w[2]) / 2
+    has_unit = any(w[4].upper() in ("UNIT", "UNITS") for w in ws)
+    if len(groups) == 1 and len(groups[0]) == 1 and not (has_unit and len(ws) <= 8):
+        return []
+    return [g for g in groups if len(g) >= 2 or (len(groups) == 1 and has_unit)]
+
+
+def _agree(rec: dict, det: dict) -> int:
+    """How many of the record's numeric keys equal the reading's, to choose between groups."""
+    n = 0
+    for k in NUMERIC_KEYS:
+        lv, dv = rec.get(k), det.get(k)
+        if isnum(lv) and isinstance(dv, float | int) and math.isclose(float(lv), dv, rel_tol=1e-9):
+            n += 1
+    return n
 
 
 ROW_SPAN = 12.0      # points: stacked lines of one table row
