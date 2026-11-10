@@ -440,9 +440,20 @@ candidate mating rule) and **confirmed** by the engineer.
  "sheets": {"<sheet>": {"page": 3, "parent": null}},
  "components": {"U3": {"mpn": "...", "value": "...", "dni": false, "dni_evidence": [], "parts": ["U3"],
                        "sheets": ["..."], "pins": {"1": {"name": "PA0", "net": "NET_A"}}, "pages": [7]}},
- "nets": {"3V3": {"pins": ["U3-19", "R5-1"], "sheets": ["..."], "labels": 4, "ports": 2, "auto": false}},
+ "nets": {"3V3": {"pins": ["U3-19", "R5-1"], "sheets": ["..."], "labels": 4, "ports": 2, "auto": false,
+                  "aliases": ["NetC4_1"]}},
  "counts": {"geometry": {}}, "issues": []}
 ```
+
+**How nets join.** Each sheet's `Nets > NET` entry is a sheet net. Sheet nets of the same name are
+one board net (Altium joins those through ports, sheet entries and power ports). Sheet nets that carry
+a port of the same name on different sheets are one board net too, whatever each sheet calls the net;
+the join is transitive. The joined net takes the first of its names, in natural order, that is not
+auto-named (else the first name), and the other names are listed in its `aliases`; every query reads
+the one net with the pins of all its sheets. A port that sits on a net, has no partner (the same port
+name on another sheet, a sheet-level port of that name, or a net of that name on another sheet) is an
+`issues` entry. The geometric cross-check (`geom.py`) still compares per sheet and per name, never
+across a port, so its `crosscheck` mark on a joined net is the picked name's sheet net only.
 
 `issues` holds oddities worth an engineer's look (e.g. a printed comment naming a
 different part than the MPN parameter). `bom.json` rows are `{ref, mpn, value, dni,

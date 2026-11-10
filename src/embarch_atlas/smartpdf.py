@@ -161,7 +161,7 @@ def outline_tree(toc: list) -> list[dict[str, Any]]:
 
 
 def read_outline(toc: list) -> dict[str, dict[str, Any]]:
-    """Sheets -> {page, parent, components {sheet_ref: [(phys_ref, pin)]}, nets {net: {pins, labels, ports}}, ports}.
+    """Sheets -> {page, parent, components {sheet_ref: [(phys_ref, pin)]}, nets {net: {pins, labels, ports, port_names}}, ports}.
 
     A sheet is any outline node with a `Components`, `Nets` or `Ports` child;
     its parent is the nearest ancestor sheet.
@@ -182,19 +182,89 @@ def read_outline(toc: list) -> dict[str, dict[str, Any]]:
                 for comp in (secs.get("Components") or {"children": []})["children"]:
                     S["components"][comp["title"]] = [physical_ref(comp["title"], p["title"]) for p in comp["children"]]
                 for net in (secs.get("Nets") or {"children": []})["children"]:
-                    N = S["nets"].setdefault(net["title"], {"pins": [], "labels": 0, "ports": 0})
+                    N = S["nets"].setdefault(net["title"], {"pins": [], "labels": 0, "ports": 0, "port_names": []})
                     for kind in net["children"]:
                         key = NET_KINDS.get(kind["title"])
                         if key == "pins":
                             N["pins"] += [c["title"] for c in kind["children"]]
                         elif key:
                             N[key] += len(kind["children"])
+                            if key == "ports":
+                                N["port_names"] += [c["title"] for c in kind["children"]]
                 S["ports"] = sorted(p["title"] for p in (secs.get("Ports") or {"children": []})["children"])
                 this = name
             visit([c for c in node["children"] if c["title"] not in SECTIONS or not secs], this)
 
     visit(outline_tree(toc), None)
     return sheets
+
+
+def join_board_nets(sheets: dict[str, dict[str, Any]], issues: list[str]
+                    ) -> tuple[dict[str, dict[str, Any]], dict[str, list[str]]]:
+    """Board nets from the sheets' nets: same name is one net (Altium joins those through ports, sheet
+    entries and power ports), and so are nets that carry a port of the same name on different sheets,
+    whatever each sheet calls the net. The joined net takes the first name that is not auto-named, in
+    natural order, else the first name; the others go to `aliases`. A port with no partner on another
+    sheet (no port or sheet-level port of that name, and no net of that name) goes to `issues`.
+    """
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    port_nets: dict[str, set[str]] = defaultdict(set)  # port name -> net names carrying it
+    port_sheets: dict[str, set[str]] = defaultdict(set)
+    net_sheets: dict[str, set[str]] = defaultdict(set)
+    for sname in sorted(sheets, key=natural_key):
+        S = sheets[sname]
+        for p in S["ports"]:
+            port_sheets[p].add(sname)
+        for net, N in S["nets"].items():
+            find(net)
+            net_sheets[net].add(sname)
+            for p in N.get("port_names", []):
+                port_nets[p].add(net)
+                port_sheets[p].add(sname)
+    for nets_of in port_nets.values():
+        first, *rest = sorted(nets_of)
+        for n in rest:
+            parent[find(n)] = find(first)
+    for p, nets_of in sorted(port_nets.items()):
+        if len(port_sheets[p]) < 2 and not (net_sheets.get(p, set()) - port_sheets[p]):
+            sh = ", ".join(sorted(port_sheets[p], key=natural_key))
+            issues.append(f"port {p} on sheet {sh} (net {', '.join(sorted(nets_of))}) has no partner on another sheet")
+
+    members: dict[str, list[str]] = defaultdict(list)
+    for net in net_sheets:
+        members[find(net)].append(net)
+    name_of: dict[str, str] = {}
+    aliases: dict[str, list[str]] = {}
+    for names in members.values():
+        names.sort(key=natural_key)
+        pins = {pid for n in names for sn in net_sheets[n] for pid in sheets[sn]["nets"][n]["pins"]}
+        pick = next((n for n in names if not is_auto_net(n, sorted(pins))), names[0])
+        for n in names:
+            name_of[n] = pick
+        if len(names) > 1:
+            aliases[pick] = [n for n in names if n != pick]
+    nets: dict[str, dict[str, Any]] = {}
+    label_only: dict[str, list[str]] = defaultdict(list)
+    for sname in sorted(sheets, key=natural_key):
+        for net, N in sheets[sname]["nets"].items():
+            b = name_of[net]
+            B = nets.setdefault(b, {"pins": set(), "sheets": set(), "labels": 0, "ports": 0,
+                                    "aliases": aliases.get(b, [])})
+            B["pins"] |= set(N["pins"])
+            B["sheets"].add(sname)
+            B["labels"] += N["labels"]
+            B["ports"] += N["ports"]
+            if N["labels"] and not N["ports"]:
+                label_only[b].append(sname)
+    return nets, label_only
 
 
 # ---------------------------------------------------------------- page layer
@@ -634,19 +704,9 @@ def parse_all(pdf: Path, board: str, source_file: str | None = None, geometry: b
             for _, pin in pins:
                 P["pins"].setdefault(pin, {"name": None, "net": None})
 
-    # board nets: one per name (Altium joins same-named nets through ports, sheet entries and power ports)
+    # board nets: one per name, then nets that meet through the same off-sheet port are one net
     refs = set(phys)
-    nets: dict[str, dict[str, Any]] = {}
-    label_only: dict[str, list[str]] = defaultdict(list)
-    for sname in sorted(sheets, key=natural_key):
-        for net, N in sheets[sname]["nets"].items():
-            B = nets.setdefault(net, {"pins": set(), "sheets": set(), "labels": 0, "ports": 0})
-            B["pins"] |= set(N["pins"])
-            B["sheets"].add(sname)
-            B["labels"] += N["labels"]
-            B["ports"] += N["ports"]
-            if N["labels"] and not N["ports"]:
-                label_only[net].append(sname)
+    nets, label_only = join_board_nets(sheets, issues)
     for net, shs in sorted(label_only.items()):
         if len(nets[net]["sheets"]) > 1 and shs:
             issues.append(f"net {net} reaches sheet(s) {', '.join(sorted(shs, key=natural_key))} only through a net label "
@@ -753,6 +813,8 @@ def parse_all(pdf: Path, board: str, source_file: str | None = None, geometry: b
         pins = sorted(B["pins"], key=natural_key)
         net_out[net] = {"pins": pins, "sheets": sorted(B["sheets"], key=natural_key),
                         "labels": B["labels"], "ports": B["ports"], "auto": is_auto_net(net, pins)}
+        if B["aliases"]:
+            net_out[net]["aliases"] = B["aliases"]
 
     all_pins = [(r, p) for r, c in components.items() for p in c["pins"]]
     counts = {

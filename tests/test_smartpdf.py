@@ -87,7 +87,10 @@ def outline(sheets: dict[str, dict]) -> list[list]:
             if N.get("labels"):
                 toc.append([6, "NetLabels", pg])
                 toc += [[7, net, pg] for _ in range(N["labels"])]
-            if N.get("ports"):
+            if N.get("port_names"):  # ports named apart from the net they sit on
+                toc.append([6, "Ports", pg])
+                toc += [[7, p, pg] for p in N["port_names"]]
+            elif N.get("ports"):
                 toc.append([6, "Ports", pg])
                 toc += [[7, net, pg] for _ in range(N["ports"])]
         if S.get("ports"):
@@ -326,3 +329,59 @@ def test_without_popups_the_netlist_still_reads(tmp_path):
     nl, bom = sp.parse(build_pdf(tmp_path / "nopop.pdf", with_popups=False), "T")
     assert nl["counts"]["pins_on_net"] == 18 and nl["counts"]["parts_with_mpn"] == 0
     assert any("component parameters" in i for i in nl["issues"])
+
+
+# ---------------------------------------------------------------- nets joined through an off-sheet port
+
+PORT_SHEETS = {
+    "Power": {"page": 1, "components": {"U1": ["U1-1", "U1-2"], "R1": ["R1-1", "R1-2"], "U2": ["U2-1"]}, "nets": {
+        "RAIL_A": {"pins": ["U1-1", "R1-1"], "port_names": ["RAIL"]},
+        "GND": {"pins": ["U1-2", "R1-2"]},
+        "NetU2_1": {"pins": ["U2-1"], "port_names": ["STRAY"]},
+    }, "ports": ["RAIL"]},
+    "Load": {"page": 2, "components": {"C1": ["C1-1", "C1-2"], "TP1": ["TP1-1"]}, "nets": {
+        "NetC1_1": {"pins": ["C1-1"], "port_names": ["RAIL"]},
+        "GND": {"pins": ["C1-2"]},
+        "NetTP1_1": {"pins": ["TP1-1"]},
+    }, "ports": ["RAIL"]},
+}
+
+
+def build_port_pdf(path: Path) -> Path:
+    doc = pymupdf.open()
+    doc.new_page(width=600, height=400)
+    doc.new_page(width=600, height=400)
+    doc.set_toc(outline(PORT_SHEETS))
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def test_nets_meeting_through_a_port_are_one_net(tmp_path):
+    nl, _ = sp.parse(build_port_pdf(tmp_path / "p.pdf"), "T", "p.pdf", geometry=False)
+    N = nl["nets"]
+    # RAIL_A (Power) and NetC1_1 (Load, auto-named) meet at port RAIL: one net, both sheets' pins, the named one wins
+    assert "NetC1_1" not in N
+    assert N["RAIL_A"]["pins"] == ["C1-1", "R1-1", "U1-1"] and N["RAIL_A"]["sheets"] == ["Load", "Power"]
+    assert N["RAIL_A"]["aliases"] == ["NetC1_1"]
+    assert nl["components"]["C1"]["pins"]["1"]["net"] == "RAIL_A" == nl["components"]["R1"]["pins"]["1"]["net"]
+    # a same-name join is unchanged, and no net without a join grows an alias
+    assert N["GND"]["pins"] == ["C1-2", "R1-2", "U1-2"] and "aliases" not in N["GND"]
+    assert "aliases" not in N["NetTP1_1"]
+    # a port with no partner on another sheet is an issue; the joined RAIL is not
+    assert any(i.startswith("port STRAY on sheet Power") for i in nl["issues"])
+    assert not any("port RAIL" in i for i in nl["issues"])
+
+
+def test_net_trace_sees_both_sheets_of_a_joined_net(tmp_path):
+    from embarch_atlas import query
+    from embarch_atlas.common import write_json
+    pdf = build_port_pdf(tmp_path / "p.pdf")
+    adir = tmp_path / "atlas"
+    assert cli.main(["--atlas-dir", str(adir), "schematic", str(pdf), "--board", "T", "--no-geometry"]) == 0
+    at = adir / "atlases" / "core@000000000002"
+    write_json(at / "atlas.json", {"id": "core@000000000002", "commit": "0" * 40, "schematic_boards": ["T"]})
+    write_json(adir / "current.json", {"matches": [{"atlas": "core@000000000002"}]})
+    out = query.net_trace(query.Atlas(adir), "T:RAIL_A")
+    assert "(3 pins)" in out and "T:U1-1" in out and "T:R1-1" in out  # the Power sheet's pins
+    assert "caps (1): C1" in out  # the Load sheet's pin, folded as a decoupling cap
