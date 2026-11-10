@@ -14,7 +14,7 @@ The rungs start from what the BOM knows, the MPN, and look for it in the supplie
 number no token pattern can read (`QRS7TUV`, `88LOG2G11`, a mixed-case family) is still found. Each gives
 `{mpn, file, rung, evidence}`; strongest first:
 
-- `exact`: the normalised MPN in the document's text. On pages 1-3 or an ordering-information page it
+- `exact`: the normalised MPN in the document's text. On page 1 or an ordering-information page it
   **covers**. Elsewhere it is a proposal: a datasheet can name another part in a typical-application note.
 - `link`: the schematic's datasheet link names this file (URL basename, ignoring case and query) or is
   the file's Zone.Identifier HostUrl. **Covers.**
@@ -54,9 +54,9 @@ PASSIVE = {"R", "C", "L", "FB", "RN", "RA", "CR", "TP", "NT", "MH", "FID", "H", 
 DOC_KINDS = ("datasheet", "reference-manual", "errata", "other")    # what a part token may cover a part with
 MATCH_KINDS = ("datasheet", "reference-manual", "other")            # what a rung or a confirmation may
 MATCHES_FILE = "matches.json"
-MATCH_VERSION = 1       # bump when a rung changes: inventory/matches.json is keyed on it
+MATCH_VERSION = 2       # bump when a rung changes: inventory/matches.json is keyed on it
 MIN_STEM = 5
-FRONT_PAGES = 3         # `exact` on these covers
+FRONT_PAGES = inventory.FRONT_PAGES    # `exact` on these covers
 STEM_PAGES = 2
 MCU_RM_MIN_PAGES = 300  # a document this long that names the MCU may be its only register documentation
 ORDERING = re.compile(r"\border(?:ing)?\s+(?:information|info|guide|codes?|numbers?|table)\b|\bpart\s+numbering\b", re.I)

@@ -905,3 +905,34 @@ def test_confirming_the_reference_manual_reaches_a_prepped_doc_json(tmp_path):
     dj = _prep_into(adir, src, "rm.pdf")
     assert ask(adir, "--confirm", ms.RM_TOKEN, "--file", "rm.pdf") == 0
     assert read_json(dj)["kind"] == "reference-manual"
+
+
+# ---------------------------------------------------------------- a part named in passing
+
+def _passing(tmp_path):
+    adir, src = project_with(tmp_path, {"U2": part("ALPHA12X"), "U3": part("BRAVO34Y")})
+    make_pdf(src / "alpha.pdf", [f"ALPHA12X load switch\nFeatures\n{FILLER}", f"Compare with the BRAVO34Y\n{FILLER}"])
+    inv.run(adir)
+    return adir
+
+
+def test_a_part_named_on_page_2_of_another_datasheet_is_not_covered(tmp_path):
+    rows = rows_of(ms.analyse(_passing(tmp_path)))
+    assert rows["ALPHA12X"]["covered_by"] == ["alpha.pdf"]
+    assert rows["BRAVO34Y"]["covered_by"] == []
+    assert [(p["file"], p["rung"]) for p in rows["BRAVO34Y"]["proposals"]] == [("alpha.pdf", "exact")]
+
+
+def test_a_part_named_on_page_2_is_not_a_part_token_of_the_document(tmp_path):
+    adir = _passing(tmp_path)
+    doc = read_json(adir / "inventory" / "manifest.json")["documents"][0]
+    assert "ALPHA12X" in doc["parts"] and "BRAVO34Y" not in doc["parts"]
+
+
+def test_a_part_in_the_title_or_on_page_1_still_covers(tmp_path):
+    adir, src = project_with(tmp_path, {"U2": part("ALPHA12X"), "U3": part("BRAVO34Y")})
+    make_pdf(src / "a.pdf", [f"Features\n{FILLER}"], {"title": "ALPHA12X load switch"})
+    make_pdf(src / "b.pdf", [f"BRAVO34Y buffer\nFeatures\n{FILLER}"])
+    inv.run(adir)
+    rows = rows_of(ms.analyse(adir))
+    assert rows["ALPHA12X"]["covered_by"] == ["a.pdf"] and rows["BRAVO34Y"]["covered_by"] == ["b.pdf"]

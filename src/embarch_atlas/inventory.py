@@ -49,6 +49,7 @@ from .pdftext import text_layer, text_layer_of_pdf
 
 TOOL = f"embarch-atlas/{__version__} inventory"
 PART_LIMIT = 6          # part-number tokens kept per document
+FRONT_PAGES = 1         # a part named on these is the document's own; later pages name other parts in passing
 
 KINDS = ("schematic", "datasheet", "reference-manual", "errata", "appnote", "prd", "spreadsheet", "notes", "other")
 WORD_EXTS = (".docx", ".doc")
@@ -343,7 +344,7 @@ def detect_ids(kind: str, info: dict[str, str], pages: list[str]) -> dict[str, A
             found(date=m.group(1), why=f"generic date '{m.group(1)}'")
     if kind in ("schematic", "prd"):
         return d  # a schematic's parts come from its BOM (`schematic`), a PRD has none
-    blob = " ".join([info.get("Title", ""), info.get("Keywords", ""), info.get("Subject", "")] + pages[:3])
+    blob = " ".join([info.get("Title", ""), info.get("Keywords", ""), info.get("Subject", "")] + pages[:FRONT_PAGES])
     counts: dict[str, int] = {}
     for t in PART_TOKEN.findall(blob):
         if NOT_PART.match(t) or PACKAGE.match(t) or VENDOR_NUMBER.match(t) or (d["doc_no"] and t.startswith(d["doc_no"])):

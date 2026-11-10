@@ -747,8 +747,8 @@ newer freeze of the same files marks the older entry `superseded` (kept, never d
   information in the outline. `Acrobat Web Capture` and `Allegro MicroSystems` are not EDA tools.
 - **`appnote`**: `application note`, `application report`, `app note`, `user guide`, `technical note` or `tech note` in the title,
   the file name or the top of page 1, or an ST `AN`/`UM`/`TN` document number. It is tested before the datasheet
-  rule, and before a "reference manual" mentioned in the first page's text, which a note may well cite; only a
-  title saying reference manual comes first. What a document calls itself beats what its first page cites: a
+  rule, and before a "reference manual" mentioned in the first page's text, which a note may well cite; a
+  title saying reference manual comes first, and so does a user's guide that is one (below). What a document calls itself beats what its first page cites: a
   title or file name saying datasheet, or a first page saying so before it names a note, keeps it out of this
   kind, since a datasheet's front page often lists its companion note. An app
   note may name parts and never by itself covers one: where a token or a rung finds one it is **supporting
@@ -779,6 +779,15 @@ tokens match its MPN, or by one the engineer confirmed, or, when neither holds, 
 is **proposed** when only a weaker rung ties a document to it, and **missing** with none. A proposal is one row
 of the ✓/✕ table that opens `missing.md`, so a file already supplied is confirmed, not asked for again.
 
+**A part named in passing is not covered.** A datasheet names its own part in its title, keywords, subject or on
+page 1; a comparison table or a companion-part sentence on page 2 names another. So a document's part tokens
+(`inventory.detect_ids`, up to `PART_LIMIT`) are read from those and page 1 only (`FRONT_PAGES = 1`), and `exact`
+covers on page 1 or an ordering-information page alone. A part named anywhere later is at most proposed, a row to
+confirm; `missing --reject` stays for a mention that still lands on page 1. Chosen over keeping pages 1-3, which
+silently stopped asking for the datasheet of any part a neighbour's page 2 mentioned. Measured only on synthetic
+fixtures: a real datasheet whose own part first appears on page 2 (a long cover page) is proposed, not covered.
+A manifest written before this keeps its old tokens until `inventory` runs again.
+
 Part tokens (`family_regex`) require two digits on purpose, so a bare vendor family never covers every part, and
 that means they cannot read every shape: `QRS7TUV`, `88LOG2G11`, a mixed-case `abC54X20`. The rungs go the other
 way round. The BOM's MPNs are known, so each is looked for in the supplied documents (kinds `datasheet`,
@@ -786,7 +795,7 @@ way round. The BOM's MPNs are known, so each is looked for in the supplied docum
 
 | Rung | Matches | Counts as |
 |---|---|---|
-| `exact` | the normalised MPN as a whole token in the text, on pages 1-3 or an ordering-information page | covered |
+| `exact` | the normalised MPN as a whole token in the text, on page 1 or an ordering-information page | covered |
 | `link` | the schematic's datasheet-link parameter: its URL basename is the file's name, ignoring case and query, or it equals the file's Zone.Identifier HostUrl | covered |
 | `exact` | the normalised MPN anywhere else | proposed: a datasheet can name another part in a typical-application note |
 | `stem` | a stem of the MPN (packaging cut after `,` `+` `/` `#`, then trailing characters one at a time, down to 5, holding a letter and a digit), as a whole token or token prefix, ignoring case, in the file name, the PDF title or pages 1-2 | proposed: a stem also matches a sibling part |
