@@ -225,3 +225,27 @@ def test_status_marks_the_session_map_stale_and_clears_it(tmp_path):
     (adir / "MAP.md").write_text(project.STALE_MARK + " old\n" + fresh)
     project.status(adir)
     assert (adir / "MAP.md").read_text() == fresh
+
+
+def test_init_writes_a_placeholder_map_that_join_replaces_and_status_leaves_alone(tmp_path):
+    fw = make_fw(tmp_path)
+    assert cli.main(["init", str(fw)]) == 0
+    adir = fw / "embarch" / "atlas"
+    mp = adir / "MAP.md"
+    text = mp.read_text()
+    assert text.startswith(project.NO_ATLAS_HEAD)
+    assert "/atlas-translate-docs" in text and "/atlas-build" in text
+    assert not project.MAP_HEAD.match(text.splitlines()[0])         # never read as an atlas's map
+    assert project.IMPORT_LINE in (fw / "CLAUDE.local.md").read_text().split()
+    head = git(fw, "rev-parse", "HEAD")
+    project.status(adir)                                            # no atlas yet: nothing to mark stale
+    assert mp.read_text() == text
+    stamp(adir, "core@000000000000", commit="0" * 40, schematics={})
+    project.status(adir)
+    assert mp.read_text() == text                                   # a stale atlas does not touch the placeholder
+    assert cli.main(["init", str(fw)]) == 0
+    assert mp.read_text() == text                                   # a second init keeps it
+    real = f"# core@{head[:12]}: hardware atlas for target `core`\n\nbody\n"
+    mp.write_text(real)
+    assert cli.main(["init", str(fw)]) == 0
+    assert mp.read_text() == real                                   # and never overwrites a real map

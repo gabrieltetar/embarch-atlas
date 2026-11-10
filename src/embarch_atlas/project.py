@@ -199,11 +199,25 @@ def render_config(fw: Path, west_topdir: Path | None, sources_rel: str, sources_
     return "\n".join(L)
 
 
+NO_ATLAS_HEAD = "# No hardware atlas is built yet"
+NO_ATLAS_MAP = (
+    NO_ATLAS_HEAD + "\n\n"
+    "`CLAUDE.local.md` imports this file, and `embarch-atlas join` replaces it with the real map once an atlas's\n"
+    "commit is HEAD. Until then there is no atlas: do not answer a hardware question (pin, net, part, register,\n"
+    "limit, timing) from memory; say there is no atlas and ask the engineer.\n\n"
+    "Next: `/atlas-translate-docs` turns the hardware documents under the sources dir into distillations, then\n"
+    "`/atlas-build` builds the atlas for HEAD and joins it. First fill in `atlas.toml` (`[mcu]`, `[[boards]]`, `[[targets]]`).\n"
+)
+
+
 def init(fw: Path, atlas_dir: Path | None = None, sources_rel: str = DEFAULT_SOURCES) -> tuple[Path, bool]:
-    """Write atlas.toml unless it exists. Returns (path, written)."""
+    """Write atlas.toml unless it exists, and a placeholder MAP.md (what `CLAUDE.local.md` imports) when
+    there is none, so a session before the first atlas is told there is none. Returns (path, written)."""
     fw = fw.resolve()
     adir = Path(atlas_dir).resolve() if atlas_dir else fw / "embarch" / "atlas"
     path = adir / CONFIG_NAME
+    if not (adir / "MAP.md").exists():
+        common.write_text(adir / "MAP.md", NO_ATLAS_MAP)
     if path.exists():
         return path, False
     sources = fw / sources_rel

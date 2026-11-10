@@ -276,6 +276,10 @@ document's page, beside this one's; a number on neither cited page still fails. 
   root and resolves the import relative to it
   (https://code.claude.com/docs/en/memory.md). The MAP is byte-stable, so it stays
   in the cached prefix.
+- Between `init` and the first atlas the import would resolve to nothing, so `init` writes a placeholder
+  `embarch/atlas/MAP.md` (never over an existing one) saying no atlas is built, not to answer hardware
+  questions from memory, and to run `/atlas-translate-docs` then `/atlas-build`. Its first line is not an
+  atlas header, so `mark_map` leaves it alone and the first `join` that makes an atlas current replaces it.
 - When an atlas becomes current (its commit equals HEAD), `embarch/atlas/MAP.md` is
   replaced by that atlas's MAP. When HEAD moves past it (or a source changes), `status`
   puts a `> **Stale:**` line first in that MAP with the reasons and `/atlas-update`; the line

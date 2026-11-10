@@ -49,7 +49,10 @@ def test_card_path_when_present(tmp_path):
 
 def test_current_follows_head(tmp_path):
     ad, atlas = make_project(tmp_path)
+    from embarch_atlas import project
+    (ad / "MAP.md").write_text(project.NO_ATLAS_MAP)                # what `init` leaves before the first join
     run_join(ad, atlas)
+    assert project.NO_ATLAS_HEAD not in (ad / "MAP.md").read_text()  # the first join replaced it
     cur = read_json(ad / "current.json")
     assert any(m["atlas"] == atlas.name for m in cur["matches"])
     assert (ad / "MAP.md").read_bytes() == (atlas / "MAP.md").read_bytes()
