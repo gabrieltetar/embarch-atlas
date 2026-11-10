@@ -342,6 +342,10 @@ These settle cases the rules above leave open. They were each hit on a real data
   names the field once: both registers' field records take the name the diagram prints, and a
   `doc-artefact` quirk says the RAM field carries the NV name.
 - A pin table with two packages: `pin: [<number>, <ball>]` in one record per name.
+- A part whose pinout differs by package (pin 5 is VCC on most, N.C. on two): one record per package
+  for that number, each with `package` as the datasheet names it (`SOT-23-5`). A pin that is the same
+  on every package gets no `package`. The engineer declares which package the board has
+  (`boards/bindings.json` `packages`); without it the join calls such a pin ambiguous.
 - An MCU pin's I/O structure (`FT`, `FT_fa`, `TT_a`, `RST, FT`) goes in `io`, exactly as printed;
   `type` stays for od/pp/analog/supply/ground. The join reads `io` for 5 V tolerance.
 

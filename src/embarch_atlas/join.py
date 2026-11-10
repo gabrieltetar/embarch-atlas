@@ -15,7 +15,11 @@ Optional engineer-supplied tables, used only when present:
   or `{"part", "fixed": "0x6B"}`) for parts whose datasheet is not translated yet.
 - `boards/bindings.json`: `{"compat_parts": {"<compatible>": "<MPN prefix>"},
   "prop_pins": {"<compatible>": {"<prop>": "<part pin name>"}}, "rails": ["<regex>"],
-  "grounds": ["<regex>"], "dt_intent": {"<node path | label | peripheral>": "<why it has no driver>"}}`.
+  "grounds": ["<regex>"], "packages": {"<ref | board:ref>": "<package as the datasheet names it>"},
+  "dt_intent": {"<node path | label | peripheral>": "<why it has no driver>"}}`.
+  `packages` states a board part's package, so a `pin` record that carries a `package` is read for that
+  package only (a record with none applies to all); with none stated, a pin number the datasheet names
+  differently per package is ambiguous (`mismatch.py`: `pin-package-ambiguous`), never resolved to the first.
   A `dt_intent` entry folds that node's `dt-no-driver` candidate into the expected counts.
 """
 from __future__ import annotations
@@ -426,24 +430,73 @@ class Join:
                     best = ((ports, len(pins)), b.label, r)
         return (best[1], best[2]) if best else None
 
-    def part_pin_name(self, board: str, key: str) -> str | None:
-        """A part pin's name: the datasheet's pin record (by number/ball) first, else the netlist symbol."""
-        ref, num = split_key(key)
+    def part_package(self, board: str, ref: str) -> str | None:
+        """The package the engineer declared for a board part (`boards/bindings.json` `packages`, keyed
+        `<board>:<ref>` or `<ref>`), or None when none is declared."""
+        decl = self.bindings.get("packages") or {}
+        pkg = decl.get(f"{board}:{ref}", decl.get(ref))
+        return str(pkg) if pkg else None
+
+    def pin_lookup(self, board: str, ref: str, num: Any) -> tuple[list[tuple[str, dict]], bool]:
+        """(the part's pin records for this pin number or ball, ambiguous). With a declared package the
+        records are those for it plus any with no `package`. Without one, when the records for the number
+        carry a `package` and differ in name, `ambiguous` is true and the list holds every candidate:
+        callers must not take the first."""
+        found = []
         for d in self.part_docs.get((board, ref), []):
             for r in self.docs.records(d, "pin"):
                 pins = r.get("pin") if isinstance(r.get("pin"), list) else [r.get("pin")]
                 if str(num) in [str(x) for x in pins]:
-                    return r.get("name")
+                    found.append((d, r))
+        want = pkg_norm(self.part_package(board, ref))
+        if want:
+            return [(d, r) for d, r in found if not r.get("package") or pkg_norm(r["package"]) == want], False
+        amb = any(r.get("package") for _, r in found) and len({r.get("name") for _, r in found}) > 1
+        return found, amb
+
+    def pin_ambiguities(self) -> list[dict]:
+        """Every pin of a board part whose number the datasheet names differently per package while no
+        package is declared for the part: one entry per (part, pin number)."""
+        out = []
+        for (board, ref), docs in sorted(self.part_docs.items()):
+            if self.part_package(board, ref):
+                continue
+            nums = {}
+            for d in docs:
+                for r in self.docs.records(d, "pin"):
+                    for x in r.get("pin") if isinstance(r.get("pin"), list) else [r.get("pin")]:
+                        nums.setdefault(str(x), []).append(r)
+            for num, recs in sorted(nums.items()):
+                if any(r.get("package") for r in recs) and len({r.get("name") for r in recs}) > 1:
+                    out.append({"board": board, "part": ref, "pin": num,
+                                "names": {str(r.get("package") or "any package"): r.get("name") for r in recs},
+                                "records": [r.get("id") for r in recs]})
+        return out
+
+    def part_pin_name(self, board: str, key: str) -> str | None:
+        """A part pin's name: the datasheet's pin record (by number/ball, for the part's package) first, else the
+        netlist symbol; a pin the datasheet names differently per package, with no package declared, takes the symbol."""
+        ref, num = split_key(key)
+        found, amb = self.pin_lookup(board, ref, num)
+        if found and not amb:
+            return found[0][1].get("name")
         return self.boards[board].pin_name.get(key)
 
     def part_pin_record(self, board: str, key: str) -> tuple[str, dict] | None:
+        """(doc, pin record) for a part pin, or None: also None for a pin that is ambiguous across packages."""
         ref, num = split_key(key)
         name = self.boards[board].pin_name.get(key)
-        for d in self.part_docs.get((board, ref), []):
-            for r in self.docs.records(d, "pin"):
-                pins = r.get("pin") if isinstance(r.get("pin"), list) else [r.get("pin")]
-                if str(num) in [str(x) for x in pins] or (name and r.get("name") == name):
-                    return d, r
+        found, amb = self.pin_lookup(board, ref, num)
+        if amb:
+            return None
+        if found:
+            return found[0]
+        if name:
+            want = pkg_norm(self.part_package(board, ref))
+            for d in self.part_docs.get((board, ref), []):
+                for r in self.docs.records(d, "pin"):
+                    if r.get("name") == name and (not want or not r.get("package") or pkg_norm(r["package"]) == want):
+                        return d, r
         return None
 
     def generic_pin_record(self, board: str, key: str) -> dict | None:
@@ -621,18 +674,27 @@ def mcu_port(name: str | None) -> str | None:
     return f"P{m[1]}.{int(m[2]):02d}" if m else None
 
 
+def pkg_norm(pkg: Any) -> str:
+    """A package name compared as the datasheet and the engineer may space or case it differently."""
+    return " ".join(str(pkg or "").split()).casefold()
+
+
 def build_pin_map(J: Join) -> list[dict]:
     if not J.mcu:
         return []
     mb, mref = J.mcu
     B = J.boards[mb]
     ds_by_name, ds_by_num = {}, {}
+    want = pkg_norm(J.part_package(mb, mref))
     for d in J.part_docs.get((mb, mref), []):
         for r in J.docs.records(d, "pin"):
-            if r.get("name"):
+            if r.get("name") and (not want or not r.get("package") or pkg_norm(r["package"]) == want):
                 ds_by_name.setdefault(str(r["name"]).split("-")[0].split("/")[0], (d, r))
                 for n in (r["pin"] if isinstance(r.get("pin"), list) else [r.get("pin")]):
                     ds_by_num.setdefault(str(n), (d, r))
+    for amb in J.pin_ambiguities():            # no declared package: an ambiguous number resolves to no datasheet row
+        if (amb["board"], amb["part"]) == (mb, mref):
+            ds_by_num.pop(amb["pin"], None)
     rows = []
     for key in B.pins(mref):
         _, num = split_key(key)

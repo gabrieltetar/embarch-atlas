@@ -32,7 +32,7 @@ COMMON = ("id", "kind", "doc", "p", "q", "src", "prov", "note")
 FACT_KEYS = {
     "limit": ("group", "sym", "param", "cond", "min", "nom", "typ", "max", "unit", "guar"),
     "timing": ("group", "sym", "param", "cond", "min", "nom", "typ", "max", "unit", "edge", "guar"),
-    "pin": ("pin", "name", "dir", "type", "active", "pull", "desc"),
+    "pin": ("pin", "package", "name", "dir", "type", "active", "pull", "desc"),
     "rule": ("cond", "text", "recover", "steps"),
     "register": ("name", "addr", "bank", "width", "reset", "access", "summary", "desc"),
     "field": ("reg", "name", "bits", "reset", "access", "enum", "desc"),

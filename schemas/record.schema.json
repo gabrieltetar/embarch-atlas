@@ -619,6 +619,11 @@
           ],
           "description": "an MCU pin's I/O structure as printed in the datasheet's pin table (FT, FT_fa, TT_a, RST, ...); 5 V tolerance and analog capability come from it"
         },
+        "package": {
+          "description": "the package this record's pin number or ball is for, as the datasheet names it (`SOT-23-5`, `WLCSP25`), when one part's pinout changes with its package. Absent: the record applies to every package. The join reads the records for the board part's declared package (`boards/bindings.json` `packages`) plus those with none, and calls a pin ambiguous when no package is declared and the records for its number differ by package",
+          "type": "string",
+          "minLength": 1
+        },
         "flow": {
           "enum": [
             "source",
@@ -653,7 +658,8 @@
           "pull",
           "desc",
           "io",
-          "flow"
+          "flow",
+          "package"
         ]
       }
     },

@@ -32,7 +32,7 @@ ORDER = [
     "reg-mask-vs-field", "reg-reset-vs-datasheet", "reg-address-unknown", "document-reading-conflict",
     "pinctrl-func-vs-net-name", "polarity-vs-net-name", "open-drain-no-pull", "pull-conflict",
     "pull-to-other-rail", "far-end-level-above-tolerance", "dt-pin-not-connected", "dt-no-binding", "dt-no-driver", "symbol-vs-datasheet",
-    "i2c-identity-unresolved", "reg-comment-vs-datasheet", "dt-limit-needs-formula", "dt-limit-outside-ec",
+    "pin-package-ambiguous", "i2c-identity-unresolved", "reg-comment-vs-datasheet", "dt-limit-needs-formula", "dt-limit-outside-ec",
     "exti-line-shared", "pin-shared-in-dt", "connected-no-dt", "dni-on-path",
     "polarity-resolved",
 ]
@@ -55,6 +55,7 @@ SETTLE = {
     "dt-no-binding": "give the node a compatible and binding, or remove it: no driver can use it",
     "dt-no-driver": "enable the driver (Kconfig) or disable the node: its pinctrl is never applied",
     "symbol-vs-datasheet": "the MCU symbol against the datasheet pinout table",
+    "pin-package-ambiguous": "declare the part's package in boards/bindings.json `packages` (the BOM's footprint says which)",
     "i2c-identity-unresolved": "translate the part's datasheet strap table, or declare it in boards/straps.jsonl",
     "exti-line-shared": "only one port per EXTI line can interrupt (EXTICR selects one): check which one is armed at run time",
     "pin-shared-in-dt": "is the far end a wired-OR (open-drain) line? then sharing is by design",
@@ -329,6 +330,16 @@ def run(J, stamp: dict, pins: dict, netlist_only: bool = False) -> dict:
             if not ok:
                 R.cand("symbol-vs-datasheet", r["key"], f"{r['key']}: symbol says {r['name']}, datasheet says {r['ds_name']}",
                        [r.get("ds_cite") or ""], "MCU symbol pin name vs datasheet")
+
+    # ---- a part whose pin numbers mean different signals per package, with no package declared
+    R.check("pin names per package", "datasheet pin records (`package`), boards/bindings.json packages")
+    for a in J.pin_ambiguities():
+        R.check("pin names per package", "", 1, 0)
+        names = "; ".join(f"{k}: {v}" for k, v in a["names"].items())
+        R.cand("pin-package-ambiguous", f"{a['board']}:{a['part']}-{a['pin']}",
+               f"{a['board']}:{a['part']} pin {a['pin']} is named per package in the datasheet ({names}) and no package is "
+               f"declared for the part, so the join does not name it (the schematic symbol's name stands)",
+               [f"boards/bindings.json packages.{a['part']} (missing)"] + a["records"], "pin names per package")
 
     # ---- open-drain far ends (needs pin records)
     if have_pin_recs and dt_known:

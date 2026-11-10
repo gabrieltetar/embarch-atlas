@@ -434,3 +434,47 @@ def test_a_declared_board_without_a_netlist_is_named_everywhere_the_session_read
     assert read_json(atlas / "inputs.json")["missing_boards"] == []
     st = project.status(ad)
     assert not any("no netlist" in w for r in st["atlases"] for w in r["stale"])
+
+
+def _two_package_pins(ad: Path) -> None:
+    d = ad / "docs" / "sns701@a"
+    recs = [{"id": f"sns701.pin.{n}.{k}", "kind": "pin", "doc": "sns701@a", "p": 3, "q": f"5 {n}", "src": "table",
+             "prov": "llm-verified", "pin": "5", "name": n, "package": pk}
+            for k, (n, pk) in enumerate((("VCC", "SOT-23-5"), ("NC", "WLCSP4")))]
+    write_jsonl(d / "records" / "pin.jsonl", recs)
+
+
+def _join(ad: Path, atlas: Path):
+    stamp = read_json(atlas / "atlas.json")
+    return join.load_join(ad, atlas, stamp, read_json(atlas / "dt.json"), read_json(atlas / "in_use.json"),
+                          log=lambda *a: None)[0]
+
+
+def test_pin_package_declared_resolves_that_package(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    _two_package_pins(ad)
+    write_json(ad / "boards" / "bindings.json", {"packages": {"U1": "wlcsp4"}})
+    J = _join(ad, atlas)
+    assert J.part_pin_name("S", "U1-5") == "NC"
+    assert [(a["board"], a["part"]) for a in J.pin_ambiguities()] == [("M", "U3")]     # the other part, still undeclared
+    write_json(ad / "boards" / "bindings.json", {"packages": {"S:U1": "SOT-23-5"}})
+    assert _join(ad, atlas).part_pin_name("S", "U1-5") == "VCC"
+
+
+def test_pin_package_undeclared_is_ambiguous_not_first(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    _two_package_pins(ad)
+    J = _join(ad, atlas)
+    assert J.part_pin_name("S", "U1-5") is None             # no symbol name either: not the first record's
+    assert J.part_pin_record("S", "U1-5") is None
+    assert sorted((a["board"], a["part"], a["pin"]) for a in J.pin_ambiguities()) == [("M", "U3", "5"), ("S", "U1", "5")]
+    run_join(ad, atlas)
+    rep = read_json(atlas / "mismatches.json")
+    assert {c["key"] for c in rep["candidates"] if c["class"] == "pin-package-ambiguous"} == {"S:U1-5", "M:U3-5"}
+
+
+def test_single_pinout_unchanged(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    J = _join(ad, atlas)
+    assert not J.pin_ambiguities()
+    assert J.part_pin_name("S", "U1-C2") == "ALERT"

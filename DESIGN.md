@@ -96,7 +96,9 @@ boards/system.json              board instances + interfaces (engineer-declared,
 boards/straps.jsonl             optional: address/mode straps when no datasheet record exists yet
 boards/bindings.json            optional: compatible -> MPN, prop -> pin, extra rails, prop_limits
                                 (DT property -> limit record ids, with `times`/`per` for scaled props),
-                                dt_intent (node -> why it is okay without a driver: folds dt-no-driver)
+                                dt_intent (node -> why it is okay without a driver: folds dt-no-driver),
+                                packages (`<ref>` or `<board>:<ref>` -> the part's package, engineer-declared,
+                                as the datasheet's `pin` records `package` name it)
 cache/llm/<key>.json            frozen LLM outputs; second-look verdicts as sl-<key>.json
 cache/kconfig/, cache/dt/       a named build dir's kconfig/dt extraction, keyed by the content it came from
 cache/footprint/<elf sha>.json  one ELF's sections (objdump -h) and sized symbols (nm -l -S), for footprint and stacks
@@ -214,7 +216,7 @@ Kinds and their own fields:
 |---|---|
 | `limit` | `group` (abs, esd, thermal, recommended, ec, i2c, register, application, other), `sym`, `param`, `cond`, `min`, `nom`, `typ`, `max`, `unit`, `fn` (footnote ids), `guar` (production-tested / design / characterization). `±X` is `min: -X, max: X` |
 | `timing` | as `limit`, plus `edge` |
-| `pin` | `pin` (number/ball, or [number, ball]), `name`, `dir`, `type` (od, pp, analog, supply, ...), `io` (an MCU pin's I/O structure as printed: FT, FT_fa, TT_a...), `active`, `pull`, `desc`, `flow` (power and supply pins: source, sink, bidir, sense, local, as the pin table states it) |
+| `pin` | `pin` (number/ball, or [number, ball]), `package` (the package this record's pin is for, as the datasheet names it, when one part's pinout changes with its package; absent: every package; the join reads the records for the board part's `bindings.json` `packages` entry plus those with none, and reports a pin ambiguous (`pin-package-ambiguous`) when no package is declared and the records for its number differ by package, never taking the first), `name`, `dir`, `type` (od, pp, analog, supply, ...), `io` (an MCU pin's I/O structure as printed: FT, FT_fa, TT_a...), `active`, `pull`, `desc`, `flow` (power and supply pins: source, sink, bidir, sense, local, as the pin table states it) |
 | `rule` | `text`, `cond`, `recover`, `steps` (behaviour rule, "OK goes low on fault, latches until EN toggles") |
 | `register` | `name`, `addr` (int or `0x..`), `bank` (the page or bank on a part with paged register maps; absent for the main map; check G, codecheck and the live module key a register on `(bank, addr)`), `width`, `reset` (`0b…`/`0x…`), `access`, `summary` |
 | `field` | `reg` (the register's record id; a field has no `bank` of its own, it takes its register's), `name`, `bits` ([hi, lo]), `reset`, `access` (SystemRDL vocabulary: rw, ro, wo, rclr, woclr, w1s, rsvd), `enum` |
@@ -923,3 +925,6 @@ fixture only).
 
 A native EDA adapter, geometry as a fallback (without anchor
 words) and the vision rung of the schematic ladder, PRD → code trace links.
+
+Reading a board part's package from the BOM's footprint string, or from `variant` records, to fill
+`bindings.json` `packages` (today the engineer states it).
