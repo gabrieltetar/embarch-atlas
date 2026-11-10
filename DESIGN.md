@@ -216,7 +216,7 @@ Kinds and their own fields:
 | `timing` | as `limit`, plus `edge` |
 | `pin` | `pin` (number/ball, or [number, ball]), `name`, `dir`, `type` (od, pp, analog, supply, ...), `io` (an MCU pin's I/O structure as printed: FT, FT_fa, TT_a...), `active`, `pull`, `desc`, `flow` (power and supply pins: source, sink, bidir, sense, local, as the pin table states it) |
 | `rule` | `text`, `cond`, `recover`, `steps` (behaviour rule, "OK goes low on fault, latches until EN toggles") |
-| `register` | `name`, `addr` (int or `0x..`), `bank` (the page or bank on a part with paged register maps; absent for the main map; check G, codecheck and the live module key a register on `(bank, addr)`), `reset` (`0b…`/`0x…`), `access`, `summary` |
+| `register` | `name`, `addr` (int or `0x..`), `bank` (the page or bank on a part with paged register maps; absent for the main map; check G, codecheck and the live module key a register on `(bank, addr)`), `width`, `reset` (`0b…`/`0x…`), `access`, `summary` |
 | `field` | `reg` (the register's record id; a field has no `bank` of its own, it takes its register's), `name`, `bits` ([hi, lo]), `reset`, `access` (SystemRDL vocabulary: rw, ro, wo, rclr, woclr, w1s, rsvd), `enum` |
 | `quirk` | `class` (table-vs-table, text-vs-table, text-vs-text, text-vs-figure, figure-only, footnote-condition, silent-default, must, do-not, absence, variant, doc-artefact, not-prod-tested, narrow-condition, provenance), `text`, `refs` (other fact ids) |
 | `figure` | `fig`, `caption`, `what` (equations: `src: equation`) |
