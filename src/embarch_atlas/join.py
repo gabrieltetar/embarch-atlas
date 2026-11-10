@@ -35,6 +35,7 @@ from typing import Any, Iterable
 from embarch_atlas import answers, coverage
 from embarch_atlas.common import (read_json, read_jsonl, sha256_file, source_files, sources_fingerprint, write_json,
                                    write_text)
+from embarch_atlas.common import board_phrase, no_build
 from embarch_atlas.dt import gpio_pin_name
 
 GROUND_RE = re.compile(r"^(A|D|P|S|C)?GND\w*$|(^|_)(A|D|P|S)?GND(\d+)?(_\w+)?$|^VSS\w*$|^0V$", re.I)
@@ -1085,9 +1086,12 @@ def dt_str(uses: list[dict]) -> str:
 def render_pins_md(stamp: dict, mcu: tuple[str, str] | None, mpn: str | None, rows: list[dict], interfaces: list[dict],
                    i2c: dict, values: list[dict]) -> str:
     L = [f"# Pin/net map: {stamp['id']}", "",
-         f"Target `{stamp['target']}`, Zephyr board `{stamp['board']}`, commit `{stamp['commit']}`. "
+         f"Target `{stamp['target']}`, {board_phrase(stamp)}, commit `{stamp['commit']}`. "
          f"MCU {mcu[0] + ':' + mcu[1] if mcu else '(not found)'} {mpn or ''}. "
-         "Sources: boards/<label>/netlist.json (schematic), this atlas's dt.json (build), docs/*/records (datasheets).", ""]
+         + ("Sources: boards/<label>/netlist.json (schematic), docs/*/records (datasheets). There is no build, so the "
+            "DT column and the I2C and DT-value sections below are empty: that is absence, not a pass."
+            if no_build(stamp) else
+            "Sources: boards/<label>/netlist.json (schematic), this atlas's dt.json (build), docs/*/records (datasheets)."), ""]
     if interfaces:
         L.append("Board-to-board mating: " + "; ".join(
             f"{i['a']}<->{i['b']} {i.get('rule') or 'map'} ({i['status']}"
@@ -1152,7 +1156,11 @@ def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None =
         straps_path: Path | None = None, bindings_path: Path | None = None) -> dict:
     from embarch_atlas import dt as dtmod, graph, mapgen, mismatch
     stamp = read_json(atlas / "atlas.json")
-    if (atlas / "build" / "edt.pickle").is_file():
+    nb = no_build(stamp)
+    if nb:                                        # no Zephyr board yet: no dt.json or in_use.json is written, ever
+        dt, in_use = {"uses": [], "nodes": {}}, {"peripherals": {}}
+        log(f"join: {nb}; the pin map, checks, MAP and graph are made from the schematic and the datasheets only")
+    elif (atlas / "build" / "edt.pickle").is_file():
         dt, in_use = dtmod.run(atlas, ad, svd)
     elif (atlas / "dt.json").is_file():          # build artifacts pruned: the extracted DT stands in
         dt = read_json(atlas / "dt.json")
@@ -1163,9 +1171,9 @@ def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None =
                               bindings_path, log)
     boards, interfaces = J.boards, J.interfaces
     rows = build_pin_map(J)
-    i2c = i2c_join(J, rows) if J.mcu else {"buses": [], "identity": []}
+    i2c = i2c_join(J, rows) if J.mcu and not nb else {"buses": [], "identity": []}
     values = value_checks(J, i2c["identity"])
-    comments = comment_checks(J, stamp, rows) if J.mcu else []
+    comments = comment_checks(J, stamp, rows) if J.mcu and not nb else []
     mpn = J.boards[J.mcu[0]].mpn(J.mcu[1]) if J.mcu else None
     io = [r for r in rows if r["port"]]
     counts = {
@@ -1182,7 +1190,7 @@ def run(ad: Path, atlas: Path, boards_dir: Path | None = None, svd: str | None =
     write_text(atlas / "pins.md", render_pins_md(stamp, J.mcu, mpn, rows, interfaces, i2c, values))
     write_text(atlas / "pin_slice.txt", render_slice(stamp, rows))
     snapshot_inputs(atlas, root, boards, J.docs, sysj, ad, missing_boards(stamp, J.boards))
-    report = mismatch.run(J, stamp, pins)
+    report = mismatch.run(J, stamp, pins, no_build=bool(nb))
     try:                                          # the MAP's RM line reads the worklist of THIS atlas
         from embarch_atlas import update
         update.rm_todo(ad, atlas)

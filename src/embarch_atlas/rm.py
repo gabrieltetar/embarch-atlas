@@ -477,6 +477,10 @@ def map_chapter(name: str, rm: RmDoc, svd=None) -> tuple[str | None, str | None]
 def load_in_use(path: Path) -> tuple[dict, Path]:
     f = path / "in_use.json" if path.is_dir() else path
     if not f.exists():
+        if path.is_dir() and (path / "atlas.json").is_file():
+            from .common import no_board_answer, no_build
+            if no_build(read_json(path / "atlas.json")):
+                raise SystemExit(f"{f}: " + no_board_answer("(the chapters in use come from the peripherals in use)"))
         raise SystemExit(f"{f}: no in_use.json (atlas-build's `join` writes it)")
     return read_json(f), f
 

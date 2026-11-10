@@ -62,7 +62,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from embarch_atlas.common import read_json, write_json
+from embarch_atlas.common import no_board_answer, no_build, read_json, write_json
 
 CHECK = "DT limit properties inside datasheet limits"
 CHECK_SENSE = "DT currents set through a sense resistor have a stated relation"
@@ -1019,6 +1019,8 @@ def run(ad: Path, atlas: Path, log=print) -> dict:
     """Standalone: read the atlas's dt.json/pins.json and boards/bindings.json, write limits.json."""
     from embarch_atlas.join import Docs
     stamp = read_json(atlas / "atlas.json")
+    if no_build(stamp):
+        raise SystemExit(f"{atlas}: " + no_board_answer("(the DT limit properties come from the devicetree)"))
     if not (atlas / "dt.json").is_file():
         raise SystemExit(f"{atlas}: no dt.json (run `join` first)")
     dt = read_json(atlas / "dt.json")

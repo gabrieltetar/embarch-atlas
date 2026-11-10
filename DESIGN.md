@@ -37,7 +37,11 @@ every file, and a missing one becomes a question.
    git worktree at that commit. The engineer's working tree and build dirs are
    never written. `config` and `dt_node` may *read* a build dir the caller names, and
    say which build answered (owner decision, 2026-10-06: branch work is mostly on
-   unpinned builds).
+   unpinned builds). **A target may state that it has no Zephyr board yet** (`no_board = true`
+   in `atlas.toml`): its atlas is then pinned to the target and the firmware commit, made with
+   no worktree and no west build, and its stamp says there is no build and why. It holds the
+   schematic and datasheet side only; "A target with no Zephyr board yet" below lists what it
+   lacks and what it keeps in a reduced form.
 7. **LLM outputs are frozen by content hash.** A re-run re-verifies; it does not
    re-ask the model. Only changed pages go back to the LLM.
 
@@ -146,9 +150,11 @@ MAP.md                          copy of the current atlas's MAP.md: the one stab
 `target`, `board`, `app`, `schematic_boards`, `mcu`, `commit` (full sha), `dirty:
 false` (a worktree is always clean), `west` (every project's path, revision and
 `head`), `sources` (sha256 of `inventory/manifest.json`), `schematics` (sha256 per
-board PDF), `build{...}` with the from-worktree evidence, `tool` (embarch-atlas
+board PDF), `build{...}` with the from-worktree evidence (a target with no board yet has `board: null`
+and `build: {built: false, reason, fw, west_topdir}`), `tool` (embarch-atlas
 version + git sha), `created` (UTC). An atlas is **stale** when HEAD or any source
-hash differs, or when a document was confirmed or rejected since its last join; it is
+hash differs, when a document was confirmed or rejected since its last join, or (an atlas with no
+build) when `atlas.toml` now names a board for its target; it is
 never edited, only superseded. Documents and schematics are what `join` reads, so the
 hashes the last join recorded in `inputs.json` stand in for the build's: an atlas joined
 again after a document change is fresh.
@@ -174,6 +180,42 @@ is itself a Zephyr module and west lists the *main* checkout, so `build` passes
 `-DZEPHYR_MODULES=<every other west module>;<worktree>` and then proves the result:
 no TU, include path or DTS input from the main checkout (`atlas.json`
 `build.from_worktree`). A leak fails the build.
+
+### A target with no Zephyr board yet
+
+Bring-up of a new PCB is when the atlas has most to answer and when no west build exists. A target says so
+explicitly: `no_board = true` on its `[[targets]]` entry (or `build --no-board` for one run; `update` reads
+the entry). A **missing or misspelt `board` is still an error** that names `--board`; `no_board` is never
+inferred, and `no_board` with a `board` is refused (drop it once the board exists). `fw` is the only other
+required key: no `west_topdir`, `app` or worktree is needed, though a configured west workspace's project list is
+recorded when it answers.
+
+`build` on such a target resolves the commit and writes `atlas.json` with `board: null` and
+`build: {built: false, reason, fw, west_topdir}`, and nothing else: no worktree, no `.work/` build dir, no
+`build/`. The atlas is `<target>@<commit12>` like any other, pinned to that target and commit. `join` then runs
+every step that does not read the build. A normal `build` for the same target and commit (the target gained a
+board) supersedes it, replacing the directory, and until then `status`, `MAP.md` and the `src:` line's `stale=`
+say the target now names a board. `build` with `no_board` against an atlas that was built with a board keeps
+that atlas and says so; `--force` replaces it.
+
+**Absent** (never written; `common.NO_BUILD_ABSENT` is the list `MAP.md` and `status` print): `build/`;
+`kconfig.json`; `dt.json` and `in_use.json`; `codecheck.json` and `codecheck.md`; `limits.json`; the reference
+manual's `worklist.json` (the chapters in use come from the peripherals in use); and the lookups `config`,
+`dt_node`, `footprint` and `stacks` on the pinned build, which answer that the target has no Zephyr board
+yet (`build=<dir>` still names a build to read). `codecheck`, `limits` and `mcu rm-sections` say the same.
+
+**Degraded, not absent** (`common.NO_BUILD_DEGRADED`; each says what it lacks, and an empty cell there is
+absence, never a pass):
+- `pins.json`, `pins.md`, `pin_slice.txt`: the schematic side stands (package pin, net, far end, datasheet
+  pin record, interfaces); the DT use and driver columns are empty, and `pins.md` says so.
+- `checks.md`, `mismatches.json`: the checks that read only the netlists, the BOM, the interface mating rules and
+  the distillations run (the same set `q mismatch_report` runs before any atlas exists, `mismatch.NEEDS_BUILD`
+  being the rest); each check that needs a devicetree, an ELF or driver sources is listed under Not run with the
+  reason and never counted as passed. The second look still counts, because the atlas keeps `second_look.jsonl`.
+- `MAP.md`: a "No build" section names every absent and reduced output; no peripherals-in-use or RM-chapter lines.
+- `graph.json`: the schematic, interface and document layers stand; the code layers are empty and `code_note` says why.
+- `register`: the datasheet and SVD answer is whole; its Firmware references section says it is absent.
+- The second-look queue: ranks the facts the join reads from the schematic and the datasheets, nothing from the DT.
 
 ## Identifiers
 
@@ -681,6 +723,11 @@ app = "apps/<app>"
 schematic_boards = ["A", "B"]        # which schematic boards make up this product
 extra_args = []                      # extra `west build` arguments
 
+[[targets]]                          # a target whose PCB has no Zephyr board yet: the stated opt-in
+name = "bringup"
+no_board = true                      # no `board`, no `app`: `build` skips west and everything that reads its build
+schematic_boards = ["A"]
+
 [live]                               # optional: the live module
 api = "embarch-api"                  # the embarch-api binary
 console = "<signal>"                 # optional: the console signal (default: the role's direct writable one)
@@ -697,7 +744,7 @@ An atlas id is `<target>@<commit12>`.
 | Verb | Module | Does |
 |---|---|---|
 | `init <fw>` | `project` | writes `atlas.toml` with defaults; wires `CLAUDE.local.md` and `.mcp.json` |
-| `status` | `project` | atlases, which is current, which are stale |
+| `status` | `project` | atlases, which is current, which are stale; for an atlas with no build, the outputs absent for that reason and the ones reduced |
 | `inventory` | `inventory` | manifest + per-page hashes + diff vs last |
 | `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md |
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
@@ -715,7 +762,7 @@ An atlas id is `<target>@<commit12>`.
 | `mcu svd <svd> --doc-id <id>` | `svd` | registers/fields as records under the SVD doc |
 | `mcu vote --svd-doc <id> --rm-doc <id> [--header <h>] [--periph P]` | `vote` | SVD vs header vs RM: `conflict` / `quirk` (correct omission) / `rule` records under the RM doc |
 | `mcu rm-outline <rm>` / `rm-sections <atlas>` / `rm-text <rm> <item>` / `rm-check <rm> [--chapter C]` / `rm-freeze <rm> [--item I \| --sections S \| --retire E]` | `rm` | outline; the worklist for peripherals in use; one work item's text with `[p.N]` markers; verify distilled RM files; freeze them in `cache/llm/` |
-| `build <target> [<commit>]` | `build` | worktree, west build, artifacts, stamp |
+| `build <target> [<commit>] [--no-board]` | `build` | worktree, west build, artifacts, stamp; a target with `no_board` writes the stamp alone (below) |
 | `kconfig-extract <atlas>` | `build` | writes kconfig.json for an atlas that lacks it, from its build dir: no rebuild, and only while the workspace's Zephyr is the build's |
 | `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md, graph.json |
 | `graph <atlas>` | `graph` | graph.json again from what `join` wrote (also run by `join`) |

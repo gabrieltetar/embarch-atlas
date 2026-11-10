@@ -21,7 +21,7 @@ import collections
 import re
 from typing import Any
 
-from embarch_atlas.common import read_jsonl, write_json, write_text
+from embarch_atlas.common import board_phrase, read_jsonl, write_json, write_text
 from embarch_atlas.dt import pin_decoder
 
 # rank order: most actionable first
@@ -70,6 +70,7 @@ NOT_RUN = [
 ]
 
 
+NO_BOARD_NEEDS = ("no devicetree, ELF or driver sources: the target has no Zephyr board yet, so there is no build")
 _NO_DT = "no devicetree: it comes from a build (`/atlas-build`)"
 # What `run` reads that a build makes, by check name: before an atlas exists these are not run, and
 # `run_netlist_only` lists each one with what it lacked. Everything else in `run` reads only the
@@ -214,8 +215,11 @@ def run_netlist_only(J) -> dict:
     return run(J, {"id": "no atlas"}, pins, netlist_only=True)
 
 
-def run(J, stamp: dict, pins: dict, netlist_only: bool = False) -> dict:
-    dt_known = not netlist_only
+def run(J, stamp: dict, pins: dict, netlist_only: bool = False, no_build: bool = False) -> dict:
+    """`netlist_only`: no atlas exists, nothing is written. `no_build`: an atlas exists but its target has no
+    Zephyr board yet, so the same checks are skipped as under `netlist_only` and the report is written; the
+    second look, which an atlas keeps, still counts."""
+    dt_known = not (netlist_only or no_build)
     R = Report()
     rows = pins["pins"]
     mcu = J.mcu
@@ -599,18 +603,21 @@ def run(J, stamp: dict, pins: dict, netlist_only: bool = False) -> dict:
                            f"{' (' + v['cond'] + ')' if v.get('cond') else ''} where the first pass has {v.get('first')}".strip())
                 R.cand("document-reading-conflict", str(v.get("id")), summary,
                        [f"{v.get('doc') or ''} p{v.get('p')}", f"quote: {v.get('q')}"], "second look agrees with the first pass")
-    elif dt_known:
+    elif dt_known or no_build:
         R.not_run.append({"check": "second look agrees with the first pass",
                           "why": "no second_look.jsonl yet (`second-look queue`, then `second-look record`)"})
     for name, why in NOT_RUN:
         R.not_run.append({"check": name, "why": why})
     if not mcu:
         R.not_run.insert(0, {"check": "every pin check", "why": "no MCU found on the schematic boards (set [mcu] part or --mcu-ref)"})
-    if netlist_only:
+    if netlist_only or no_build:
         for name, why in NEEDS_BUILD:
+            if no_build and name.startswith("second look"):
+                continue
             R.checks.pop(name, None)
-            R.not_run.append({"check": name, "why": why})
-        return report(R, stamp)
+            R.not_run.append({"check": name, "why": NO_BOARD_NEEDS if no_build else why})
+        if netlist_only:
+            return report(R, stamp)
     return finish(R, J, stamp)
 
 
@@ -695,7 +702,7 @@ def report(R: Report, stamp: dict, J=None) -> dict:
 
 def render(rep: dict, stamp: dict) -> str:
     L = [f"# Checks: {stamp['id']}", "",
-         f"Target `{stamp['target']}`, board `{stamp['board']}`, commit `{stamp['commit']}`. "
+         f"Target `{stamp['target']}`, {board_phrase(stamp)}, commit `{stamp['commit']}`. "
          "Every candidate below is a question for the engineer, not a hardware fact; each cites its sources.", "",
          f"**{rep['summary']}.**", "", "## Checks run", "",
          "| check | ran | passed | candidates | sources |", "|---|---|---|---|---|"]

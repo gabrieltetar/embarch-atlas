@@ -764,6 +764,9 @@ def _reg_tail(a: Atlas, related: list[tuple[str, dict]], rids: list[str]) -> lis
     code = [c for rid in rids for c in _codecheck_refs(a, rid)]
     if code:
         out += ["", "## Firmware references"] + code[:20]
+    elif a.atlas is not None and common.no_build(_json(a.atlas / "atlas.json", {})):
+        out += ["", "## Firmware references", "(none: the target has no Zephyr board yet, so no driver sources are "
+                "built to check against this register)"]
     return out
 
 

@@ -351,13 +351,28 @@ def joined_stamp(atlas: Path, stamp: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def target_board(cfg: dict[str, Any], target: str | None) -> str | None:
+    """The Zephyr board `atlas.toml` now names for `target` (None: none named, or `no_board`)."""
+    for t in cfg.get("targets") or []:
+        if t.get("name") == target and not t.get("no_board"):
+            return t.get("board") or None
+    return None
+
+
 def atlas_state(atlas_dir: Path, stamp: dict[str, Any], head: str | None,
-                manifest_sha: str | None, schematic_shas: dict[str, str | None]) -> list[str]:
-    """Reasons an atlas is stale; empty when it is fresh."""
+                manifest_sha: str | None, schematic_shas: dict[str, str | None],
+                cfg: dict[str, Any] | None = None) -> list[str]:
+    """Reasons an atlas is stale; empty when it is fresh. `cfg` (atlas.toml) lets an atlas that has no
+    build see that its target has since gained a board."""
     from . import coverage
     why = []
     if head and stamp.get("commit") != head:
         why.append("commit differs from HEAD")
+    if common.no_build(stamp) and cfg:
+        board = target_board(cfg, stamp.get("target"))
+        if board:
+            why.append(f"this atlas has no build and target {stamp.get('target')} now names board {board}: "
+                       "run `embarch-atlas build` (it supersedes this atlas)")
     if "sources" in stamp and stamp.get("sources") != manifest_sha:
         if not manifest_sha:
             why.append("inventory/manifest.json missing")
@@ -400,7 +415,8 @@ def status(atlas_dir: Path) -> dict[str, Any]:
             "board": stamp.get("board"),
             "commit": stamp.get("commit"),
             "matches_head": bool(head) and stamp.get("commit") == head,
-            "stale": atlas_state(atlas_dir, stamp, head, manifest_sha, sch),
+            "stale": atlas_state(atlas_dir, stamp, head, manifest_sha, sch, cfg),
+            "no_build": common.no_build(stamp),
         })
     current = {"commit": head, "matches": [{"atlas": r["atlas"], "board": r["board"], "stale": r["stale"]}
                                            for r in rows if r.get("matches_head")]}
@@ -481,7 +497,11 @@ def _cmd_status(args) -> int:
             continue
         tag = "current" if r["matches_head"] else "       "
         state = "stale: " + "; ".join(r["stale"]) if r["stale"] else "fresh"
-        print(f"  {tag} {r['atlas']}  board={r['board']}  {state}")
+        print(f"  {tag} {r['atlas']}  board={r['board'] or 'none (no build)'}  {state}")
+        if r.get("no_build"):
+            print(f"          no build: {r['no_build']}")
+            print("          absent for that reason: " + "; ".join(n for n, _ in common.NO_BUILD_ABSENT))
+            print("          reduced, empty is absence not a pass: " + "; ".join(n for n, _ in common.NO_BUILD_DEGRADED))
     if head:
         m = st["current"]["matches"]
         print("current.json: " + (", ".join(x["atlas"] for x in m) if m else "no atlas matches HEAD"))

@@ -18,7 +18,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from embarch_atlas.common import count_tokens, read_json, write_json, write_text
+from embarch_atlas.common import (NO_BUILD_ABSENT, NO_BUILD_DEGRADED, board_phrase, count_tokens, no_build, read_json,
+                                  write_json, write_text)
 from embarch_atlas.mismatch import dt_intent
 
 BUDGET = 5000          # real (Claude) tokens
@@ -60,9 +61,13 @@ def missing_boards_of(J, stamp: dict) -> list[str]:
 def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_parts: int | None = None) -> str:
     aid = stamp["id"]
     rel = f"atlases/{aid}"
+    nb = no_build(stamp)
     L = [f"# {aid}: hardware atlas for target `{stamp['target']}`", "",
-         f"> Zephyr board `{stamp['board']}`, app `{stamp.get('app')}`, firmware commit `{stamp['commit']}` "
-         f"(built in its own worktree). Schematic boards: {', '.join(stamp.get('schematic_boards') or []) or 'none'}. "
+         (f"> {board_phrase(stamp)}, firmware commit `{stamp['commit']}` (no worktree). "
+          if nb else
+          f"> {board_phrase(stamp)}, app `{stamp.get('app')}`, firmware commit `{stamp['commit']}` "
+          f"(built in its own worktree). ") +
+         f"Schematic boards: {', '.join(stamp.get('schematic_boards') or []) or 'none'}. "
          f"Stamp: `{rel}/atlas.json`. Stale when HEAD or a source hash differs: run `/atlas-update`.", "",
          "Protocol: MAP -> CARD -> section -> page. Read a part's card, then the section it points to, then the PDF page "
          "(`Read` with `pages=`) to verify. Cite every fact as `<doc_id> p<N>`; board keys are board-qualified (`B:U1-12`, "
@@ -82,7 +87,16 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
           f"({c.get('package_pins', 0)} pins, {c.get('dt_pins', 0)} in DT, {c.get('reach', 0)}/{c.get('io_pins', 0)} I/O pins reach a part or connector)",
           f"- [{rel}/pin_slice.txt]({rel}/pin_slice.txt): one line per pin in use",
           f"- [{rel}/checks.md]({rel}/checks.md): {report['summary']}",
-          f"- `{rel}/dt.json`, `{rel}/in_use.json`, `{rel}/pins.json`, `{rel}/mismatches.json`: machine forms", ""]
+          (f"- `{rel}/pins.json`, `{rel}/mismatches.json`: machine forms" if nb else
+           f"- `{rel}/dt.json`, `{rel}/in_use.json`, `{rel}/pins.json`, `{rel}/mismatches.json`: machine forms"), ""]
+    if nb:
+        L += ["## No build: this target has no Zephyr board yet", "",
+              "Absent for that reason, so do not ask for them: " + "; ".join(n for n, _ in NO_BUILD_ABSENT) + ". "
+              "`config`, `dt_node`, `footprint` and `stacks` answer that the target has no Zephyr board yet.", "",
+              "Present but reduced, and an empty cell there is absence, not a pass: "
+              + "; ".join(n for n, _ in NO_BUILD_DEGRADED) + ". "
+              "`status` lists the same with what each lacks; `checks.md` names every check that did not run. "
+              "When the target gains a board, a normal `build` supersedes this atlas.", ""]
     # MCU
     per = (J.in_use.get("peripherals") or {}) if J else {}
     used = sorted(n for n, p in per.items() if p.get("instantiated") or p.get("touched_by_code"))
@@ -93,7 +107,10 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
     mdocs = mcu_docs(J, stamp) if J else []
     for d, kind, card in mdocs:
         L.append(f"- {kind}: `{d}`" + (f", card `{card}`" if card else ""))
-    L.append(f"- In use (instantiated or touched by code): {_compress(used) or 'none'}")
+    if nb:
+        L.append("- Peripherals in use: not known, no devicetree or ELF (no build)")
+    else:
+        L.append(f"- In use (instantiated or touched by code): {_compress(used) or 'none'}")
     if dt_only:
         meant = {n for n in dt_only if dt_intent(J, per[n].get("node"), n)}
         L.append(f"- DT okay, no driver in this build: {', '.join(n + (' (on purpose)' if n in meant else '') for n in dt_only)}"
@@ -102,6 +119,8 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
     if wl:
         chs = [f"{ch['chapter']} {ch['title']} (pp {ch['pages'][0]}-{ch['pages'][1]})" for ch in wl.get("chapters", [])]
         L.append(f"- RM chapters in use (`docs/{wl.get('doc')}/worklist.json`): " + "; ".join(chs))
+    elif nb:
+        L.append("- RM chapters in use: not selectable, they come from the peripherals in use (no build)")
     else:
         L.append("- RM chapters in use: not selected yet (`embarch-atlas mcu rm-sections " + rel + "`)")
     L.append("")

@@ -32,7 +32,7 @@ from typing import Any
 
 from embarch_atlas import __version__
 from embarch_atlas.common import sources_fingerprint, atlas_dir as _default_atlas_dir
-from embarch_atlas.common import read_json, sha256_file, write_json
+from embarch_atlas.common import NO_BOARD_WHY, no_build, read_json, sha256_file, write_json
 
 ARTIFACTS = {
     # published name -> path relative to the build's zephyr/ dir (or the build dir itself)
@@ -100,6 +100,8 @@ def target_config(ad: Path, target: str, args=None) -> dict:
         "west": getattr(a, "west", None) or proj.get("west"),
         "sources": proj.get("sources", "embarch/hardware"),
         "board": getattr(a, "board", None) or tgt.get("board"),
+        # the stated opt-in: `no_board = true` on the target, or --no-board; a missing `board` alone is still an error
+        "no_board": bool(getattr(a, "no_board", False) or tgt.get("no_board", False)),
         "app": getattr(a, "app", None) or tgt.get("app"),
         "schematic_boards": (getattr(a, "schematic_boards", None) or "").split(",") if getattr(a, "schematic_boards", None)
         else list(tgt.get("schematic_boards", [])),
@@ -438,19 +440,57 @@ def _zephyr_base(topdir: Path, west: str) -> Path | None:
     return (topdir / "zephyr") if (topdir / "zephyr").is_dir() else None
 
 
+def run_no_board(ad: Path, cfg: dict, fw: Path, commit: str, out: Path, log=print) -> Path:
+    """The atlas of a target that states it has no Zephyr board yet: no worktree, no west build, no artifacts.
+
+    Pinned to the target and the firmware commit like any atlas; the stamp says there is no build and why
+    (`build.built: false`), and `board` is null. West's project list is recorded when a workspace is
+    configured and answers, since it says which revisions the firmware commit sat beside."""
+    projects: list[dict] = []
+    if cfg.get("west_topdir") and Path(cfg["west_topdir"]).is_dir():
+        try:
+            projects = west_projects(find_west(cfg), Path(cfg["west_topdir"]).resolve())
+        except (BuildError, OSError) as e:
+            log(f"warning: west projects not recorded: {e}")
+    if out.exists():
+        shutil.rmtree(out)                       # a superseded atlas with the same id: nothing in it is a build
+    out.mkdir(parents=True)
+    extra = {"build": {"built": False, "reason": NO_BOARD_WHY, "fw": str(fw),
+                       "west_topdir": cfg.get("west_topdir") and str(Path(cfg["west_topdir"]).resolve())}}
+    write_json(out / "atlas.json", stamp(cfg, ad, commit, projects, fw, extra))
+    log(f"{out.name}: no build ({NO_BOARD_WHY}); the schematic and datasheet side only")
+    return out
+
+
 def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False, log=print) -> Path:
-    for k, flag in (("fw", "--fw"), ("west_topdir", "--west-topdir"), ("board", "--board"), ("app", "--app")):
+    no_board = bool(cfg.get("no_board"))
+    if no_board and cfg.get("board"):
+        raise BuildError(f"target {cfg['target']} states no_board and names board {cfg['board']}: a target has one "
+                         "or the other (drop `no_board` once the board exists)")
+    needs = (("fw", "--fw"),) if no_board else (
+        ("fw", "--fw"), ("west_topdir", "--west-topdir"), ("board", "--board"), ("app", "--app"))
+    for k, flag in needs:
         if not cfg.get(k):
-            raise BuildError(f"{k} unknown: set it in atlas.toml or pass {flag}")
+            raise BuildError(f"{k} unknown: set it in atlas.toml or pass {flag}"
+                             + (" (a target with no Zephyr board yet says so with `no_board = true`)" if k == "board" else ""))
     fw = Path(cfg["fw"]).resolve()
-    topdir = Path(cfg["west_topdir"]).resolve()
     commit = resolve_commit(fw, commit_ref)
     c12 = commit[:12]
     atlas_id = f"{cfg['target']}@{c12}"
     out = ad / "atlases" / atlas_id
     if (out / "atlas.json").is_file() and not force:
-        log(f"{atlas_id}: already built ({out}); atlases are never edited (pass --force to rebuild)")
-        return out
+        old = read_json(out / "atlas.json")
+        if no_build(old) and not no_board:
+            log(f"{atlas_id}: superseding the atlas built with no board: the target now has board {cfg['board']}")
+            shutil.rmtree(out)
+        else:
+            note = (f"; it was built with board {old.get('board')} and atlas.toml now says no_board"
+                    if no_board and not no_build(old) else "")
+            log(f"{atlas_id}: already built ({out}){note}; atlases are never edited (pass --force to rebuild)")
+            return out
+    if no_board:
+        return run_no_board(ad, cfg, fw, commit, out, log)
+    topdir = Path(cfg["west_topdir"]).resolve()
     west = find_west(cfg)
     projects = west_projects(west, topdir)
     zb = _zephyr_base(topdir, west)
@@ -597,6 +637,8 @@ def add_config_flags(p) -> None:
     p.add_argument("--west-topdir", help="west workspace (default: atlas.toml [project] west_topdir)")
     p.add_argument("--west", help="west executable (default: <topdir>/venv/bin/west, else PATH)")
     p.add_argument("--board", help="Zephyr board (default: the target's `board`)")
+    p.add_argument("--no-board", action="store_true", help="the target has no Zephyr board yet: skip the west build "
+                   "and everything that reads it (default: the target's `no_board`); not a way to omit `board`")
     p.add_argument("--app", help="app dir relative to the fw repo (default: the target's `app`)")
     p.add_argument("--schematic-boards", help="comma-separated schematic board labels")
     p.add_argument("--extra-arg", action="append", help="extra `west build` argument (repeatable; `--` then cmake args)")

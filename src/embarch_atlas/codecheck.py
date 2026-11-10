@@ -56,7 +56,7 @@ from dataclasses import dataclass, field as dfield
 from pathlib import Path
 from typing import Any, Callable
 
-from embarch_atlas.common import read_json, write_json, write_text
+from embarch_atlas.common import no_board_answer, no_build, read_json, write_json, write_text
 
 CHECKS = {
     "addr": "register addresses vs the datasheet register map",
@@ -1895,6 +1895,8 @@ def run_join(J, stamp: dict, pins: dict) -> dict:
 def run(ad: Path, atlas: Path, log=print) -> dict:
     from embarch_atlas.join import Docs
     stamp = read_json(atlas / "atlas.json")
+    if no_build(stamp):
+        raise SystemExit(f"{atlas}: " + no_board_answer("(no driver sources are built)"))
     if not (atlas / "dt.json").is_file():
         raise SystemExit(f"{atlas}: no dt.json (run `join` first)")
     dt = read_json(atlas / "dt.json")

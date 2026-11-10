@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from . import kconfig as KC
-from .common import read_json, write_json
+from .common import no_board_answer, no_build, read_json, write_json
 
 MAX_LIST = 60
 
@@ -69,6 +69,8 @@ def pinned(a) -> Source:
     if not a.atlas:
         raise LookupError("no atlas: run /atlas-build, or pass `build` to name a build dir")
     stamp = read_json(a.atlas / "atlas.json")
+    if no_build(stamp):
+        raise LookupError(no_board_answer("(pass `build` to name a build dir to read instead)"))
     bd = a.atlas / "build"
     src = Source(f"atlas {a.atlas.name}", bd / ".config", KC.fragment_files(bd), rel_bases(stamp, a.dir))
     kj, dj = a.atlas / "kconfig.json", a.atlas / "dt.json"

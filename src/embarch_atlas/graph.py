@@ -32,7 +32,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from embarch_atlas.common import read_json, read_jsonl, write_json
+from embarch_atlas.common import no_build, read_json, read_jsonl, write_json
 
 SCHEMA = 1
 
@@ -220,6 +220,9 @@ def code_model(ad: Path, atlas: Path, stamp: dict, dt: dict, log=print, nm_text:
     Read from the build's ELF: `nm -l` places every function in a file, `objdump -d` gives
     direct calls and literal-pool words (a `DEVICE_DT_GET` is the address of
     `__device_dts_ord_<N>`; a callback registration is a function's address)."""
+    if no_build(stamp):
+        log("graph: no build (the target has no Zephyr board yet); the code layers are empty")
+        return {"modules": {}, "calls": {}, "devices": {}, "note": "no build: the target has no Zephyr board yet"}
     roots = Roots(ad, stamp)
     names = driver_names(dt)
     elf = atlas / "build" / "zephyr.elf"
@@ -1538,10 +1541,12 @@ def cmd_graph(args) -> int:
     ad = resolve_atlas_dir(args)
     atlas = resolve_atlas(ad, args.atlas)
     stamp = read_json(atlas / "atlas.json")
-    for f in ("dt.json", "in_use.json", "pins.json", "mismatches.json"):
+    nb = no_build(stamp)
+    for f in ("pins.json", "mismatches.json") if nb else ("dt.json", "in_use.json", "pins.json", "mismatches.json"):
         if not (atlas / f).is_file():
             raise SystemExit(f"{atlas}: no {f} (run `join` first)")
-    dt, in_use = read_json(atlas / "dt.json"), read_json(atlas / "in_use.json")
+    dt, in_use = ({"uses": [], "nodes": {}}, {"peripherals": {}}) if nb else (
+        read_json(atlas / "dt.json"), read_json(atlas / "in_use.json"))
     J, _root, _sysj = load_join(ad, atlas, stamp, dt, in_use, log=lambda *a: None)
     run(ad, atlas, J, stamp, read_json(atlas / "pins.json"), read_json(atlas / "mismatches.json"))
     return 0

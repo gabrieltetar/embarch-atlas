@@ -185,6 +185,8 @@ def _change_line(r: dict) -> str:
 def rm_todo(ad: Path, atlas: Path) -> dict[str, Any] | None:
     """Write the reference manual's worklist for `atlas`; its totals, or None without an RM."""
     from . import rm as R
+    if common.no_build(read_json(atlas / "atlas.json")):
+        return None                              # the chapters in use come from the build's peripherals
     try:
         doc_id = R._rm_doc_arg(ad, None)
     except SystemExit:

@@ -124,7 +124,7 @@ def reasons(atlas_dir: Path, atlas: Path) -> tuple[list[str], str | None]:
         _STALE[key] = (sig, ([],))
         return [], h
     why = project.atlas_state(atlas_dir, stamp, h, common.sources_fingerprint(man),
-                              project._current_schematic_shas(atlas_dir, cfg) if cfg else {})
+                              project._current_schematic_shas(atlas_dir, cfg) if cfg else {}, cfg)
     _STALE[key] = (sig, (why,))
     return list(why), h
 

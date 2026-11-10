@@ -128,3 +128,50 @@ def sources_fingerprint(manifest_path: Path) -> str | None:
         return sha256_file(manifest_path)
     pairs = sorted((str(d.get("file") or d.get("path") or ""), str(d.get("sha256") or "")) for d in docs)
     return sha256_text("\n".join(f"{f}\t{h}" for f, h in pairs))
+
+
+# ---------------------------------------------------------------- an atlas with no build
+
+# What a target that states it has no Zephyr board yet (`no_board = true`) lacks, and what it keeps in a
+# reduced form. One list: `MAP.md`, `status` and DESIGN.md's principle 6 all read it, so they cannot drift.
+NO_BUILD_ABSENT = [
+    ("build/", "the west build's artifacts (edt.pickle, .config, compile_commands.json, zephyr.elf, zephyr.dts)"),
+    ("kconfig.json", "every Kconfig symbol: `config` has nothing to read"),
+    ("dt.json, in_use.json", "the devicetree and the peripherals in use: `dt_node` has nothing to read"),
+    ("codecheck.json, codecheck.md", "driver register constants vs the datasheet: no driver sources are built"),
+    ("limits.json", "DT limit properties vs the datasheet: no devicetree"),
+    ("the RM worklist (`worklist.json`)", "the reference-manual chapters in use come from the peripherals in use"),
+    ("`footprint` and `stacks`", "they read the ELF"),
+]
+NO_BUILD_DEGRADED = [
+    ("pins.json, pins.md, pin_slice.txt",
+     "the schematic side stands (package pin, net, far end, datasheet pin record); the DT use and driver columns are empty"),
+    ("checks.md, mismatches.json",
+     "the checks that read only the netlists, the BOM and the distillations run; every check that needs a devicetree, "
+     "an ELF or driver sources is listed under Not run, never counted as passed"),
+    ("MAP.md", "no peripherals-in-use or RM-chapter lines; the boards, parts and documents are as in any atlas"),
+    ("graph.json", "the schematic, interface and document layers stand; the code layers are empty and `code_note` says why"),
+    ("`register`", "the datasheet and SVD answer is whole; the Firmware references section is absent"),
+    ("the second-look queue", "ranks the facts the join reads from the schematic and the datasheets; nothing from the DT"),
+]
+NO_BOARD_WHY = ("the target has no Zephyr board yet (`no_board = true` in atlas.toml), so there was no west build")
+
+
+def no_build(stamp: dict | None) -> str | None:
+    """Why this atlas has no build (its stamp says `build.built: false`), or None for an atlas that was built."""
+    b = (stamp or {}).get("build")
+    if isinstance(b, dict) and b.get("built") is False:
+        return str(b.get("reason") or NO_BOARD_WHY)
+    return None
+
+
+def no_board_answer(what: str | None = None) -> str:
+    """The sentence a query that needs a build answers with on an atlas that has none."""
+    return (f"This target has no Zephyr board yet, so there is no build to read"
+            f"{' ' + what if what else ''}. Its atlas holds the schematic and datasheet side only; when the target gains a "
+            "board, set `board` in atlas.toml, drop `no_board`, and `build` supersedes this atlas.")
+
+
+def board_phrase(stamp: dict) -> str:
+    """"Zephyr board `X`", or the no-board wording for an atlas that has no build."""
+    return "no Zephyr board yet (no build)" if no_build(stamp) else f"Zephyr board `{stamp.get('board')}`"

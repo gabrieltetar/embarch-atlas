@@ -26,13 +26,24 @@ Current state:
 
 ```
 - [ ] 1 preflight  atlas.toml has the target; inventory is fresh (else run /atlas-translate-docs first); boards/<label>/netlist.json exists for the target's schematic_boards
-- [ ] 2 build      embarch-atlas build <target> <commit>        (minutes; fails loudly if the build did not come from the worktree)
+- [ ] 2 build      embarch-atlas build <target> <commit>        (minutes; fails loudly if the build did not come from the worktree; a target with `no_board = true` skips the west build, see below)
 - [ ] 3 join       embarch-atlas join <atlas>                   (dt.json, in_use.json, pins, checks, mismatches, MAP.md)
 - [ ] 4 RM         embarch-atlas mcu rm-sections <atlas>; if the worklist has sections with no frozen distillation, run /atlas-translate-docs rm-worklist <atlas>
 - [ ] 5 2nd look   queue --top N, one blind subagent per batch (prompt), compare, record (below)
 - [ ] 6 re-join    embarch-atlas join <atlas>                   (so the report reflects the second look)
 - [ ] 7 report     lead with the checks that passed, then candidates by class; the atlas id; stale inputs; open questions
 ```
+
+## A target with no Zephyr board yet
+
+When the PCB's board files are still being written, the target says so in `atlas.toml`
+(`no_board = true`, with no `board`; `build --no-board` states it for one run). A forgotten
+`board` is still an error, so never set `no_board` to get past one. `build` then writes an atlas
+whose stamp says there is no build and why, with no worktree and no west build; step 3 joins
+from the schematic and the datasheets, step 4 (RM worklist) has nothing to read and is skipped.
+`status` and `MAP.md` list what is absent and what is reduced; say so in the step 7 report and
+do not ask that atlas for `config`, `dt_node`, `footprint` or `stacks`. Once the target has a
+board, set it, drop `no_board`, and `build` supersedes the atlas.
 
 ## Step 5: the second look
 
