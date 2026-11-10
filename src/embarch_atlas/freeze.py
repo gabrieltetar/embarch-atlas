@@ -156,11 +156,17 @@ def freeze(atlas: Path, doc_id: str, model: str | None = None, note: str | None 
         u["key"] = _key_for(uid, u["pages"], shas, proc)
         if u["type"] == "record" and u["content"]["id"] in status:
             u["check"] = status[u["content"]["id"]]
+    n_pages = int(meta["pages"])
     cited = sorted({p for u in us.values() for p in u["pages"]})
+    # A cite outside 1..pages is a fault in the unit, not a page of the document: it stays in the unit's
+    # pages (its key reads "missing", so fixing the cite thaws it) and is listed, but is not counted as a page.
+    out_of_range = {uid: [p for p in u["pages"] if not 1 <= p <= n_pages] for uid, u in us.items()}
+    out_of_range = {uid: ps for uid, ps in out_of_range.items() if ps}
     entry = {
         "kind": ENTRY_KIND, "doc": doc_id, "doc_kind": meta.get("kind") or "datasheet", "procedure": proc,
         "model": model, "pdf_sha256": meta.get("sha256"), "pages": int(meta["pages"]),
-        "page_sha": {str(p): shas.get(p, "missing") for p in cited},
+        "page_sha": {str(p): shas.get(p, "missing") for p in cited if 1 <= p <= n_pages},
+        **({"out_of_range": out_of_range} if out_of_range else {}),
         "units": us, "check": state,
         "created": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
         **({"note": note} if note else {}),
@@ -222,7 +228,7 @@ def thaw_check(atlas: Path, doc_id: str, from_doc: str | None = None) -> dict:
     for uid, u in sorted(e["units"].items()):
         if _key_for(uid, u["pages"], shas, proc) != u["key"]:
             redo.append({"unit": uid, "file": u["file"], "pages": u["pages"],
-                         "changed": [p for p in u["pages"] if shas.get(p, "missing") != frozen_sha.get(p)]})
+                         "changed": [p for p in u["pages"] if shas.get(p, "missing") != frozen_sha.get(p, "missing")]})
             continue
         kept.append({"unit": uid, "file": u["file"], "type": u["type"]})
         if from_doc in (None, doc_id):
@@ -288,6 +294,8 @@ def cmd_freeze(args) -> int:
                                                                        " (older than the files: re-run doc check)"))
     print(f"frozen {args.doc_id}: {n.get('record', 0)} records, {n.get('prose', 0)} s/ files, "
           f"{n.get('card', 0)} card over {len(e['page_sha'])} pages; {chk} -> cache/llm/{path.name}")
+    for uid, ps in e.get("out_of_range", {}).items():
+        print(f"  warning: {uid} cites page {', '.join(map(str, ps))}, outside 1-{e['pages']}: fix the cite", file=sys.stderr)
     return 0
 
 

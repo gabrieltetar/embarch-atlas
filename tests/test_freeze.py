@@ -121,3 +121,16 @@ def test_cli_freeze_and_errors(doc, capsys):
     common.write_json(docdir / "doc.json", dict(meta, kind="reference-manual"))
     with pytest.raises(SystemExit, match="rm-freeze"):
         freeze.freeze(atlas, ds.DOC_ID)
+
+
+def test_page_count_is_never_more_than_the_document_s_pages(doc, capsys):
+    atlas, docdir = doc
+    n = common.read_json(docdir / "doc.json")["pages"]
+    (docdir / "s" / "9.9.md").write_text("# Odd (p.0)\n\nA cite before the first page (p.0) and one past the end "
+                                         f"(p.{n + 1}).\n")
+    _, e = freeze.freeze(atlas, ds.DOC_ID)
+    assert len(e["page_sha"]) <= n and set(e["page_sha"]) <= {str(p) for p in range(1, n + 1)}
+    assert e["out_of_range"] == {"prose:s/9.9.md": [0, n + 1]}      # reported, not dropped
+    assert cli.main(["--atlas-dir", str(atlas), "doc", "freeze", ds.DOC_ID]) == 0
+    cap = capsys.readouterr()
+    assert f"over {n} pages" in cap.out and "prose:s/9.9.md cites page 0" in cap.err
