@@ -115,6 +115,13 @@ def test_footnote_blocks_restart_per_table():
     assert render.footnotes(text, render._quote_line(text, "Row B 4 5 6"))["1"] == "second table note"
 
 
+def test_footnote_forms():
+    text = "\n".join(["Row A 1 2 3", "", "24. numbered", "(1) parenthesized", "Note 2: datasheet style",
+                      "   continued here", "Note that this is prose", "Note: no number"])
+    fn = render.footnotes(text)
+    assert fn == {"24": "numbered", "1": "parenthesized", "2": "datasheet style continued here"}
+
+
 def test_cli_render(doc, capsys):
     atlas, _ = doc
     assert cli.main(["--atlas-dir", str(atlas), "doc", "render", ds.DOC_ID]) == 0

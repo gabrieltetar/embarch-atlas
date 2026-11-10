@@ -35,7 +35,7 @@ from .pdftext import map_pua, page_file, write_toc
 
 START = re.compile(r"^<!--\s*atlas:table\s+(.*?)\s*-->\s*$")
 END = re.compile(r"^<!--\s*atlas:end\s*-->\s*$")
-FOOTNOTE = re.compile(r"^\s{0,6}(?:\((\d{1,3})\)|(\d{1,3})\.)\s+(\S.*)$")
+FOOTNOTE = re.compile(r"^\s{0,6}(?:\((\d{1,3})\)\s+|(\d{1,3})\.\s+|Note\s+(\d{1,3})\s*:\s+)(\S.*)$")
 
 
 # ---------------------------------------------------------------- formatting
@@ -92,7 +92,7 @@ def _clean(s: str) -> str:
 
 
 def footnotes(text: str, after: int = 0) -> dict[str, str]:
-    """Footnote id -> text, from a page's text layer, numbered `24. text` or parenthesized `(1) text`.
+    """Footnote id -> text, from a page's text layer, numbered `24. text`, parenthesized `(1) text` or `Note 1: text`.
     TI restarts footnote numbers per table, so the first occurrence after line `after` (the row the
     footnote qualifies) wins; with after=0 that is the first block on the page."""
     lines = text.splitlines()
@@ -103,12 +103,12 @@ def footnotes(text: str, after: int = 0) -> dict[str, str]:
         m = FOOTNOTE.match(ln)
         if not m:
             continue
-        body = m.group(3)
+        body = m.group(4)
         j = i + 1
         while j < len(lines) and lines[j].strip() and re.match(r"^\s{3,}\S", lines[j]) and not FOOTNOTE.match(lines[j]):
             body += " " + lines[j].strip()
             j += 1
-        out.setdefault(m.group(1) or m.group(2), _clean(body))
+        out.setdefault(m.group(1) or m.group(2) or m.group(3), _clean(body))
     return out
 
 
