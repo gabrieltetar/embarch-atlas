@@ -362,6 +362,12 @@ def t_bus(recs, ctx):
                    for r in recs])
 
 
+def t_variant(recs, ctx):
+    opts = lambda r: "; ".join(f"{k}={fmt(v)}" for k, v in (r.get("options") or {}).items()) or "-"
+    return _table(["MPN", "Options", "Note", "p"],
+                  [[fmt(r.get("mpn")), opts(r), note_cell(r), cite_cell(r)] for r in recs])
+
+
 def t_requirement(recs, ctx):
     """Modality, Priority and Order columns appear when any selected requirement has them."""
     extra = [k for k in ("modality", "priority", "order") if any(r.get(k) not in (None, "") for r in recs)]
@@ -384,6 +390,7 @@ def t_check(recs, ctx):
 RENDERERS: dict[str, Callable[[list[dict], dict], list[str]]] = {
     "limit": t_limit, "timing": t_limit, "pin": t_pin, "rule": t_rule, "register": t_register, "field": t_field,
     "quirk": t_quirk, "figure": t_figure, "strap": t_strap, "passthrough": t_passthrough, "bus": t_bus,
+    "variant": t_variant,
     "requirement": t_requirement, "conflict": t_conflict, "check": t_check,
 }
 

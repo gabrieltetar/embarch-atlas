@@ -32,7 +32,8 @@
         "requirement",
         "conflict",
         "check",
-        "bus"
+        "bus",
+        "variant"
       ]
     },
     "doc": {
@@ -354,6 +355,21 @@
       },
       "then": {
         "$ref": "#/$defs/bus"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "variant"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/variant"
       }
     }
   ],
@@ -1195,6 +1211,46 @@
           "byte_order",
           "reg_addr_bytes",
           "windows"
+        ]
+      }
+    },
+    "variant": {
+      "description": "one orderable part of a family (`<part>.variant.<mpn>`): the ordering table's row. mpn is the orderable part number as printed; options holds what differs between the variants, as option name to value. A behaviour is a `rule`; a datasheet row whose value differs by variant, without listing the variants, is a `quirk` of class `variant`",
+      "properties": {
+        "mpn": {
+          "description": "the orderable part number, as the ordering table prints it",
+          "type": "string",
+          "minLength": 1
+        },
+        "options": {
+          "description": "the settings that differ between variants, option name to value (\"vout\": \"3.3 V\", \"package\": \"SOT-23-5\"); a value is a string, a number or a boolean",
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        }
+      },
+      "required": [
+        "mpn",
+        "options"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "mpn",
+          "options"
         ]
       }
     }

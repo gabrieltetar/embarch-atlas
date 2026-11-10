@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from . import common
 
 KINDS = ("limit", "timing", "pin", "rule", "register", "field", "quirk", "figure", "strap",
-         "passthrough", "requirement", "conflict", "check", "bus")
+         "passthrough", "requirement", "conflict", "check", "bus", "variant")
 PROV = ("deterministic", "deterministic+crosschecked", "llm-verified", "llm-unverified",
         "engineer-declared", "engineer-confirmed", "measured")
 DETERMINISTIC = ("deterministic", "deterministic+crosschecked")
@@ -44,6 +44,7 @@ FACT_KEYS = {
     "conflict": ("refs", "sources", "text"),
     "check": ("expr", "expect", "why"),
     "bus": ("iface", "byte_order", "reg_addr_bytes", "windows"),
+    "variant": ("mpn", "options"),
 }
 _SKIP_IN_FACTS = {"id", "kind", "doc", "p", "q", "prov", "fn", "note", "src"}
 
@@ -109,6 +110,8 @@ def _errors(inst: Any, sch: dict, root: dict, path: str) -> list[str]:
             for i, v in enumerate(inst):
                 errs += _errors(v, sch["items"], root, f"{path}[{i}]")
     if isinstance(inst, dict):
+        if len(inst) < sch.get("minProperties", 0):
+            errs.append(f"{path}: fewer than {sch['minProperties']} properties")
         for k in sch.get("required", []):
             if k not in inst:
                 errs.append(f"{path}: missing required field {k!r}")

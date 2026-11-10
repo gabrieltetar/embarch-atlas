@@ -129,6 +129,7 @@ Ids are native names, never ordinals, so they survive a revision that moves page
 | quirk | `<part>.quirk.<slug>` | `demo-switch.quirk.ovp_min_below_operating_max` |
 | figure | `<part>.fig.<slug>` | `demo-switch.fig.figure-1` |
 | strap | `<part>.strap.<PIN>.<slug>` | `demo-conv.strap.MODE.r_6k19` |
+| variant | `<part>.variant.<mpn>` | `demo-reg.variant.demo-reg-33` |
 | check | `<part>.check.<slug>` | `demo-switch.check.thermal_pd` |
 | conflict | `<part>.conflict.<slug>` | `demo-conv.conflict.fscl_min` |
 | bus | `<part>.bus.<iface>` | `demo-gauge.bus.i2c` |
@@ -174,6 +175,11 @@ Field notes:
   node, bootstrap, an internal regulator bypassed to a capacitor). A row that says none of these
   gets no `flow`; never infer one from the pin's name. Ground and signal pins get none.
 - **strap**: address or mode straps (a resistor table on a MODE pin): `pin`, `condition`, `value`.
+- **variant**: one per orderable part in the ordering table: `mpn` (as printed) and `options`, an
+  object of option name to value for what differs between the parts (`{"vout": "3.3 V",
+  "package": "SOT-23-5"}`). Write it instead of a `rule` when the table lists parts, and keep
+  `rule` for behaviour. A datasheet row whose value changes by variant without naming the variants
+  stays a `quirk` of class `variant`.
 - **bus**: one per serial interface with registers wider than a byte, or with more than one bus
   address: `iface` (`i2c`, `smbus`, `spi`), `byte_order` of a multi-byte register on the bus
   (`lsb-first` or `msb-first`, from the sentence or the frame figure that shows it),

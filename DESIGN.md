@@ -221,6 +221,7 @@ Kinds and their own fields:
 | `quirk` | `class` (table-vs-table, text-vs-table, text-vs-text, text-vs-figure, figure-only, footnote-condition, silent-default, must, do-not, absence, variant, doc-artefact, not-prod-tested, narrow-condition, provenance), `text`, `refs` (other fact ids) |
 | `figure` | `fig`, `caption`, `what` (equations: `src: equation`) |
 | `strap` | `pin`, `condition`, `value` (address or mode straps; a fixed address has condition `fixed`) |
+| `variant` | `mpn` (the orderable part number), `options` (an object of option name to value: `{"vout": "3.3 V", "package": "SOT-23-5"}`; at least one). One record per orderable part, from the ordering table. A `variant` lists the parts; a `rule` is behaviour; a `quirk` of class `variant` flags a datasheet row whose value differs by variant without listing them |
 | `passthrough` | `from_pin`, `to_pin`, `when` (transparent-part map: switches, shunts, buffers) |
 | `bus` | `iface`, `byte_order` (lsb-first, msb-first), `reg_addr_bytes`, `windows` ([{from, to, addr, base}]: register ranges per bus address, for a part with more than one) |
 | `check` | `expr`, `expect`, `why` (an invariant the checker evaluates) |

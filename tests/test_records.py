@@ -37,7 +37,9 @@ GOOD = [
      "from_pin": "A1", "to_pin": "B1", "when": "EN high"},
     {"id": "demo-gauge.bus.i2c", "kind": "bus", "doc": "demo-gauge@A", "p": [12], "src": "text",
      "q": "multibyte values are ordered least significant byte first", "iface": "i2c", "byte_order": "lsb-first",
-     "reg_addr_bytes": 1, "windows": [{"from": "0x100", "to": "0x1FF", "addr": "0x0B", "base": "0x100"}]}
+     "reg_addr_bytes": 1, "windows": [{"from": "0x100", "to": "0x1FF", "addr": "0x0B", "base": "0x100"}]},
+    {"id": "demo-reg.variant.demo-reg-33", "kind": "variant", "doc": "demo-reg@A", "p": 1, "src": "table",
+     "q": "DEMO-REG-33 3.3 V SOT-23-5", "mpn": "DEMO-REG-33", "options": {"vout": "3.3 V", "package": "SOT-23-5"}}
 ]
 
 
@@ -117,3 +119,18 @@ def test_schema_batch_1_conventions():
     assert 'pin ""' in strap.replace('\\"', '"') and '"fixed"' in strap and "7-bit" in strap
     line = R.facts_line(req)
     assert "rid=prd.4.2.charge-temp; modality=nice-to-have; priority=P2; order=3; text=" in line
+
+
+def test_variant_validates_renders_and_refuses_a_bare_record():
+    from embarch_atlas import render
+    v = GOOD[-1]
+    assert v["kind"] == "variant" and R.validate(v) == []
+    assert any("options" in e for e in R.validate({k: x for k, x in v.items() if k != "options"}))
+    assert any("mpn" in e for e in R.validate({k: x for k, x in v.items() if k != "mpn"}))
+    assert R.validate(dict(v, options={})) != []
+    assert R.validate(dict(v, options={"vout": [3.3]})) != []
+    line = R.facts_line(v)
+    assert line.startswith("demo-reg.variant.demo-reg-33 kind=variant; mpn=DEMO-REG-33; options=")
+    assert "3.3 V" in line and "SOT-23-5" in line and line.endswith("cite=demo-reg@A p1; prov=llm-unverified")
+    md = "\n".join(render.RENDERERS["variant"]([v], {}))
+    assert "DEMO-REG-33" in md and "vout=3.3 V; package=SOT-23-5" in md
