@@ -463,11 +463,25 @@ candidate mating rule) and **confirmed** by the engineer.
 {"board": "B", "source": {"file": "...", "sha256": "..."}, "method": "smartpdf-outline",
  "sheets": {"<sheet>": {"page": 3, "parent": null}},
  "components": {"U3": {"mpn": "...", "value": "...", "dni": false, "dni_evidence": [], "parts": ["U3"],
-                       "sheets": ["..."], "pins": {"1": {"name": "PA0", "net": "NET_A"}}, "pages": [7]}},
+                       "sheets": ["..."], "pins": {"1": {"name": "PA0", "name_source": "pdf-text", "net": "NET_A"}}, "pages": [7]}},
  "nets": {"3V3": {"pins": ["U3-19", "R5-1"], "sheets": ["..."], "labels": 4, "ports": 2, "auto": false,
                   "aliases": ["NetC4_1"]}},
  "counts": {"geometry": {}}, "issues": []}
 ```
+
+**Pin names and where they came from.** A pin's name is the visible word the PDF prints just past the
+end of its anchor, on the pin's axis, for parts with 3 or more pins (`MIN_NAMED_PINS`); a module whose pad
+names are not in the PDF's text keeps `name: null`. `boards/<label>/pin_names.json` is the engineer-owned
+overlay for those: `{"board", "pins": {<ref>: {<pin>: {"name", "prov", "note"}}}}`, written only by
+`declare-pin-name`, never by `schematic` (as `system.json`'s `interfaces` are never overwritten). `prov` is
+`engineer-declared`, `engineer-confirmed`, or `llm-unverified` (a name read off a rendered crop, ladder rung 4,
+until the engineer confirms it). `netlist.json` is the merged view every later step reads: each named pin
+carries `name_source`, `pdf-text` or `overlay:<prov>`, so a hand-typed name never looks like a printed one.
+A PDF-text name always wins; an overlay entry for a pin the PDF names is left unused. A re-run of `schematic`
+re-applies the overlay, so its names stay in effect; `join` reads `netlist.json`, so `part_pin_name`,
+`pin_trace` and the pin map see them (`pin_trace` marks an overlay name with `pin_name_source`). `counts`
+gains `pins_named_from_overlay` and `pins_unnamed_on_3plus_pin_parts`, and `schematic` prints both beside
+`pins_named / pins_on_3plus_pin_parts`.
 
 **How nets join.** Each sheet's `Nets > NET` entry is a sheet net. Sheet nets of the same name are
 one board net (Altium joins those through ports, sheet entries and power ports). Sheet nets that carry
@@ -687,6 +701,7 @@ An atlas id is `<target>@<commit12>`.
 | `inventory` | `inventory` | manifest + per-page hashes + diff vs last |
 | `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md |
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
+| `declare-pin-name <board> <ref> <pin> <name> [--prov llm-unverified \| engineer-declared \| engineer-confirmed] [--note <text>]` | `pinnames` | records a name for a pin the schematic PDF left unnamed in `boards/<board>/pin_names.json` and merges it into that board's `netlist.json`, `nets.md` and `parts.md` (default `--prov llm-unverified`); refuses a board with no netlist, a ref the netlist lacks, a pin number the part lacks, and a pin the PDF's text already named; the same board/ref/pin again replaces its entry |
 | `declare-interface <board>:<ref> <board>:<ref> (--rule <rule> \| --pin-map 1:6,..) [--prov engineer-declared \| engineer-confirmed] [--note <text>]` | `interfaces` | records the engineer's answer to which connectors mate as an `interfaces` entry in `boards/system.json`, other entries untouched (the same id is replaced); refuses a ref that is not a connector on that board's netlist, a rule outside identity / mirror / row-swap / column-reverse, a pin map naming a contact the connector lacks. It does not promote a proposal by id |
 | `missing [--answer <MPN> supplied \| not-needed --why <text> \| standard-function <fn> --pins <map>]` | `missing` | the proposed matches, then the missing-documents questions from BOM vs manifest, open ones ranked by net_trace walks stopped, then the documents nothing uses; `--answer` records the engineer's answer in `answers.toml` |
 | `missing --confirm <MPN> [--file <file>]` / `--confirm-all` / `--reject <MPN> --file <file>` | `missing` | accept or refuse a document for a part, recorded in `answers.toml` (`--confirm` with no file takes the part's strongest proposal; `--confirm-all` the first row of each part and the MCU row). `reference-manual` in place of `<MPN>` answers the MCU row |
@@ -924,7 +939,8 @@ fixture only).
 ## Not yet built (deliberately)
 
 A native EDA adapter, geometry as a fallback (without anchor
-words) and the vision rung of the schematic ladder, PRD → code trace links.
+words) and the vision rung of the schematic ladder (automatic crop and read: today the skill renders a symbol's
+crop and reads it, and `declare-pin-name` records the result as `llm-unverified`), PRD → code trace links.
 
 Reading a board part's package from the BOM's footprint string, or from `variant` records, to fill
 `bindings.json` `packages` (today the engineer states it).

@@ -32,7 +32,7 @@ produces a question the engineer has to answer first.
 - [ ] 0 config     embarch-atlas init <fw>   (only if atlas.toml is missing; then ask the engineer for boards/targets/MCU)
 - [ ] 1 inventory  embarch-atlas inventory
 - [ ] 2 questions  read inventory/manifest.md: unknown kinds, missing revisions, image-only pages -> ASK
-- [ ] 3 schematics embarch-atlas schematic <pdf> --board <label>   (one per [[boards]] entry; labels come from atlas.toml, never guessed)
+- [ ] 3 schematics embarch-atlas schematic <pdf> --board <label>   (one per [[boards]] entry; labels come from atlas.toml, never guessed); read its "N still unnamed on 3+-pin parts": for a module whose pad names the PDF's text lacks, render the symbol's region of its page (netlist.json `pages`) to an image with PyMuPDF `get_pixmap(clip=...)` and view it with Read (no verb crops yet), read the names off it, record each with embarch-atlas declare-pin-name <board> <ref> <pin> <name> --prov llm-unverified --note <sheet/crop>, then ASK the engineer to confirm and re-record with --prov engineer-confirmed; never by editing netlist.json or boards/<label>/pin_names.json
 - [ ] 4 interfaces embarch-atlas interfaces; show the proposed mating rules with their scores; ASK the engineer which connectors mate, and record the answer with embarch-atlas declare-interface <board>:<ref> <board>:<ref> --rule <rule> (or --pin-map 1:6,2:5,...) --note <source>, never by editing boards/system.json
 - [ ] 5 missing    embarch-atlas missing; show inventory/missing.md; ASK the engineer to confirm or reject its table of proposed matches (--confirm-all, or --confirm / --reject per row), then ASK for the files still missing or "not needed"
 - [ ] 6 distil     per changed document, one per pass (below)

@@ -14,6 +14,7 @@ MODULES = [
     "project",
     "inventory",
     "smartpdf",
+    "pinnames",
     "interfaces",
     "missing",
     "pdftext",

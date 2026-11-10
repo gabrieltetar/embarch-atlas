@@ -50,7 +50,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import common, project
+from . import common, pinnames, project
 
 METHOD = "smartpdf-outline"
 SECTIONS = ("Components", "Nets", "Ports")
@@ -951,6 +951,7 @@ def run(atlas_dir: Path, pdf: Path, board: str, geometry: bool = True) -> dict[s
         rel = None
     nl, bom, geo = parse_all(pdf, board, rel or str(Path(pdf).resolve()), geometry)
     out = atlas_dir / "boards" / board
+    pinnames.apply(nl, pinnames.load(out / pinnames.OVERLAY))   # the engineer's names stay in effect across a re-run
     common.write_json(out / "netlist.json", nl)
     common.write_json(out / "bom.json", bom)
     if geo is not None:
@@ -997,7 +998,9 @@ def _cmd(args) -> int:
     print(f"{args.board}: {c['parts']} parts ({c['symbol_parts']} symbol parts), {c['pins']} pins "
           f"({c['pins_on_net']} on a net), {c['nets']} nets ({c['nets_auto_named']} auto-named), "
           f"{c['parts_with_mpn']} with MPN, {c['parts_dni']} DNI, popups {c['popups_matched']}/{c['popups_on_pages']}, "
-          f"{c['pins_named']}/{c['pins_on_3plus_pin_parts']} pin names; {xc}{len(nl['issues'])} issues "
+          f"{c['pins_named']}/{c['pins_on_3plus_pin_parts']} pin names "
+          f"({c['pins_named_from_overlay']} from pin_names.json, {c['pins_unnamed_on_3plus_pin_parts']} still unnamed "
+          f"on 3+-pin parts); {xc}{len(nl['issues'])} issues "
           f"-> {adir / 'boards' / args.board} in {time.time() - t0:.1f} s")
     return 0
 

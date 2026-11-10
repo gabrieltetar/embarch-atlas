@@ -94,11 +94,14 @@ class Board:
         self.nets: dict[str, dict] = nl.get("nets", {})
         self.pin_net: dict[str, str] = {}
         self.pin_name: dict[str, str | None] = {}
+        self.pin_name_source: dict[str, str] = {}    # `pdf-text` or `overlay:<prov>` (netlist.json is the merged view)
         for ref, c in self.comps.items():
             for num, p in (c.get("pins") or {}).items():
                 key = f"{ref}-{num}"
                 self.pin_net[key] = p.get("net")
                 self.pin_name[key] = p.get("name")
+                if p.get("name_source"):
+                    self.pin_name_source[key] = p["name_source"]
         for net, n in self.nets.items():         # nets are the authority for membership
             for key in n.get("pins", []):
                 self.pin_net.setdefault(key, net)
@@ -557,6 +560,8 @@ class Join:
                 continue
             it = {**base, "kind": "part-pin", "part": ref, "pin_name": self.part_pin_name(board, p), "mpn": B.mpn(ref),
                   "dni": B.dni(ref)}
+            if B.pin_name_source.get(p, "").startswith("overlay:"):
+                it["pin_name_source"] = B.pin_name_source[p]
             if re.fullmatch(r"(D|Q|LED)\d+\w*", ref):
                 others = [q for q in B.pins(ref) if q != p]
                 it["other_nets"] = {q: B.net(q) for q in others}
