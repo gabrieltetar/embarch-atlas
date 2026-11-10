@@ -65,7 +65,13 @@ from .pdftext import normalize, page_file, resolve_pdf_path
 CARD_BUDGET = 1500
 SECTION_BUDGET = 4000
 
-NUM_RE = re.compile(r"(?<![A-Za-z_\d.])(?:(?<=[\s(=/,:|;<>~x*\[])[-+]|(?<=^)[-+])?\d+(?:\.\d+)?")
+# Digits take a thousands separator: a comma before exactly three digits (`1,000`), or a space after one
+# or two leading digits (`1 000`, `12 000`). A space after three (`355 505`) is two table columns.
+_DIGITS = (r"(?:[1-9]\d{0,2}(?:,\d{3})+(?!\d)(?:\.\d+)?|[1-9]\d?(?: \d{3})+(?!\d)(?:\.\d+)?"
+           r"|\d+(?:\.\d+)?)")
+NUM_RE = re.compile(r"(?<![A-Za-z_\d.])(?:(?<=[\s(=/,:|;<>~x*\[])[-+]|(?<=^)[-+])?" + _DIGITS)
+# A sign set off from its digits (`- 0.3`) unless a number or `%` or a bracket stands before it, where it is a range or a subtraction.
+_SPACED_SIGN = re.compile(r"(^|(?<![\d%)\]])\s)([-+])\s+(?=\d)")
 HDR = {"MIN": "min", "TYP": "typ", "MAX": "max", "NOM": "nom"}
 NUMERIC_KEYS = ("min", "nom", "typ", "max")
 K_GROUPS = ("abs", "recommended", "ec", "i2c")
@@ -86,12 +92,14 @@ PARAM_DIM = {"V": r"voltage|threshold|drop|droop|rating|clamp", "A": r"current|l
 # ---------------------------------------------------------------- numbers and cites
 
 def numbers(s: str) -> list[float]:
-    """Numbers in a normalized string. `10-90%` is 10 and 90, `±2` is 2 and -2, `3..23` is 3 and 23;
+    """Numbers in a normalized string. `10-90%` is 10 and 90, `±2` is 2 and -2, `3..23` is 3 and 23,
+    `- 0.3` is -0.3, `1,000` and `1 000` are 1000;
     a digit glued to letters (EN1, 1.0A17's 17) is an identifier, not a number."""
     s = re.sub(r"(?<=\d)\.\.(?=[-\d])", " .. ", s)
+    s = _SPACED_SIGN.sub(r"\1\2", s)
     out = []
     for m in NUM_RE.finditer(s):
-        v = float(m.group())
+        v = float(re.sub(r"[, ]", "", m.group()))
         out.append(v)
         if m.start() > 0 and s[m.start() - 1] == "±":
             out.append(-v)
@@ -426,7 +434,7 @@ K_WARN = {"row-not-found": "row not found", "row-ambiguous": "row ambiguous (two
 UNIT_SPAN = 16.0     # points: a unit cell wrapped over the row's neighbouring lines
 VALUE_HDR = ("VALUE", "VALUES")
 # A value cell; a footnote marker glued to it (`3000(4)`, `1.7(1)`) is not part of the number.
-_CELL_NUM = re.compile(r"^([±+-]?)(\d+(?:\.\d+)?)(%?)(?:\(\d{1,2}\))?$")
+_CELL_NUM = re.compile(r"^([±+-]?)(\d+(?:\.\d+)?|[1-9]\d{0,2}(?:,\d{3})+(?:\.\d+)?)(%?)(?:\(\d{1,2}\))?$")
 _COMPACT = re.compile(r"[\s()\[\],;:'\"]+")
 
 
@@ -439,7 +447,7 @@ def _cell_num(w: str) -> tuple[Any, bool] | None:
     m = _CELL_NUM.match(w)
     if not m:
         return None
-    v = float(m.group(2))
+    v = float(m.group(2).replace(",", ""))
     if m.group(1) == "±":
         return ("pm", v), bool(m.group(3))
     return (-v if m.group(1) == "-" else v), bool(m.group(3))
@@ -934,8 +942,11 @@ def _blank(s: str) -> str:
     return s
 
 
+_BULLET = re.compile(r"^\s*[-*+]\s+")
+
+
 def _md_numbers(line: str) -> list[float]:
-    return numbers(normalize(_blank(line)))
+    return numbers(normalize(_blank(_BULLET.sub("", line))))
 
 
 def _split_clauses(s: str) -> list[str]:
@@ -989,7 +1000,8 @@ def md_claims(line: str, cols: list[str] | None = None, rendered: str | None = N
     """(number, tag class or None) for every numeric claim of one markdown line. A table row (`cols`
     is its header) is read cell by cell; a Note cell item that is only a tag covers the whole row, as
     the renderer writes a figure or equation record's `(figure)` there. `rendered` is the selector
-    kind of the atlas:table block the row sits in: its structural cells are skipped."""
+    kind of the atlas:table block the row sits in: its structural cells are skipped. A list bullet
+    (`- 38 C`) is not a spaced minus and is dropped first."""
     if rendered == "quirk" and line.startswith("- **"):
         # render.t_quirk: `- **id** (meta): text (figure) *Why it matters:* why`. The src tag it puts
         # after the text is the record's own: it covers the text; the why is read as prose.
@@ -999,7 +1011,7 @@ def md_claims(line: str, cols: list[str] | None = None, rendered: str | None = N
             return [(x, "figure") for x, _ in _clause_claims(head)] + (_clause_claims(why) if sep else [])
         return _clause_claims(line)
     if cols is None or not line.lstrip().startswith("|"):
-        return _clause_claims(line)
+        return _clause_claims(line if line.lstrip().startswith("|") else _BULLET.sub("", line))
     cells = _cells(line)
     row_tag = None
     for c, name in zip(cells, cols):

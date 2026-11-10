@@ -22,6 +22,9 @@ every file, and a missing one becomes a question.
    what they cannot give: prose, tables that text extraction mangles, figures.
 2. **The text layer is the numeric oracle.** Every number an LLM writes must be
    found on the page it cites, or be tagged `(derived)`, `(figure)` or `(inference)`.
+   A number is read as the page prints it: a minus set off by a space (`- 0.3`) is a sign
+   unless a digit, `%` or bracket stands before it (a range, `10 - 90%`); `1,000` and
+   `12 000` are one number, but `355 505` (three digits, a space) is two table columns.
 3. **Records are the source of truth; markdown is rendered from them.** The LLM
    writes records (JSON Lines), prose and the card. Tables in the markdown tiers
    are rendered from records, so they cannot drift.

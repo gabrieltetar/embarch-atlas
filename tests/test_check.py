@@ -24,6 +24,12 @@ def test_numbers_and_cites():
     assert check.numbers("-0.3 to 29 v") == [-0.3, 29]
     assert sorted(check.numbers("±2 kv")) == [-2, 2]
     assert check.numbers("3..23 v") == [3, 23]
+    assert check.numbers("- 0.3 to 29 v") == [-0.3, 29]                  # a spaced minus keeps its sign
+    assert check.numbers("10 - 90%") == [10, 90] and check.numbers("(5) - 3") == [5, 3]   # a range or subtraction
+    assert check.numbers("1,000 and 1 000.5 hz") == [1000, 1000.5]       # thousands separators
+    assert check.numbers("typ 355 505 ua") == [355, 505]                 # three digits then a space: two columns
+    assert check.numbers("1,2345") == [1, 2345]                          # not a group of three
+    assert check._md_numbers("- 38 c margin") == [38]                    # a list bullet is not a minus
     assert check.numbers("en1 and 1.0a17") == [1.0]                      # identifiers and glued footnotes
     assert check.cited_pages("see p.8, p.4-5 and pp. 9") == {4, 5, 8, 9}
     assert check.cited_pages("step 5 of the sequence, §7") == set()      # not page cites
