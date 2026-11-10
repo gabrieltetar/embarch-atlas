@@ -20,7 +20,7 @@ Current state:
 - [ ] 1 what moved  embarch-atlas status: which atlas is current for <target>, what is stale (commit, documents, schematics)
 - [ ] 2 documents   if any source changed: embarch-atlas inventory; then /atlas-translate-docs for the changed documents only
                     (per-page hashes: only changed pages go back to the LLM; frozen output of the rest is reused)
-- [ ] 3 schematics  if a board PDF changed: embarch-atlas schematic <pdf> --board <label>; diff the netlist; if a connector's nets changed, re-run embarch-atlas interfaces and ASK the engineer to re-confirm the mating rule
+- [ ] 3 schematics  if a board PDF changed: embarch-atlas schematic <pdf> --board <label>; diff the netlist; if a connector's nets changed, re-run embarch-atlas interfaces and ASK the engineer to re-confirm the mating rule; record the answer with embarch-atlas declare-interface <board>:<ref> <board>:<ref> --rule <rule> --prov engineer-confirmed --note <source>, never by editing boards/system.json
 - [ ] 4 bump        embarch-atlas update <target> <commit>
                     (build, join, RM worklist, second-look queue, diff). It stops while a translation is behind
                     its source (a doc not re-prepped, frozen units on changed pages, a netlist from an older PDF),

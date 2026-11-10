@@ -467,7 +467,7 @@ across a port, so its `crosscheck` mark on a joined net is the picked name's she
 `issues` holds oddities worth an engineer's look (e.g. a printed comment naming a
 different part than the MPN parameter). `bom.json` rows are `{ref, mpn, value, dni,
 description, datasheet_link, comment, manufacturer, footprint, in_bom, pins}`.
-`boards/system.json` holds `interfaces` (engineer-declared, never overwritten),
+`boards/system.json` holds `interfaces` (engineer-declared, never overwritten; `declare-interface` writes an entry there: a rule or a pin map, `prov`, a note),
 `proposed` (machine, scored), `name_check`, `inputs`, and a `board-to-board-check`
 scoring each declared interface.
 
@@ -661,6 +661,7 @@ An atlas id is `<target>@<commit12>`.
 | `inventory` | `inventory` | manifest + per-page hashes + diff vs last |
 | `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md |
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
+| `declare-interface <board>:<ref> <board>:<ref> (--rule <rule> \| --pin-map 1:6,..) [--prov engineer-declared \| engineer-confirmed] [--note <text>]` | `interfaces` | records the engineer's answer to which connectors mate as an `interfaces` entry in `boards/system.json`, other entries untouched (the same id is replaced); refuses a ref that is not a connector on that board's netlist, a rule outside identity / mirror / row-swap / column-reverse, a pin map naming a contact the connector lacks. It does not promote a proposal by id |
 | `missing [--answer <MPN> supplied \| not-needed --why <text> \| standard-function <fn> --pins <map>]` | `missing` | the proposed matches, then the missing-documents questions from BOM vs manifest, open ones ranked by net_trace walks stopped, then the documents nothing uses; `--answer` records the engineer's answer in `answers.toml` |
 | `missing --confirm <MPN> [--file <file>]` / `--confirm-all` / `--reject <MPN> --file <file>` | `missing` | accept or refuse a document for a part, recorded in `answers.toml` (`--confirm` with no file takes the part's strongest proposal; `--confirm-all` the first row of each part and the MCU row). `reference-manual` in place of `<MPN>` answers the MCU row |
 | `missing --kind <file> <kind>` | `missing` | override a document's kind, recorded in `answers.toml`; the manifest, and a prepped document's `doc.json`, are rewritten at once |

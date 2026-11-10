@@ -453,6 +453,88 @@ def _cmd(args) -> int:
     return 0
 
 
+def declare(atlas_dir: Path, a: str, b: str, rule: str | None = None, pin_map: dict[str, str] | None = None,
+            prov: str = "engineer-declared", note: str | None = None) -> dict[str, Any]:
+    """Write one engineer-declared board-to-board entry into `interfaces` of boards/system.json.
+
+    Every other key and entry is left as it was; an entry with the same id is replaced. Raises ValueError for
+    anything `interface_pairs` could not read: a ref that is not a connector on that board's netlist, a rule
+    that is not one of RULE_ORDER, a pin map naming a contact the connector lacks, or neither/both of rule
+    and pin map."""
+    atlas_dir = Path(atlas_dir)
+    if prov not in ENGINEER_PROV:
+        raise ValueError(f"prov must be one of {', '.join(ENGINEER_PROV)}")
+    if bool(rule) == bool(pin_map):
+        raise ValueError("give exactly one of a rule or a pin map")
+    if rule and rule not in RULE_ORDER:
+        raise ValueError(f"rule {rule!r} is not one of {', '.join(RULE_ORDER)}")
+    nls = load_netlists(atlas_dir)
+    conns = {}
+    for side, ref in (("a", a), ("b", b)):
+        label, _, cref = ref.partition(":")
+        if not cref or label not in nls:
+            raise ValueError(f"{ref!r}: want <board>:<connector ref> with a board that has a netlist "
+                             f"({', '.join(sorted(nls)) or 'none found'})")
+        known = connectors(nls[label])
+        if cref not in known:
+            raise ValueError(f"{ref!r}: {cref} is not a connector on board {label} ({', '.join(sorted(known))})")
+        conns[side] = known[cref]
+    if a == b:
+        raise ValueError("a and b are the same connector")
+    entry: dict[str, Any] = {"id": f"{a}~{b}", "kind": "board-to-board", "a": a, "b": b}
+    if rule:
+        entry["rule"] = rule
+        if rule_map(rule, max(sum((numbered(c)[0] for c in conns.values()), []), default=0)) is None:
+            raise ValueError(f"rule {rule!r} does not apply to a connector with an odd contact count")
+    else:
+        pa, pb = set(conns["a"]["pins"]), set(conns["b"]["pins"])
+        for k, v in pin_map.items():
+            if k not in pa or v not in pb:
+                raise ValueError(f"pin map {k}:{v}: contact {k} is not on {a} or {v} is not on {b}")
+        entry["pin_map"] = dict(pin_map)
+    entry["prov"] = prov
+    if note:
+        entry["note"] = note
+    path = atlas_dir / "boards" / "system.json"
+    sysj = common.read_json(path) if path.is_file() else {}
+    kept = [e for e in sysj.get("interfaces") or [] if e.get("id") != entry["id"]]
+    sysj["interfaces"] = sorted(kept + [entry], key=lambda e: str(e.get("id")))
+    common.write_json(path, sysj)
+    return entry
+
+
+def _parse_pin_map(text: str) -> dict[str, str]:
+    out = {}
+    for item in text.split(","):
+        k, sep, v = item.strip().partition(":")
+        if not sep or not k.strip() or not v.strip():
+            raise ValueError(f"pin map item {item!r}: want <contact on a>:<contact on b>")
+        out[k.strip()] = v.strip()
+    return out
+
+
+def _declare_cmd(args) -> int:
+    adir = common.atlas_dir(args.atlas_dir)
+    try:
+        pin_map = _parse_pin_map(args.pin_map) if args.pin_map else None
+        e = declare(adir, args.a, args.b, rule=args.rule, pin_map=pin_map, prov=args.prov, note=args.note)
+    except (ValueError, FileNotFoundError) as ex:
+        print(f"declare-interface: {ex}", file=sys.stderr)
+        return 2
+    print(f"{e['a']} <-> {e['b']}  {e.get('rule') or 'pin_map'}  [{e['prov']}]")
+    print(f"-> {adir / 'boards' / 'system.json'}  (run `embarch-atlas interfaces` to score it)")
+    return 0
+
+
 def register(sub, groups) -> None:
     p = sub.add_parser("interfaces", help="propose board-to-board mating rules with scores (boards/system.json)")
     p.set_defaults(func=_cmd)
+    d = sub.add_parser("declare-interface", help="record an engineer-declared board-to-board mating "
+                       "(boards/system.json, `interfaces`)")
+    d.add_argument("a", help="<board>:<connector ref>, e.g. A:J2")
+    d.add_argument("b", help="<board>:<connector ref>, e.g. B:J5")
+    d.add_argument("--rule", help=f"one of {', '.join(RULE_ORDER)}")
+    d.add_argument("--pin-map", help="contact on a to contact on b, e.g. 1:6,2:5,3:4")
+    d.add_argument("--prov", default="engineer-declared", choices=ENGINEER_PROV)
+    d.add_argument("--note", help="who declared it and from what (a drawing, a conversation)")
+    d.set_defaults(func=_declare_cmd)

@@ -136,3 +136,53 @@ def test_needs_two_boards(tmp_path, capsys):
     write_boards(adir, X)
     assert cli.main(["--atlas-dir", str(adir), "interfaces"]) == 2
     assert "two boards" in capsys.readouterr().err
+
+
+def test_declare_interface_writes_one_entry_and_run_keeps_it(tmp_path, capsys):
+    adir = tmp_path / "atlas"
+    write_boards(adir, X, Y)
+    other = {"id": "keep", "kind": "board-to-board", "a": "X:J1", "b": "Y:J7", "rule": "identity",
+             "prov": "engineer-declared"}
+    common.write_json(adir / "boards" / "system.json", {"units": [{"i": 0}], "interfaces": [other]})
+    e = itf.declare(adir, "X:J1", "Y:J2", rule="mirror", note="per the assembly drawing")
+    sysj = common.read_json(adir / "boards" / "system.json")
+    assert e == {"id": "X:J1~Y:J2", "kind": "board-to-board", "a": "X:J1", "b": "Y:J2", "rule": "mirror",
+                 "prov": "engineer-declared", "note": "per the assembly drawing"}
+    assert other in sysj["interfaces"] and e in sysj["interfaces"] and sysj["units"] == [{"i": 0}]
+    # a re-declaration replaces its own entry only
+    e2 = itf.declare(adir, "X:J1", "Y:J2", pin_map={"1": "6", "2": "5"}, prov="engineer-confirmed")
+    ifs = common.read_json(adir / "boards" / "system.json")["interfaces"]
+    assert [x["id"] for x in ifs] == ["X:J1~Y:J2", "keep"] and e2 in ifs
+    assert itf.interface_pairs(e2, itf.load_netlists(adir)) == [("X:J1-1", "Y:J2-6"), ("X:J1-2", "Y:J2-5")]
+    itf.declare(adir, "X:J1", "Y:J2", rule="mirror")
+    out = itf.run(adir)
+    assert any(x["id"] == "X:J1~Y:J2" and x["rule"] == "mirror" for x in out["interfaces"])
+    chk = next(p for p in out["proposed"] if p["kind"] == "board-to-board-check" and p["b"] == "Y:J2")
+    assert chk["declared_rule"] == "mirror" and chk["declared_score"] == "4/5"
+    assert not any(p["id"] == "X:J1~Y:J2" for p in out["proposed"])
+    # through the CLI
+    rc = cli.main(["--atlas-dir", str(adir), "declare-interface", "X:J1", "Y:J2", "--pin-map", "1:6,2:5",
+                   "--note", "n"])
+    assert rc == 0 and "pin_map" in capsys.readouterr().out
+
+
+def test_declare_interface_refuses_what_interface_pairs_cannot_read(tmp_path, capsys):
+    adir = tmp_path / "atlas"
+    write_boards(adir, X, Y)
+    path = adir / "boards" / "system.json"
+    for kw in ({"a": "X:U1", "b": "Y:J2", "rule": "mirror"},      # not a connector
+               {"a": "X:J9", "b": "Y:J2", "rule": "mirror"},      # not on the netlist
+               {"a": "Z:J1", "b": "Y:J2", "rule": "mirror"},      # no such board
+               {"a": "X:J1", "b": "Y:J2", "rule": "zigzag"},
+               {"a": "X:J1", "b": "Y:J2"},
+               {"a": "X:J1", "b": "Y:J2", "rule": "mirror", "pin_map": {"1": "6"}},
+               {"a": "X:J1", "b": "Y:J2", "pin_map": {"1": "99"}},
+               {"a": "X:J1", "b": "Y:J2", "rule": "mirror", "prov": "deterministic"}):
+        try:
+            itf.declare(adir, **kw)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(kw)
+    assert not path.exists()
+    assert cli.main(["--atlas-dir", str(adir), "declare-interface", "X:J1", "Y:J2", "--rule", "zigzag"]) == 2
