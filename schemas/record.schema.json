@@ -1038,13 +1038,29 @@
           "type": "boolean"
         },
         "modality": {
-          "description": "the statement's force as printed: shall (must, required), should, may, or nice-to-have (\"Nice to Have\", optional)",
+          "description": "the statement's force as printed: shall (must, required), shall-not (must not), should, should-not, may, or nice-to-have (\"Nice to Have\", optional); a standard's is checked against its quote (W)",
           "enum": [
             "shall",
+            "shall-not",
             "should",
+            "should-not",
             "may",
             "nice-to-have",
             null
+          ]
+        },
+        "role": {
+          "description": "a standard's: whom the statement binds, as the standard names it (Source, Sink, DRP, Cable)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cond": {
+          "description": "a standard's: when it applies (a mode, a state, a revision), as printed",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "priority": {
@@ -1084,7 +1100,9 @@
           "fw_relevant",
           "modality",
           "priority",
-          "order"
+          "order",
+          "role",
+          "cond"
         ]
       }
     },

@@ -20,6 +20,11 @@ Record checks (per record, against the text layer of the pages it cites):
   U  units           the unit's dimension fits the symbol (V, I, t, R, T, f, C, P, L) or the parameter,
                      and the unit string is on the cited page
   O  order           min <= nom/typ <= max
+  W  modality        a standard's requirement: `modality` agrees with the normative keyword in its quote
+                     (`shall-not` needs "shall not" or "must not"; `shall` a "shall" or "must" not followed
+                     by "not"; `should`, `should-not` and `may` likewise); a quote with no keyword passes only
+                     when `note` says where the force comes from (a table heading). Runs on standards only:
+                     a PRD's requirements take their force from its own tables
   R  references      quirk/conflict refs resolve to a record of any document under docs/ (ids are
                      globally unique, `<part>.<kind>...`: an RM vote conflict refs SVD registers); ids
                      are unique (a deterministic record and an LLM record may share an id: they are
@@ -699,6 +704,9 @@ def record_checks(doc: DocText, rec: dict) -> dict:
         qn = [x for q in qs for x in numbers(normalize(q))]
         miss = [x for x in numbers(normalize(rec.get("text") or "")) if not _close(x, qn)]
         out["N"] = "ok" if not miss else f"text numbers not in quote: {miss}"
+    # W
+    if kind == "requirement" and qs and rec.get("modality") and doc.meta.get("kind") == "standard":
+        out["W"] = modality_check(rec.get("modality"), " ".join(qs), rec.get("note"))
     # O
     if numv:
         order = [float(numv[k]) for k in ("min", "nom", "typ", "max") if k in numv]
@@ -742,7 +750,24 @@ def record_checks(doc: DocText, rec: dict) -> dict:
     return out
 
 
-FAILING = {"V", "A", "N", "C", "U", "O", "R", "G", "X"}
+FAILING = {"V", "A", "N", "C", "U", "O", "R", "G", "X", "W"}
+
+NORMATIVE = (("shall-not", r"\b(?:shall|must)\s+not\b"), ("should-not", r"\bshould\s+not\b"),
+             ("shall", r"\b(?:shall|must)\b(?!\s+not\b)"), ("should", r"\bshould\b(?!\s+not\b)"),
+             ("may", r"\bmay\b"))
+
+
+def modality_check(modality: str, quote: str, note: str | None) -> str:
+    """Check W: 'ok', or what the quote says instead."""
+    if modality not in dict(NORMATIVE):
+        return "ok"                              # nice-to-have: a PRD's word, not a normative keyword
+    q = normalize(quote).lower()
+    said = [m for m, rx in NORMATIVE if re.search(rx, q)]
+    if modality in said:
+        return "ok"
+    if not said:
+        return "ok" if note else f"modality {modality}: no normative keyword in the quote, and no note saying where the force comes from"
+    return f"modality {modality}: the quote says {', '.join(said)}"
 
 
 def _is_fail(letter: str, result: Any) -> bool:
@@ -1175,6 +1200,8 @@ def check_markdown_file(doc: DocText, path: Path, rec_values: dict[int, list[flo
         if _BLOCK_END.match(s):
             rendered = None
             continue
+        if rendered == "sections":
+            continue                                 # a standard's card list, generated from the worklist: no claims
         m = re.match(r"^(#+)\s", s)
         if m:
             lvl = len(m.group(1))
@@ -1438,6 +1465,7 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
         "C": {"ok": letter("C"), "of": ran("C")},
         "U": {"ok": letter("U"), "of": ran("U")},
         "O": {"ok": letter("O"), "of": ran("O")},
+        "W": {"ok": letter("W"), "of": ran("W")},
         "X": {"as_expected": sum(1 for x in xs if x["ok"]), "of": len(xs)},
         "G": {"diffs": len(greg.get("diff", [])), "structure_issues": len(greg.get("structure", [])),
               **greg.get("summary", {})} if greg else {},

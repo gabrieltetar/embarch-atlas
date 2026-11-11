@@ -49,7 +49,7 @@ RAIL_NET = re.compile(r"^([ADPSC]?GND(_?[A-Z0-9]{1,6})?|V(SS|DD|CC|EE)[A-Z0-9_]*
 TIER_ORDER = ("mcu", "direct", "via-series", "cross-board", "not-visible", "unknown")
 RM_TOKEN = "reference-manual"       # `--confirm` / `--reject` argument for the MCU reference-manual row
 KEPT_ANSWERS = ("not-needed", "standard-function")      # the engineer decided: no proposal reopens the part
-UNUSED_KINDS = ("schematic", "prd", "spreadsheet", "notes")     # have a role of their own, or are read as they are
+UNUSED_KINDS = ("schematic", "prd", "standard", "spreadsheet", "notes")  # have a role of their own, or are read as they are
 
 
 # ---------------------------------------------------------------- firmware visibility

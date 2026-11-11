@@ -51,7 +51,8 @@ TOOL = f"embarch-atlas/{__version__} inventory"
 PART_LIMIT = 6          # part-number tokens kept per document
 FRONT_PAGES = 1         # a part named on these is the document's own; later pages name other parts in passing
 
-KINDS = ("schematic", "datasheet", "reference-manual", "errata", "appnote", "prd", "spreadsheet", "notes", "other")
+KINDS = ("schematic", "datasheet", "reference-manual", "errata", "appnote", "prd", "standard", "spreadsheet", "notes",
+         "other")
 WORD_EXTS = (".docx", ".doc")
 TEXT_DIR = "text"       # under inventory/: page text per document, keyed by content
 
@@ -68,6 +69,17 @@ ALTIUM_DATE = re.compile(r"Date:?\s*(\d{1,2}/\d{1,2}/\d{2,4})")
 ALTIUM_SHEET = re.compile(r"Sheet\s+(\d+)\s+of\s+(\d+)")
 SCHDOC = re.compile(r"([A-Za-z0-9_\-]+\.SchDoc)", re.I)
 PRD_VERSION = re.compile(r"Version:?\s*([0-9]+(?:\.[0-9]+)*)")
+# A standard or specification (DESIGN.md "Standards and specifications"): a standards body's designation in
+# the title, or a title saying Specification / Standard with a release line on page 1-2 and none of a part
+# datasheet's headings on pages 1-3. Designations in the body do not count: datasheets cite them.
+STD_DESIGNATION = re.compile(r"\b(?:IEEE\s+Std|ISO(?:/IEC)?\s+\d|IEC\s+\d|JESD\s?\d|ETSI\s+(?:EN|TS)\s+\d|SAE\s+J\d|IPC-\d)")
+STD_CITED = re.compile(r"\b(?:per|to|with|meets?|according|compliant|compliance|tested|rated)\b", re.I)
+STD_TITLE = re.compile(r"\b(?:specification|standard)\b", re.I)
+STD_NOT_TITLE = re.compile(r"\b(?:product|preliminary|objective|device|target)\s+specification\b", re.I)
+STD_RELEASE = re.compile(r"\b(Release|Revision|Version)\s+(\d+(?:\.\d+)*)\b(?:\s*,?\s*(Version)\s+(\d+(?:\.\d+)*))?", re.I)
+STD_YEAR = re.compile(r"\b(?:IEEE\s+Std\s+[\d.]+[A-Za-z]*|ISO(?:/IEC)?\s+[\d-]+|IEC\s+[\d-]+)[-:](\d{4})\b")
+DATASHEET_HEADINGS = re.compile(r"absolute\s+maximum\s+ratings|ordering\s+information|pin\s+configuration|"
+                                r"electrical\s+characteristics", re.I)
 PRD_HISTORY = re.compile(r"^\s*(\d+\.\d+)\s+(\d{1,2}/\d{1,2}/\d{2,4})", re.M)
 GENERIC_REV = re.compile(r"\bRev(?:ision)?\.?\s*:?\s*([0-9]{1,3}(?:\.[0-9]{1,2})?|[A-Z]{1,2}[0-9]?)\b")
 MONTH_DATE = re.compile(r"\b((?:January|February|March|April|May|June|July|August|September|October|November|December|"
@@ -245,7 +257,56 @@ def guide_is_reference_manual(path: Path, title: str, head: str) -> bool:
                for ln in top.splitlines())
 
 
-def classify(path: Path, info: dict[str, str], head: str) -> str:
+def _title_lines(info: dict[str, str], head: str, n: int = 3) -> str:
+    """The PDF's Title and the first `n` non-blank lines of page 1: where a document says what it is."""
+    first = head.split("\f", 1)[0]
+    lines = [ln.strip() for ln in first.splitlines() if ln.strip()][:n]
+    return "\n".join([info.get("Title") or ""] + lines)
+
+
+def is_standard(info: dict[str, str], pages: list[str]) -> bool:
+    """A standard or specification: DESIGN.md "Standards and specifications" ("Classification").
+    `pages`: the text of the first pages, one string per page."""
+    title = _title_lines(info, pages[0] if pages else "")
+    if any(not STD_CITED.search(ln[:m.start()]) for ln in title.splitlines() for m in STD_DESIGNATION.finditer(ln)):
+        return True
+    if not STD_TITLE.search(title) or STD_NOT_TITLE.search(title):
+        return False
+    return bool(STD_RELEASE.search("\n".join(pages[:2]))) and not DATASHEET_HEADINGS.search("\n".join(pages[:3]))
+
+
+def release_rev(text: str) -> str | None:
+    """A standard's revision from its release line, compacted: `Release 3.2, Version 1.2` -> r3.2v1.2,
+    `Revision 2.0` -> r2.0, `Version 1.1` -> v1.1; an IEEE/ISO/IEC designation's year when there is none."""
+    m = STD_RELEASE.search(text)
+    if m:
+        out = ("v" if m.group(1).lower() == "version" else "r") + m.group(2)
+        return out + (f"v{m.group(4)}" if m.group(4) else "")
+    y = STD_YEAR.search(text)
+    return y.group(1) if y else None
+
+
+REV_TOKEN = re.compile(r"^(?:r|rev|v|ver|version|release)\d+(?:\.\d+)*$|^(?:19|20)\d{2}(?:\d{2}){0,2}$", re.I)
+MONTH_TOKEN = re.compile(r"^(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*$", re.I)
+
+
+def standard_stem(stem: str) -> str:
+    """A standard's slug base: the file stem without its revision and date tokens (`R3_2`, `V1.2`, `2023-10`)."""
+    s = re.sub(r"(?i)(?<![A-Za-z])(r|rev|v|ver)(\d+)_(\d+)", r"\1\2.\3", stem)
+    toks = [x for x in re.split(r"[^A-Za-z0-9.]+", s) if x]
+    keep, prev_date = [], False
+    for x in toks:
+        x = x.strip(".")
+        date = bool(REV_TOKEN.match(x)) or bool(MONTH_TOKEN.match(x)) or (prev_date and x.isdigit() and len(x) <= 2)
+        prev_date = date and not bool(re.match(r"(?i)^(r|rev|v|ver|version|release)", x))
+        if not date and x:
+            keep.append(x)
+    return "-".join(keep) or stem
+
+
+def classify(path: Path, info: dict[str, str], head: str, pages: list[str] | None = None) -> str:
+    """The document's kind (DESIGN.md "Kinds"). `head` is the text of pages 1-3; `pages` the same pages one by
+    one (the standard rule tells page 1-2 from page 3), else `head` is read as one page."""
     ext = path.suffix.lower()
     if ext in (".xlsx", ".xlsm", ".xls", ".csv", ".ods"):
         return "spreadsheet"
@@ -270,6 +331,8 @@ def classify(path: Path, info: dict[str, str], head: str) -> str:
         return "errata"
     if "requirements document" in title or "requirements document" in low[:1500] or re.search(r"(^|[^a-z])prd([^a-z]|$)", name):
         return "prd"
+    if is_standard(info, pages if pages is not None else [head]):
+        return "standard"
     if ("datasheet" in title or "data sheet" in low[:4000] or "datasheet" in low[:4000]
             or "general description" in low[:4000] or re.search(r"\bfeatures\b", low[:3000])):
         return "datasheet"
@@ -341,6 +404,15 @@ def detect_ids(kind: str, info: dict[str, str], pages: list[str]) -> dict[str, A
         if hist:
             d["date"] = hist[-1][1]
             d["evidence"].append(f"p1 version history, last row '{hist[-1][0]} {hist[-1][1]}'")
+    if kind == "standard":
+        rev = release_rev("\n".join(pages[:2]))
+        if rev:
+            d["rev"] = rev
+            d["evidence"].append(f"release line, compacted: {rev}")
+        des = STD_DESIGNATION.search(_title_lines(info, pages[0] if pages else ""))
+        if des and not d["doc_no"]:
+            d["doc_no"] = des.group(0)
+        return d  # binds a role, not a part: no MPN, the join never ties it to a board part
     if not d["rev"] and kind not in ("schematic", "prd"):
         m = GENERIC_REV.search(first) or GENERIC_REV.search(last)
         if m:
@@ -380,6 +452,8 @@ def doc_id_for(rec: dict[str, Any]) -> str:
         base = docno or clean_part
     elif kind == "appnote":
         base = docno
+    elif kind == "standard":
+        base = standard_stem(Path(rec["file"]).stem)
     else:
         base = None
     base = base or Path(rec["file"]).stem
@@ -410,7 +484,7 @@ def inventory_pdf(path: Path, override: str | None = None, text_cache: Path | No
     if text_cache is not None:
         write_text_cache(text_cache, pages)
     layer = pdf_text_layer(path, pages)
-    found = classify(path, info, "\n".join(pages[:3]))
+    found = classify(path, info, "\n".join(pages[:3]), pages[:3])
     kind = override or found
     rec: dict[str, Any] = {
         "kind": kind,

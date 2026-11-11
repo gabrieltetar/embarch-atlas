@@ -991,6 +991,9 @@ def prep(pdf: Path, atlas: Path, doc_id: str | None = None, bbox: bool = False, 
         ident["rev"] = doc_id.split("@", 1)[1] if "@" in doc_id else ident["rev"]
     elif entry and isinstance(entry.get("doc_id"), str) and DOC_ID_RE.match(entry["doc_id"]):
         doc_id = entry["doc_id"]
+    elif (kind or (entry or {}).get("kind")) == "standard":
+        from .inventory import doc_id_for, release_rev       # no part: the file stem and the release line
+        doc_id = doc_id_for({"kind": "standard", "file": pdf.name, "rev": release_rev("\n".join(texts[:2]))})
     else:
         rev = re.sub(r"[^A-Za-z0-9._-]+", "", str(ident["rev"])) or "norev"
         doc_id = f"{common_slug(str(ident['part']))}@{rev}"
@@ -1031,7 +1034,10 @@ def prep(pdf: Path, atlas: Path, doc_id: str | None = None, bbox: bool = False, 
     meta = {
         "doc_id": doc_id, "file": pdf.name, "path": rel, "sha256": sha,
         "kind": kind or (entry or {}).get("kind") or "datasheet",
-        "part": ident.get("part"), "doc_no": ident.get("doc_no"), "rev": ident.get("rev"),
+        # a standard binds a role, not a part: no `part`, so the join never ties it to a board part
+        "part": None if (kind or (entry or {}).get("kind")) == "standard" else ident.get("part"),
+        "doc_no": ident.get("doc_no"), "rev": ident.get("rev") if (kind or (entry or {}).get("kind")) != "standard"
+        else doc_id.split("@", 1)[1],
         "pages": n, "title": meta_pdf.get("title"), "labels": labels,
         "text_layer": layer["text_layer"], "pages_textless": layer["textless"],
         "running_header": layer["running"],

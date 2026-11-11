@@ -41,7 +41,7 @@ from .pdftext import page_file
 from .render import END, INVARIANTS, START, invariants_stub
 from .rm import page_sha
 
-PROCEDURES = {"datasheet": "datasheet-procedure/1", "prd": "prd-procedure/1"}
+PROCEDURES = {"datasheet": "datasheet-procedure/1", "prd": "prd-procedure/1", "standard": "standard-procedure/1"}
 PRODUCER_FILES = {"regparse.jsonl"}
 ENTRY_KIND = "doc-distillation"
 
@@ -115,7 +115,8 @@ def units(docdir: Path, n_pages: int) -> dict[str, dict]:
         out[f"prose:{rel}"] = {"type": "prose", "file": rel, "pages": sorted(cited_pages(text)) or every,
                                "content": text, "sha256": _hash(text)}
     if (docdir / "card.md").exists():
-        text = (docdir / "card.md").read_text(encoding="utf-8")
+        # without the bodies of generated blocks (a standard's `sections` list): the LLM did not write them
+        text = prose((docdir / "card.md").read_text(encoding="utf-8"))
         out["card"] = {"type": "card", "file": "card.md", "pages": sorted(cited_pages(text)) or every,
                        "content": text, "sha256": _hash(text)}
     return out

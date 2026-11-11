@@ -425,6 +425,11 @@ def doc_section(a: Atlas, doc: str, section: str | None = None, page: int | None
         if not f.is_file():
             return _missing(f"page {page} of {d.name}", "Run `embarch-atlas doc prep` for this document.")
         body = f.read_text(encoding="utf-8", errors="replace")
+        rows = [r for r in _toc_rows(d) if isinstance(r["start"], int)]
+        cover = [r for r in rows if r["start"] <= int(page) <= (r["end"] or r["start"])]
+        sec = max(cover, key=lambda r: (r["level"], r["start"]))["id"] if cover else None
+        # what `doc sections --suggest` ranks undistilled sections by, beside find_text's hits
+        _append_usage(a, [{"doc": d.name, "section": sec, "page": int(page), "tool": "doc_section"}])
         return _cap(_header(f"{d.name} p{page} text-layer",
                             extra=(_pdf_extra(a, d) + " " if pdf_rel(a, d) else "")
                             + "(grep target; Read the PDF page to see it)") + body,

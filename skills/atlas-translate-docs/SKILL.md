@@ -54,7 +54,7 @@ Pick the procedure by the manifest's `kind`:
 | appnote | `reference/datasheet-procedure.md`. An application note, user guide or technical note supports a part and never stands in for its datasheet, so its card says which part it supports, with the part numbers on its `aka:` line |
 | reference-manual | `reference/rm-procedure.md`. RM prose is distilled **lazily**, only for the sections in the worklist that atlas-build writes (`docs/<rm>/worklist.json`), because what is "in use" depends on the build. With no worklist yet, run only `doc prep` and `mcu svd` / `mcu vote` |
 | prd | `reference/prd-procedure.md` |
-| standard | `reference/standard-procedure.md`. Distilled **lazily**: the card first, then only the sections in `docs/<doc>/worklist.json` (`embarch-atlas doc sections <doc> --add ...`); ASK the engineer which sections the firmware implements |
+| standard | `reference/standard-procedure.md`. Distilled **lazily**: the card first, then only the sections in `docs/<doc>/worklist.json` (`embarch-atlas doc sections <doc> --add ...`); ASK the engineer which sections the firmware implements, with `doc sections <doc> --suggest` showing the ones sessions read most |
 | schematic | done in step 3, nothing to distil |
 
 Every procedure ends the same way:

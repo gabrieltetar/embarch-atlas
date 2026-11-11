@@ -11,7 +11,7 @@ Output, all under `docs/<std_doc_id>/`:
 |---|---|
 | `doc.json`, `pages/`, `toc.md`, `toc.json` | `doc prep` |
 | `worklist.json` | `doc sections <doc_id> --add ...`: the sections asked for, why, pages, content key, status |
-| `card.md` | you, on the first pass: what the standard covers, its roles, the revision, and which sections are distilled (the rest: `toc.md`) |
+| `card.md` | you, on the first pass: what the standard covers, its roles, the revision; the list of distilled sections is a block `doc sections` and `doc render` write, do not edit it |
 | `records/requirement.jsonl` | you: the normative statements of the sections asked for |
 | `records/limit.jsonl`, `records/timing.jsonl` | you: the parameter tables of those sections, as in a datasheet |
 | `records/quirk.jsonl`, `records/figure.jsonl` | you: statements that take back another, state machines and sequence figures |
@@ -26,6 +26,7 @@ The distillation is **board-independent**, like a datasheet's: no board, no part
 - [ ] 1 prep      embarch-atlas doc prep <pdf> --kind standard   (when inventory did not classify it)
 - [ ] 2 card      read the front matter and toc.md only; write card.md (scope, roles, revision, distilled: none yet)
 - [ ] 3 ask       which sections does the firmware implement? ASK the engineer, or take the ones a session asked for;
+                  `embarch-atlas doc sections <doc_id> --suggest` ranks the sections sessions' lookups landed in;
                   embarch-atlas doc sections <doc_id> --add <sec>[,<sec>...] --why "<reason>"
 - [ ] 4 read      per section with status todo: its pages' text; image Reads only for figures and mangled tables
 - [ ] 5 write     records, then s/<secid>.md; update the card's list of distilled sections

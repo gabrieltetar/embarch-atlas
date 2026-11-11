@@ -560,6 +560,9 @@ def render_doc(docdir: Path, log=None) -> dict:
     stats["facts"] = len(lines)
     if (docdir / "toc.json").exists() and (docdir / "pages" / "pages.json").exists():
         write_toc(docdir)
+    from . import standard
+    if standard.is_standard(docdir.parent.parent, docdir.name):
+        standard.refresh_card(docdir.parent.parent, docdir.name)   # the card's list of distilled sections
     if log:
         log(f"{docdir.name}: {stats['blocks']} tables in s/ ({stats['files']} files changed), "
             f"{stats['facts']} lines in facts.txt")

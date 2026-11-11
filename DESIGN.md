@@ -148,8 +148,9 @@ atlases/<target>@<commit12>/
                                 documents, and the documents tied to no part (standards, the PRD)
 current.json                    which atlas matches the checkout (target, commit)
 MAP.md                          copy of the current atlas's MAP.md: the one stable path the session imports
-usage.jsonl                     what lookups returned (find_text pages; find_fact and register record ids; the pages a
-                                part_card cited): write-only, read by `second-look queue --used` and nothing else
+usage.jsonl                     what lookups returned (find_text pages and doc_section tier=text pages, each with its
+                                section; find_fact and register record ids; the pages a part_card cited): write-only,
+                                read by `second-look queue --used` and `doc sections --suggest` and nothing else
 bump/                           bumping on HEAD moves (below): state.json (each target's last bump: running, ok,
                                 stopped or failed, and why), log, moved and handled (the last HEAD move and the last
                                 one bumped), worker.pid, update.lock and worker.lock
@@ -375,7 +376,21 @@ MAP.md lists it under "Other documents".
   `quirk`, `figure`.
 - **Check W**: a requirement's `modality` agrees with the normative keyword in its quote (`shall-not`
   needs "shall not" or "must not"; `shall` a "shall" or "must" not followed by "not"). A quote
-  without one fails W unless `note` says where the force comes from (a table heading).
+  without one fails W unless `note` says where the force comes from (a table heading). W runs on a
+  standard's requirements only: a PRD's take their force from its own tables.
+- **The worklist** (`standard.py`, `doc sections <doc>`): each section with its pages, tokens, why, key and
+  status: `todo` (no frozen `s/<sec>.md`), `frozen` (the newest freeze holds that file and no page it cites
+  changed), `redo` (frozen, and a page it rests on changed). `--add` of a section already there only adds its
+  reason. `doc freeze` uses the procedure version `standard-procedure/1`.
+- **Sections from use**: `doc sections <doc> --suggest [--used <log>] [--level N]` ranks the sections not asked
+  for and not distilled by how many lookups landed in them: `find_text` hits and `doc_section tier=text` pages
+  of that document in the usage log, each credited to the deepest toc section holding its page (`--level`
+  credits the ancestor at that level). The engineer adds sections from measured use instead of a guess.
+- **The card's section list** is generated: `doc sections` and `doc render` rewrite a block between
+  `<!-- atlas:table sections -->` and `<!-- atlas:end -->` in `card.md` (appended under "## Sections" when
+  there is none) naming the distilled sections, the ones asked for and not distilled yet, and `doc_toc` /
+  `find_text` for every other. `doc freeze` reads the card without that block's body and check M skips it, so
+  a worklist change never thaws the card.
 
 ## How a session sees the atlas
 
@@ -448,7 +463,8 @@ hit with the physical page, the deepest toc section holding it, `s/<file>` or "n
 `<doc> text-layer, <n> pages hits=<n>`. Each answer appends `{doc, section, page, tool}` of the hits it
 returned to `<atlas dir>/usage.jsonl`, so undistilled sections can be ranked by use (`find_fact` and `register`
 append `{doc, id, tool}` for the records they returned, `part_card` `{doc, page, tool}` for the pages its card
-cites, which `second-look queue --used` reads); the log is write-only,
+cites, which `second-look queue --used` reads; `doc_section tier=text` `{doc, section, page, tool}`, which
+`doc sections --suggest` reads with find_text's); the log is write-only,
 never read back into an answer, and a failed write is ignored. A toc gives pages, not lines, so a page
 shared by two sections is credited to the deepest, latest-starting one. Measured on a synthetic 400-page
 text layer: a symbol, a state name and a table title each answer in 11-14 ms), `register` (MCU `PERIPH.REG` or
@@ -832,7 +848,7 @@ An atlas id is `<target>@<commit12>`.
 | `missing --kind <file> <kind>` | `missing` | override a document's kind, recorded in `answers.toml`; the manifest, and a prepped document's `doc.json`, are rewritten at once |
 | `doc prep <pdf>` | `pdftext` | doc.json, pages/, toc, page classes |
 | `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; a page cite outside 1..pages of `doc.json` (a record's `p`, a `p.N` in card.md or s/*.md) is reported as `P:` naming the unit and the page and fails, as a wrong-page quote does (the same test `doc freeze` records as `out_of_range`); then checks A–W on the rest (U finds the unit on the cited page as a token, so `ua` inside `guaranteed` is not `µA`, and reads a CamelCase symbol such as `LoadReg` whole rather than by its first letter), writes checks.json, sets `prov` |
-| `doc sections <doc_id> [--add <sec>[,<sec>...] --why <text>]` | `standard` | a standard's worklist: add the sections asked for; list them with pages, tokens and status (todo, frozen, redo) |
+| `doc sections <doc_id> [--add <sec>[,<sec>...] --why <text>] [--suggest [--used <log>] [--level N]]` | `standard` | a standard's worklist: add the sections asked for; list them with pages, tokens and status (todo, frozen, redo); rank the sections not asked for by the lookups that landed in them; rewrite the card's section list |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
 | `doc regparse <doc_id> --template ti\|maxim` | `regparse` | deterministic register records |
 | `doc columns <doc_id> <page>...` | `columns` | a table page as rows and cells in reading orientation (sideways tables: rules, else gaps); for reading, never a quote source |
@@ -955,7 +971,7 @@ newer freeze of the same files marks the older entry `superseded` (kept, never d
 
 ### Kinds
 
-`inventory.KINDS`: `schematic`, `datasheet`, `reference-manual`, `errata`, `appnote`, `prd`, `spreadsheet`,
+`inventory.KINDS`: `schematic`, `datasheet`, `reference-manual`, `errata`, `appnote`, `prd`, `standard`, `spreadsheet`,
 `notes`, `other`. The classifier reads the PDF's metadata and first three pages:
 
 - **`schematic`** needs real evidence (`project.schematic_evidence`, the one test, for `inventory` and for
@@ -977,6 +993,11 @@ newer freeze of the same files marks the older entry `superseded` (kept, never d
   Chosen because a kit's plain user's guide often cites the MCU's manual on page 1, but as a sentence, not as
   its own title line; a citing line keeps it `appnote`. Tested before the appnote rule
   (`inventory.guide_is_reference_manual`).
+- **`standard`** (after `prd`, before `datasheet`): a standards body's designation in the title, or a title
+  saying Specification or Standard with a release line and no datasheet headings ("Standards and
+  specifications" has the rule). The title is the PDF's Title and the first three lines of page 1, and a
+  designation cited there (`per`, `to`, `compliant` ... before it) does not count. A standard covers no part
+  (`coverage.DOC_KINDS` leaves it out) and is never listed as a document nothing uses.
 - **A `.docx` or `.doc`** whose name or title says PRD or requirements is `prd` with `needs_export: true`, and
   `missing.md` asks for it as a PDF. The tool does not convert it. Any other Word file is `other`. Once a PDF of
   the same stem is in the sources folder the Word file is `superseded_by` it and the question goes away.
