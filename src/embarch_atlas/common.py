@@ -142,6 +142,7 @@ NO_BUILD_ABSENT = [
     ("limits.json", "DT limit properties vs the datasheet: no devicetree"),
     ("the RM worklist (`worklist.json`)", "the reference-manual chapters in use come from the peripherals in use"),
     ("`footprint` and `stacks`", "they read the ELF"),
+    ("`code` and `states`", "they read the sources compile_commands.json lists"),
 ]
 NO_BUILD_DEGRADED = [
     ("pins.json, pins.md, pin_slice.txt",

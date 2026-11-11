@@ -76,7 +76,7 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
          "embarch/atlas/docs/*/facts.txt embarch/atlas/docs/*/s/` (facts.txt alone misses what a "
          "distillation wrote only as prose). `find_text <doc> <pattern>` is the step after it: every page's text layer, "
          "each hit with its page and section, for a term `find_fact` reports as `unmatched=` or a section not distilled. Tools: the `embarch-atlas` MCP server (part_card, doc_toc, doc_section, find_fact, find_text, "
-         "register, pin_trace, net_trace, mismatch_report, config, dt_node, footprint, stacks), or the same as "
+         "register, pin_trace, net_trace, mismatch_report, config, dt_node, footprint, stacks, code, states), or the same as "
          "`embarch-atlas q <verb>`. Live, when embarch-core answers: `reg_read PERIPH[.REG]` (MCU, core halted about "
          "20 ms) or `<DT label>.<REG>` (an external part, `i2c read` on the shell) reads a register on the board and "
          "decodes it; `shell <command>` runs a shell command; `live_stacks` gives each thread's stack peak; "
@@ -92,7 +92,7 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
     if nb:
         L += ["## No build: this target has no Zephyr board yet", "",
               "Absent for that reason, so do not ask for them: " + "; ".join(n for n, _ in NO_BUILD_ABSENT) + ". "
-              "`config`, `dt_node`, `footprint` and `stacks` answer that the target has no Zephyr board yet.", "",
+              "`config`, `dt_node`, `footprint`, `stacks`, `code` and `states` answer that the target has no Zephyr board yet.", "",
               "Present but reduced, and an empty cell there is absence, not a pass: "
               + "; ".join(n for n, _ in NO_BUILD_DEGRADED) + ". "
               "`status` lists the same with what each lacks; `checks.md` names every check that did not run. "

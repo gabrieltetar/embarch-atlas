@@ -242,8 +242,8 @@ that atlas and says so; `--force` replaces it.
 **Absent** (never written; `common.NO_BUILD_ABSENT` is the list `MAP.md` and `status` print): `build/`;
 `kconfig.json`; `dt.json` and `in_use.json`; `codecheck.json` and `codecheck.md`; `limits.json`; the reference
 manual's `worklist.json` (the chapters in use come from the peripherals in use); and the lookups `config`,
-`dt_node`, `footprint` and `stacks` on the pinned build, which answer that the target has no Zephyr board
-yet (`build=<dir>` still names a build to read). `codecheck`, `limits` and `mcu rm-sections` say the same.
+`dt_node`, `footprint`, `stacks`, `code` and `states` on the pinned build, which answer that the target has no
+Zephyr board yet (`build=<dir>` still names a build to read). `codecheck`, `limits` and `mcu rm-sections` say the same.
 
 **Degraded, not absent** (`common.NO_BUILD_DEGRADED`; each says what it lacks, and an empty cell there is
 absence, never a pass):

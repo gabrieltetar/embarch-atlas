@@ -124,7 +124,7 @@ def test_build_dependent_queries_say_the_target_has_no_board(nb):
     a = query.Atlas(nb)
     assert a.atlas == out
     for text in (query.config(a, "CONFIG_X"), query.dt_node(a, "i2c0"), query.footprint(a), query.stacks(a),
-                 query.footprint(a, vs="pinned")):
+                 query.footprint(a, vs="pinned"), query.code(a, "main"), query.states(a, "app")):
         assert text.startswith("src: none") and "no Zephyr board yet" in text
         assert "Traceback" not in text and "No such file" not in text
     ok = query.pin_trace(a, "PA0")                                    # what needs no build still answers
