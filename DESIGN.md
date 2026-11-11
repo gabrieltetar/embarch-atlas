@@ -49,7 +49,7 @@ every file, and a missing one becomes a question.
 
 | Skill | Input | Output |
 |---|---|---|
-| `atlas-translate-docs` | the documents the engineer dropped | `docs/` (board-independent distillations), `boards/` (schematic analysis), `inventory/` (manifest, questions) |
+| `atlas-translate-docs` | the documents the engineer dropped | `docs/` (board-independent distillations; a standard's only for the sections asked for), `boards/` (schematic analysis), `inventory/` (manifest, questions) |
 | `atlas-build` | a target + a firmware commit | `atlases/<target>@<commit12>/`: build artifacts, joins, pin/net map, mismatch report, MAP.md; the second look on facts it uses |
 | `atlas-update` | a new commit or changed documents | a new atlas that reuses every unchanged translation and verdict; a diff against the previous atlas |
 | `atlas-use` | a hardware question in a repo with an atlas | the protocol MAP → card → section → page, cite everything |
@@ -94,6 +94,8 @@ docs/<rm_doc>/                  the reference manual adds: outline.json, worklis
                                 availability.json, rm_regs.json, rm_checks.json, vote.md/.json,
                                 s/<ch>.card.md, s/<ch>.must.md, s/<ch>.fields.md
 docs/<svd_doc>/                 the SVD adds: peripherals.json, s/<PERIPH>.md
+docs/<std_doc>/                 a standard adds: worklist.json (the sections asked for: why, pages,
+                                content key, status); s/<secid>.md only for those
 boards/<label>/                 schematic analysis, one per board PDF
   netlist.json, bom.json        from the embedded Smart-PDF netlist (below)
   nets.md, parts.md             compact line formats for the LLM
@@ -254,7 +256,7 @@ absence, never a pass):
 ## Identifiers
 
 - `doc_id` = part or document slug + `@` + revision: `lsw100@04b`, `mcu-rm@6`,
-  `bb200@B` (invented examples). Slugs are lower-case, no spaces. No revision gives
+  `bb200@B`, a standard `demo-bus@r2.0v1.1` (invented examples). Slugs are lower-case, no spaces. No revision gives
   `@norev`; a non-PDF source (an SVD) may omit `@rev`. The slug, by kind: a datasheet's
   part when it is a clean part number, else its document number; a reference manual's or
   errata sheet's document number, else its part; an app note's document number; anything
@@ -303,7 +305,7 @@ Kinds and their own fields:
 | `passthrough` | `from_pin`, `to_pin`, `when` (transparent-part map: switches, shunts, buffers) |
 | `bus` | `iface`, `byte_order` (lsb-first, msb-first), `reg_addr_bytes`, `windows` ([{from, to, addr, base}]: register ranges per bus address, for a part with more than one), `bank_select` ({reg, values}: the 8-bit page-select register and the value that selects each `bank` the register records state, for a paged part) |
 | `check` | `expr`, `expect`, `why` (an invariant the checker evaluates) |
-| `requirement` | `rid`, `text`, `fw_relevant`, `modality` (shall, should, may, nice-to-have), `priority`, `order` (PRD) |
+| `requirement` | `rid`, `text`, `fw_relevant`, `modality` (shall, shall-not, should, should-not, may, nice-to-have), `priority`, `order` (PRD), `role` (standard: whom it binds, as printed), `cond` |
 | `conflict` | `refs`, `sources` (`"<doc> <loc>: <says>"`), `text` |
 
 `prov` classes: `deterministic`, `deterministic+crosschecked`, `llm-verified`,
@@ -347,6 +349,33 @@ value anchors only when that record is on a page the line cites. Rendered struct
 `(1)`, `(2)` inside a clause; a real number in parentheses, `(5 V)`, still is. A cite that names another document (`other-doc p.7`, the shape a conflict row's Sources cell has) is anchored on that
 document's page, beside this one's; a number on neither cited page still fails. A non-PDF source
 (an SVD) gets only the record-level checks.
+
+## Standards and specifications
+
+A `standard` is a document that binds a role rather than a part: a bus, protocol or power
+specification, an IEC/IEEE/JEDEC standard. It has no MPN, so the join never ties it to a board part;
+MAP.md lists it under "Other documents".
+
+- **Classification** (`inventory`, before `datasheet`): a standards body's designation in the title
+  (`IEEE Std`, `ISO`, `IEC`, `JESD`, `ETSI EN/TS`, `SAE J`, `IPC-`), or a title that says
+  "Specification" or "Standard" (not "Product", "Preliminary", "Objective" or "Device
+  Specification": vendor datasheets) with a release line on page 1–2 (`Release 3.2, Version 1.2`,
+  `Revision 2.0`, `Version 1.1`) and none of a part datasheet's headings on pages 1–3 (absolute
+  maximum ratings, ordering information, pin configuration, electrical characteristics). Designations
+  in the body text do not count: datasheets cite them for ESD and test methods.
+- **Identity**: the revision is the release line, compacted (`r3.2v1.2`, `r2.0`, `v1.1`, an IEEE
+  year); the slug is the file stem without its revision and date tokens. No `part`, no `parts`.
+- **Lazy distillation**, as for the reference manual: `doc prep` keeps every page's text, the card
+  says what the standard covers and which sections are distilled, and only the sections asked for
+  are distilled (`worklist.json`, written by `doc sections --add`, by the engineer or after a session
+  needed one). A section's unit key is the RM's: section id + its pages' text hashes + procedure
+  version, so a frozen section is never redone and a new revision redoes only changed pages.
+- **Records**: `requirement` first (one per Shall / Should / May statement, `modality` as printed,
+  `role` and `cond` as printed), then `limit`/`timing` for parameter tables (group `ec`, so K runs),
+  `quirk`, `figure`.
+- **Check W**: a requirement's `modality` agrees with the normative keyword in its quote (`shall-not`
+  needs "shall not" or "must not"; `shall` a "shall" or "must" not followed by "not"). A quote
+  without one fails W unless `note` says where the force comes from (a table heading).
 
 ## How a session sees the atlas
 
@@ -802,7 +831,8 @@ An atlas id is `<target>@<commit12>`.
 | `missing --confirm <MPN> [--file <file>]` / `--confirm-all` / `--reject <MPN> --file <file>` | `missing` | accept or refuse a document for a part, recorded in `answers.toml` (`--confirm` with no file takes the part's strongest proposal; `--confirm-all` the first row of each part and the MCU row). `reference-manual` in place of `<MPN>` answers the MCU row |
 | `missing --kind <file> <kind>` | `missing` | override a document's kind, recorded in `answers.toml`; the manifest, and a prepped document's `doc.json`, are rewritten at once |
 | `doc prep <pdf>` | `pdftext` | doc.json, pages/, toc, page classes |
-| `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; a page cite outside 1..pages of `doc.json` (a record's `p`, a `p.N` in card.md or s/*.md) is reported as `P:` naming the unit and the page and fails, as a wrong-page quote does (the same test `doc freeze` records as `out_of_range`); then checks A–T on the rest (U finds the unit on the cited page as a token, so `ua` inside `guaranteed` is not `µA`, and reads a CamelCase symbol such as `LoadReg` whole rather than by its first letter), writes checks.json, sets `prov` |
+| `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; a page cite outside 1..pages of `doc.json` (a record's `p`, a `p.N` in card.md or s/*.md) is reported as `P:` naming the unit and the page and fails, as a wrong-page quote does (the same test `doc freeze` records as `out_of_range`); then checks A–W on the rest (U finds the unit on the cited page as a token, so `ua` inside `guaranteed` is not `µA`, and reads a CamelCase symbol such as `LoadReg` whole rather than by its first letter), writes checks.json, sets `prov` |
+| `doc sections <doc_id> [--add <sec>[,<sec>...] --why <text>]` | `standard` | a standard's worklist: add the sections asked for; list them with pages, tokens and status (todo, frozen, redo) |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
 | `doc regparse <doc_id> --template ti\|maxim` | `regparse` | deterministic register records |
 | `doc columns <doc_id> <page>...` | `columns` | a table page as rows and cells in reading orientation (sideways tables: rules, else gaps); for reading, never a quote source |

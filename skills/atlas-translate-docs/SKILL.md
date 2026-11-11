@@ -1,7 +1,7 @@
 ---
 name: atlas-translate-docs
 description: Turns the hardware documents the engineer supplied for this firmware project (schematic PDFs, component datasheets, the MCU reference manual, the PRD) into embarch-atlas's tiered, page-cited, cross-checked distillations and a schematic netlist. Run when documents are added or changed under the project's sources dir, or when atlas-build asks for reference-manual sections.
-argument-hint: "[all | <file in sources> | rm-worklist <atlas>]"
+argument-hint: "[all | <file in sources> | rm-worklist <atlas> | standard <doc_id> <section>...]"
 ---
 
 # atlas-translate-docs
@@ -54,6 +54,7 @@ Pick the procedure by the manifest's `kind`:
 | appnote | `reference/datasheet-procedure.md`. An application note, user guide or technical note supports a part and never stands in for its datasheet, so its card says which part it supports, with the part numbers on its `aka:` line |
 | reference-manual | `reference/rm-procedure.md`. RM prose is distilled **lazily**, only for the sections in the worklist that atlas-build writes (`docs/<rm>/worklist.json`), because what is "in use" depends on the build. With no worklist yet, run only `doc prep` and `mcu svd` / `mcu vote` |
 | prd | `reference/prd-procedure.md` |
+| standard | `reference/standard-procedure.md`. Distilled **lazily**: the card first, then only the sections in `docs/<doc>/worklist.json` (`embarch-atlas doc sections <doc> --add ...`); ASK the engineer which sections the firmware implements |
 | schematic | done in step 3, nothing to distil |
 
 Every procedure ends the same way:
@@ -82,3 +83,7 @@ this skill.
 `/atlas-translate-docs rm-worklist <atlas>` distils only the RM sections listed in
 that atlas's worklist that have no frozen distillation yet (key = content hash of
 their pages), then renders and checks them.
+
+`/atlas-translate-docs standard <doc_id> <section>...` adds the sections to the standard's
+worklist (`doc sections --add`) and distils the ones not frozen yet, by
+`reference/standard-procedure.md` steps 3-7.

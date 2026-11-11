@@ -24,7 +24,9 @@ PDFs whole, and never answer a hardware question from memory.
    `/atlas-build`), do not answer the hardware question from memory, and **stop** - do
    not go on to step 2 or look for cards.
 2. **Card** (`docs/<doc_id>/card.md`, ≤ 1.5K tokens). The part's role, key limits,
-   register summary, the **quirks**, and a section index.
+   register summary, the **quirks**, and a section index. A standard's card lists the
+   sections distilled; for any other section read `toc.md` and the pages, cite them, and
+   suggest `/atlas-translate-docs standard <doc_id> <section>` when the answer depended on it.
 3. **Section** (`docs/<doc_id>/s/<secid>.md`). Tables follow one condition per row with
    the symbol and unit repeated, so `grep` returns whole rows. `docs/<doc_id>/facts.txt`
    has one fact per line (`<id> key=value; ...; cite=<doc> p<N>; prov=<class>`):
