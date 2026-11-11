@@ -37,7 +37,8 @@ every file, and a missing one becomes a question.
    git worktree at that commit. The engineer's working tree and build dirs are
    never written. `config` and `dt_node` may *read* a build dir the caller names, and
    say which build answered (owner decision, 2026-10-06: branch work is mostly on
-   unpinned builds). **A target may state that it has no Zephyr board yet** (`no_board = true`
+   unpinned builds); `code` and `states` read the sources such a build compiled, wherever its
+   `compile_commands.json` says they are. **A target may state that it has no Zephyr board yet** (`no_board = true`
    in `atlas.toml`): its atlas is then pinned to the target and the firmware commit, made with
    no worktree and no west build, and its stamp says there is no build and why. It holds the
    schematic and datasheet side only; "A target with no Zephyr board yet" below lists what it
@@ -111,6 +112,9 @@ boards/bindings.json            optional: compatible -> MPN, prop -> pin, extra 
 cache/llm/<key>.json            frozen LLM outputs; second-look verdicts as sl-<key>.json
 cache/kconfig/, cache/dt/       a named build dir's kconfig/dt extraction, keyed by the content it came from
 cache/footprint/<elf sha>.json  one ELF's sections (objdump -h) and sized symbols (nm -l -S), for footprint and stacks
+cache/code/<key>.json           one build's source set for code and states: its compiled units, the headers each
+                                included, every file's definitions; keyed by compile_commands.json and .ninja_deps
+cache/code/f/<sha16>.json       one source file's definitions, `#if` regions and SMF tables, keyed by its content
 .work/<commit12>/<fw basename>  the build worktree
 atlases/<target>@<commit12>/
   atlas.json                    the stamp (below)
@@ -489,11 +493,11 @@ rule a configuration value can break. `join` evaluates every one against the pin
   (`update.rm_todo`) just before it renders the MAP, so `update` and a hand-run `build` + `join`
   both list the chapters in use; a worklist left for another atlas is rewritten, not skipped.
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
-  (https://code.claude.com/docs/en/mcp.md), so its fifteen lookups skip deferred tool search.
+  (https://code.claude.com/docs/en/mcp.md), so its seventeen lookups skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.
 - A tool declares `readOnlyHint` only when it cannot change the board, because a host (plan
   mode, an auto-approval rule, a permission classifier, a worker's allowlist) trusts the hint.
-  The fifteen lookups and `live_stacks` carry it. `shell` carries it because it runs only
+  The seventeen lookups and `live_stacks` carry it. `shell` carries it because it runs only
   commands that match the `[live] read_only` list (default: `device list`, `kernel thread stacks`,
   `kernel uptime`, `i2c read *`, `i2c read_byte *`; `i2c scan` stays out, it addresses every device
   on the bus) and refuses any other, naming `shell_run`. `reg_read` carries it and refuses
@@ -588,6 +592,35 @@ Two doors call the
 same functions: `embarch-atlas q <verb>` and `embarch-atlas mcp` (stdio, `mcp>=2.2`,
 optional extra). Files stay the primary door: an agent's own `Read`/`Grep` reach
 them for free; the server carries what files cannot.
+
+`code` and `states` (`codeq.py`) answer from the C sources a build compiled, the pinned build or the
+build dir `build=` names, so a variant, a scratch Zephyr worktree with west patches applied or a
+version bump answers for its own tree and never for the workspace's. The source set is every unit in
+the build's `compile_commands.json` and the headers each included, read from its `.ninja_deps` (exact;
+a pinned atlas uses the build dir its stamp names while it exists), else found by following `#include`
+through the unit's `-I` paths with every `#if` branch taken (a superset; the `src:` line says which).
+Extraction is a deterministic lexer, not a compiler (neither libclang nor a tags program ships with the
+Zephyr SDK): comments and string contents are blanked; `#define` lines give macros; top-level braces
+and semicolons give functions, structs, unions, enums and their enumerators, typedefs, file-scope
+variables, prototypes and `*_DEFINE(name, ...)` objects; every `#if` branch is parsed (a branch that
+opens a brace its sibling does not is followed through the first, as ctags does) and each definition
+keeps the conditions above it. A query drops what the build's `.config` turns off (`CONFIG_*` terms
+only; a condition naming a devicetree macro or a toolchain define counts as compiled) and says how many
+it dropped. `code <symbol>` gives each definition's file:line and compiled unit (a header: how many
+units included it), the comment block above it and its body with line numbers, then every reference in
+the source set as `file:line function`, a definition in several units listing each one; a prototype
+is listed as a declaration and shown only when no definition is compiled. `<file>:<symbol>` narrows to
+a file, `<file>:<line>` returns the definition holding that line (else the lines around it), a file
+alone lists its definitions, a `*` pattern lists names, and `show=def|refs` drops the references or the
+bodies. `states <table | directory | file>` reads `SMF_CREATE_STATE` tables, the designated index
+naming each state, and gives one row per compiled state: parent, initial, entry/run/exit with
+file:line, and the states each moves to. A move is `smf_set_state(ctx, &table[X])`, or a call to a
+setter, a function whose body sets the table's state from one of its parameters (`pe_set_state(dev,
+X)`), or one call level down through a helper whose own body moves (marked `via <helper>`); calls in a
+branch the build turns off are dropped, and a target the build's table lacks is marked. A file newer
+than the build (its `zephyr.elf`, else the stamp's `created`) is marked changed since the build: the
+answer then shows the file as it is now. Measured on an upstream Zephyr v4.4.0 USB-C sink sample build
+(140 units, 593 files): the first index takes 1.5 s, a cached lookup well under 0.1 s in the server.
 
 ## The whole-atlas graph (`graph.json`)
 
@@ -1051,6 +1084,13 @@ width, because a bump re-reads every fact in every atlas. They are corrected whe
 fields change, or by a deliberate `CHECKED_VERSION` bump if a full re-look is wanted. When several entries share a
 unit key, the one whose recorded file hashes match the files on disk wins, then the newest; a
 newer freeze of the same files marks the older entry `superseded` (kept, never deleted).
+
+The `code` index is cached in two layers: one file's extraction under `cache/code/f/` by its content
+hash, which every build of the same tree shares, and one build's source set and extractions under
+`cache/code/` by its `compile_commands.json` and `.ninja_deps` bytes. A load revalidates each file by
+size and mtime and re-extracts only the ones that moved; the `CONFIG_*` conditions are evaluated per
+query against the build's `.config`, so the extraction itself never depends on a configuration.
+`INDEX_VERSION` in `codeq.py` invalidates both layers when the extractor changes.
 
 ## Document kinds and coverage
 

@@ -63,6 +63,10 @@ class Source:
         self.elf: Path | None = None
         self.tools: dict[str, str] = {}
         self.cache: Path | None = None
+        self.bdir: Path | None = None          # the image dir holding compile_commands.json's .ninja_deps
+        self.cc: Path | None = None            # compile_commands.json
+        self.built: float | None = None        # when it was built (epoch s), for "changed since the build"
+        self.zephyr: str | None = None         # the Zephyr version it was built from
 
     def rel(self, path: str) -> str:
         return KC._rel(path, "/", self.bases)
@@ -98,7 +102,32 @@ def pinned(a) -> Source:
             src.dt_why = f"{a.atlas.name} has no dt.json"
     src.load_kconfig, src.load_dt = load_kconfig, load_dt
     src.elf, src.tools, src.cache = bd / "zephyr.elf", (stamp.get("build") or {}).get("tools") or {}, a.dir / "cache"
+    _pinned_sources(src, a, stamp)
     return src
+
+
+def _pinned_sources(src: Source, a, stamp: dict) -> None:
+    """compile_commands.json, the build dir's .ninja_deps when it is still there, the build time and the
+    Zephyr version, for `code` and `states` on the pinned build."""
+    from .codeq import built_at
+    src.cc = a.atlas / "build" / "compile_commands.json"
+    d = (stamp.get("build") or {}).get("dir")
+    if d:
+        try:
+            src.bdir = KC.image_dir(a.dir / d, ".config", stamp.get("app"))
+        except (OSError, FileNotFoundError):
+            src.bdir = None
+    src.built = built_at(stamp.get("created"), None)
+    kj = _json_or_none(a.atlas / "kconfig.json")
+    zw = next((w for w in stamp.get("west") or [] if isinstance(w, dict) and w.get("name") == "zephyr"), {})
+    src.zephyr = (kj or {}).get("zephyr") or zw.get("revision") or None
+
+
+def _json_or_none(p: Path) -> Any:
+    try:
+        return read_json(p)
+    except (OSError, ValueError):
+        return None
 
 
 def _key(*parts: bytes) -> str:
@@ -120,7 +149,8 @@ def named(a, build: str) -> Source:
     zb = env.get("ZEPHYR_BASE", "")
     app_dir = env.get("APPLICATION_SOURCE_DIR") or str(fw)
     top = _git(Path(app_dir), "rev-parse", "--show-toplevel") or str(fw)
-    bases = [(top, "fw"), *[(m, n) for m, n in _modules(zdir) if m != top], (zb, "zephyr"), (str(zdir), "build")]
+    bases = [*([(top, "fw")] if top != zb else []), *[(m, n) for m, n in _modules(zdir) if m != top],
+             (zb, "zephyr"), (str(zdir), "build")]      # an app inside the Zephyr tree (a sample) is zephyr's
     head = _git(Path(top), "rev-parse", "--short=12", "HEAD")
     dirty = " dirty" if _git(Path(top), "status", "--porcelain", "--untracked-files=no") else ""
     label = (f"build {p} (app {KC.version_h(zdir, 'APP_BUILD_VERSION') or '?'}, zephyr "
@@ -161,6 +191,9 @@ def named(a, build: str) -> Source:
     src.load_kconfig, src.load_dt = load_kconfig, load_dt
     from .footprint import build_tools
     src.elf, src.tools, src.cache = zdir / "zephyr" / "zephyr.elf", build_tools(zdir / "CMakeCache.txt"), cache
+    from .codeq import built_at
+    src.cc, src.bdir, src.zephyr = zdir / "compile_commands.json", zdir, KC.version_h(zdir, "BUILD_VERSION")
+    src.built = built_at(None, src.elf)
     return src
 
 

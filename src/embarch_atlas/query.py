@@ -26,6 +26,7 @@ CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below 
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500,
           "register": 1500, "pin_trace": 4000, "net_trace": 4000, "mismatch_report": 4000,
           "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500}
+BUDGET.update({"code": 3000, "states": 4000})
 
 
 # --------------------------------------------------------------------------- plumbing
@@ -1100,6 +1101,40 @@ def stacks(a: Atlas, build: str | None = None, offset: int = 0) -> str:
 
 
 @_stamped
+def code(a: Atlas, symbol: str, build: str | None = None, show: str = "all", offset: int = 0) -> str:
+    """A function, struct, union, enum, typedef, macro, enumerator or file-scope variable as the build
+    compiled it: each definition's file:line and compiled unit, its body, then every reference in the
+    compiled sources as `file:line function`. `<file>:<symbol>` narrows to a file, `<file>:<line>` gives
+    the definition holding that line, a file alone lists its definitions, `*` lists matching names.
+    `show`: all, def (no references) or refs (no bodies). From the pinned build, or the build dir `build` names."""
+    from . import buildq, codeq
+    try:
+        src = buildq.source(a, build)
+        idx = codeq.for_source(src)
+        body = codeq.code_answer(idx, symbol, show)
+    except (LookupError, FileNotFoundError, OSError, RuntimeError, ValueError) as e:
+        return f"src: none\n\n{e}\n"
+    extra = f"query={symbol!r}" + (f" show={show}" if show != "all" else "")
+    return _cap(_header(codeq.src_line(src, idx), extra=extra) + body + "\n", "code", offset)
+
+
+@_stamped
+def states(a: Atlas, table: str, build: str | None = None, offset: int = 0) -> str:
+    """Zephyr SMF state tables (`SMF_CREATE_STATE` entries) by table name, or every table in a directory or
+    file: one row per compiled state with its parent, its entry/run/exit functions and their lines, and the
+    states each can move to (`smf_set_state` targets in it, and one call level down). From the pinned build,
+    or the build dir `build` names."""
+    from . import buildq, codeq
+    try:
+        src = buildq.source(a, build)
+        idx = codeq.for_source(src)
+        body = codeq.states_answer(idx, table)
+    except (LookupError, FileNotFoundError, OSError, RuntimeError, ValueError) as e:
+        return f"src: none\n\n{e}\n"
+    return _cap(_header(codeq.src_line(src, idx), extra=f"query={table!r}") + body + "\n", "states", offset)
+
+
+@_stamped
 def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, offset: int = 0,
                     build: str | None = None) -> str:
     """Checks run and passed first, then candidates (claim, evidence, what would settle it). With `build` (a build
@@ -1439,6 +1474,7 @@ TOOLS = {
     "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
     "applies": applies, "transitions": transitions,
 }
+TOOLS.update({"code": code, "states": states})
 
 
 # --------------------------------------------------------------------------- CLI
@@ -1479,6 +1515,10 @@ def register(sub, groups) -> None:
         (["--offset"], {"type": int, "default": 0}))
     add("transitions", transitions, (["doc"], {}), (["--state"], {}), (["--on"], {"help": "a message or timer name"}),
         (["--machine"], {}), (["--offset"], {"type": int, "default": 0}))
+    add("code", code, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
+        (["--show"], {"choices": ["all", "def", "refs"], "default": "all"}), (["--offset"], {"type": int, "default": 0}))
+    add("states", states, (["table"], {"help": "an SMF table name, or a directory or file holding tables"}),
+        (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
 
 
 def _run(ns, fn) -> int:

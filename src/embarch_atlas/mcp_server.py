@@ -29,7 +29,9 @@ INSTRUCTIONS = (
     "Use it before answering any hardware question. Protocol: MAP.md (already in context) "
     "-> part_card -> doc_section (find_fact, then find_text for page text) -> Read the PDF page to verify. Every answer starts with a "
     "`src:` line: cite it. prov=llm-unverified and figure facts are leads, not truth. "
-    "Mismatches are candidates for the engineer, never facts. An answer that ends `truncated: call again with offset=N` "
+    "Mismatches are candidates for the engineer, never facts. For C source the build compiled (Zephyr or firmware), "
+    "`code` and `states` answer from that build's own files: use them instead of grep and sed. "
+    "An answer that ends `truncated: call again with offset=N` "
     "continues by calling the same tool again with that `offset`; every tool takes one."
 )
 
@@ -134,6 +136,24 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         """Every thread stack in the image: size, symbol, the line that defined it, and the *_STACK_SIZE
         option it most likely comes from (inference). Static sizes; high-water marks need the board."""
         return query.stacks(view(), build, offset)
+
+    @server.tool(annotations=READ_ONLY)
+    def code(symbol: str, build: str | None = None, show: str = "all", offset: int = 0) -> str:
+        """A C symbol as the build compiled it (function, struct, enum, typedef, macro, enumerator, file-scope
+        variable): each definition's file:line and compiled unit, its body with line numbers, then every
+        reference in the compiled sources as `file:line function`. `<file>:<symbol>` narrows to a file,
+        `<file>:<line>` returns the definition holding that line, a file alone lists its definitions, `x_*` lists
+        names. `show`: "all", "def" (bodies only) or "refs" (references only). Use it instead of grep then sed -n.
+        `build`: a build dir (a variant, a patched Zephyr worktree, a version bump); default the pinned build."""
+        return query.code(view(), symbol, build, show, offset)
+
+    @server.tool(annotations=READ_ONLY)
+    def states(table: str, build: str | None = None, offset: int = 0) -> str:
+        """Zephyr SMF state machines: a table name (pe_states), or a directory or file (subsys/usb/usb_c) for
+        every table in it. One row per state the build compiles: parent, entry/run/exit with file:line, and the
+        states each moves to (smf_set_state targets, through setters like pe_set_state, and one helper call down).
+        `build`: a build dir; default the atlas's pinned build."""
+        return query.states(view(), table, build, offset)
 
     @server.tool(annotations=READ_ONLY)
     def mismatch_report(scope: str | None = None, cls: str | None = None, build: str | None = None,
