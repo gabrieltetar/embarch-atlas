@@ -67,8 +67,9 @@ truncation line remains; do not fall back to reading files by hand.
 | Which MCU pin drives X / what is on pin P | `atlases/<id>/pins.md` (or `pin_slice.txt`) |
 | Part on a net, its MPN, DNP | `boards/<label>/nets.md`, `parts.md` |
 | What feeds a rail, what enables it, a net no MCU pin reaches | `net_trace <board:net>` (MCP or `embarch-atlas q net-trace`) |
-| A Kconfig symbol's value and why | `config <SYMBOL>`; add `build=<dir>` for a branch build |
+| A Kconfig symbol's value and why; several at once instead of a `grep` of `.config` | `config <SYMBOL>`; `symbols=[A, B, USB_*]` (CLI `q config A,B,USB_*`) gives one line each: value, the fragment or select/default that set it, an unmet `depends on`; add `build=<dir>` for a branch build |
 | A devicetree node: properties and where each was set, driver, pins | `dt_node <label or path>`; `build=<dir>` likewise |
+| What two builds differ in, instead of a `diff` of two `.config` or `zephyr.dts` | `config vs=<dir or pinned>` and `dt_node vs=<dir or pinned>`, with `build=<dir>` for the other side: only the differences, both values and where each was set; a symbol list or a node narrows it. A `[not given: ...]` mark says what a build on another Zephyr than the workspace's could not answer |
 | Flash/RAM use, headroom in the code partition, what grew between two builds | `footprint` (`vs=<dir or pinned>`, `by=dir|file|symbol`) |
 | Thread stack sizes and where each is defined | `stacks` (static); peaks on the board: `live_stacks` (pass `build` when the board runs another build than the atlas) |
 | MAP.md has a "No build" section (the target has no Zephyr board yet) | Do not ask it for `config`, `dt_node`, `footprint`, `stacks` or the DT columns of `pins.md`: they answer that there is no board, and an empty cell there is absence, not a pass. The schematic and datasheet lookups above work as usual |

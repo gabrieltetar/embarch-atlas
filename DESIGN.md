@@ -425,14 +425,22 @@ supply, the MCU symbol against its datasheet, far-end output level against pin t
 against the datasheet. Every check that needs a devicetree, an ELF, driver sources or a build (`mismatch.NEEDS_BUILD`) is
 listed under "Not run" with what it lacked, never counted as passed; the `src:` line says
 `boards/<labels> netlist.json + BOM + coverage + distillations, no atlas`), `config` (a
-Kconfig symbol, or a `*` pattern) and `dt_node` (a node by path, label, alias, chosen name or
-compatible), `footprint` (flash image and RAM from the ELF's sections, against the flash, SRAM
+Kconfig symbol, its full answer; several names, as a list or comma-separated, or `*` patterns,
+one line per symbol: value, the fragment line or the select or default that set it, and an unmet
+`depends on`) and `dt_node` (a node by path, label, alias, chosen name or compatible), both
+taking `vs=<build dir | pinned>`: only what differs from that build (a symbol; a node only one
+build has, or a node's status, compatible, labels, property or pin), with both values and where
+each side's was set, under a `src:` line naming both builds (`config` reads absent, unset and `n`
+as the same value; no name, or `*`, compares everything), `footprint` (flash image and RAM from
+the ELF's sections, against the flash, SRAM
 and code partition the devicetree's chosen nodes give; the largest contributors by dir, file or
 symbol, or the change against another build) and `stacks` (every thread stack in `noinit`, its
 size and defining line, and the `*_STACK_SIZE` option it most likely comes from, by inference),
 all four from the pinned build or a named build dir (`buildq.py`, `footprint.py`; a named build's
 extraction runs only while the workspace's `git describe` equals the build's `BUILD_VERSION`,
-else `config` gives the value and the fragment assignments only). Each answer starts with a `src:`
+else `config` gives the value and the fragment assignments only, each one-line answer marking
+`[not given: ...]` what it lacks, and a `dt_node` comparison names the side that cannot load).
+Each answer starts with a `src:`
 line and is paged at a per-tool token budget with `next=<offset>`. Every lookup takes that
 `offset` (function, `q` verb and MCP tool alike; a test walks `TOOLS` and fails for one that
 does not), so a cut answer is always continuable. `offset` counts characters of the body, the

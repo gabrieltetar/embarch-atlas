@@ -968,29 +968,60 @@ def _build_src(a: Atlas, build: str | None, query: str, fn):
     from . import buildq
     try:
         src = buildq.source(a, build)
+        return src, fn(src, query)
     except (LookupError, FileNotFoundError, OSError, RuntimeError) as e:
         return None, f"src: none\n\n{e}\n"
-    return src, fn(src, query)
+
+
+def _build_vs(a: Atlas, build: str | None, vs: str, what: str, fn):
+    """(`src:` text naming both builds, body) for a lookup comparing `build` (default the pinned one)
+    with the build `vs` names."""
+    from . import buildq
+    try:
+        src, other = buildq.source(a, build), buildq.versus(a, vs)
+        return f"{src.label} {what} vs {other.label} {what}", fn(src, other)
+    except (LookupError, FileNotFoundError, OSError, RuntimeError) as e:
+        return None, f"src: none\n\n{e}\n"
 
 
 @_stamped
-def config(a: Atlas, symbol: str, build: str | None = None, offset: int = 0) -> str:
-    """A Kconfig symbol (CONFIG_X or X; `*` lists matches): its value, the fragment that set it, its
-    depends on and whether it is met, who selects or implies it, the default that applies, where it
-    is defined. From the pinned build, or the build dir `build` names."""
+def config(a: Atlas, symbol: str | list[str] | None = None, build: str | None = None, vs: str | None = None,
+           offset: int = 0) -> str:
+    """A Kconfig symbol (CONFIG_X or X): its value, the fragment that set it, its depends on and whether
+    it is met, who selects or implies it, the default that applies, where it is defined. Several names (a
+    list, or comma-separated) or `*` patterns: one line per symbol, value, the fragment line or select or
+    default that set it, an unmet depends on. With `vs` (a build dir, or "pinned"): only the symbols
+    whose value differs from that build, with both values and where each was set; no `symbol` compares
+    all. From the pinned build, or the build dir `build` names."""
     from . import buildq
-    src, body = _build_src(a, build, symbol, buildq.config_answer)
+    names = buildq.names_of(symbol)
+    q = ",".join(names) or "*"
+    if vs:
+        src, body = _build_vs(a, build, vs, "kconfig", lambda s, o: buildq.config_diff_answer(s, o, names))
+        return body if src is None else _cap(_header(src, extra=f"query={q!r}") + body + "\n", "config", offset)
+    if not names:
+        return "src: none\n\nName a symbol, several (a list or comma-separated) or a `*` pattern, or pass `vs`.\n"
+    src, body = _build_src(a, build, names, buildq.config_answer)
     if src is None:
         return body
-    return _cap(_header(f"{src.label} kconfig", extra=f"query={symbol!r}") + body + "\n", "config", offset)
+    return _cap(_header(f"{src.label} kconfig", extra=f"query={q!r}") + body + "\n", "config", offset)
 
 
 @_stamped
-def dt_node(a: Atlas, node: str, build: str | None = None, offset: int = 0) -> str:
+def dt_node(a: Atlas, node: str | None = None, build: str | None = None, vs: str | None = None,
+            offset: int = 0) -> str:
     """A devicetree node by path, label, alias, chosen name or compatible: status, binding, the
     driver compiled for it, whether its device is in the ELF, every property with the file:line
-    that set it, its pins and children. From the pinned build, or the build dir `build` names."""
+    that set it, its pins and children. With `vs` (a build dir, or "pinned"): only what differs from
+    that build, both values and the line that set each; no `node` compares every node. From the
+    pinned build, or the build dir `build` names."""
     from . import buildq
+    if vs:
+        src, body = _build_vs(a, build, vs, "devicetree", lambda s, o: buildq.dt_diff_answer(s, o, node))
+        return body if src is None else _cap(_header(src, extra=f"query={node or '*'!r}") + body + "\n",
+                                             "dt_node", offset)
+    if not node:
+        return "src: none\n\nName a node (path, label, alias, chosen name or compatible), or pass `vs`.\n"
     src, body = _build_src(a, build, node, buildq.dt_answer)
     if src is None:
         return body
@@ -1005,7 +1036,7 @@ def footprint(a: Atlas, build: str | None = None, vs: str | None = None, by: str
     from . import buildq
     try:
         src = buildq.source(a, build)
-        other = (buildq.pinned(a) if vs == "pinned" else buildq.named(a, vs)) if vs else None
+        other = buildq.versus(a, vs) if vs else None
         body = buildq.footprint_answer(src, by, other)
     except (LookupError, FileNotFoundError, OSError, RuntimeError, subprocess.CalledProcessError) as e:
         return f"src: none\n\n{e}\n"
@@ -1118,8 +1149,11 @@ def register(sub, groups) -> None:
     add("register", register_lookup, (["target"], {}), (["--field"], {}), (["--offset"], {"type": int, "default": 0}))
     add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
     add("net_trace", net_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
-    add("config", config, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
-    add("dt_node", dt_node, (["node"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
+    add("config", config, (["symbol"], {"nargs": "*", "help": "names or `*` patterns, space- or comma-separated"}),
+        (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
+        (["--vs"], {"help": "list only the differences against this build dir, or `pinned`"}), (["--offset"], {"type": int, "default": 0}))
+    add("dt_node", dt_node, (["node"], {"nargs": "?"}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
+        (["--vs"], {"help": "list only the differences against this build dir, or `pinned`"}), (["--offset"], {"type": int, "default": 0}))
     add("footprint", footprint, (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
         (["--vs"], {"help": "compare against this build dir, or `pinned`"}),
         (["--by"], {"choices": ["dir", "file", "symbol"], "default": "dir"}), (["--offset"], {"type": int, "default": 0}))

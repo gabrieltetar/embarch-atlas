@@ -1,4 +1,5 @@
 """config and dt_node over synthetic builds (invented symbols, nodes and files)."""
+import json
 from pathlib import Path
 
 import pytest
@@ -178,3 +179,170 @@ def test_kconfig_extract_writes_for_a_built_atlas_and_keeps_the_zephyr_guard(atl
     (at / "kconfig.json").unlink()
     with pytest.raises(build.BuildError, match="is gone.*--force"):
         build.extract_kconfig(atlas_dir, at, log=lambda *a: None)
+
+
+def test_config_takes_several_names_one_line_each(atlas_dir):
+    _kconfig_json(atlas_dir / "atlases" / "core@000000000003")
+    a = query.Atlas(atlas_dir)
+    out = query.config(a, "SHELL,CONFIG_FANCY, stack,GPIO")
+    assert out.startswith("src: atlas core@000000000003 kconfig query='SHELL,CONFIG_FANCY,stack,GPIO'")
+    body = out.split("\n\n", 1)[1].splitlines()
+    assert body == ["CONFIG_SHELL=y  fw:app/prj.conf:1",
+                    "CONFIG_FANCY=n  fw:app/prj.conf:2 asked y, not applied; depends on SHELL && NET NOT met",
+                    "CONFIG_STACK=1024  default",
+                    "CONFIG_GPIO=y  fw:app/demo_defconfig:1"]
+    assert query.config(a, ["SHELL", "FANCY", "STACK", "GPIO"]).split("\n\n", 1)[1] == "\n".join(body) + "\n"
+    listed = query.config(a, ["G*", "S*", "SHELL", "SHEL"]).split("\n\n", 1)[1].splitlines()
+    assert listed[:3] == ["CONFIG_GPIO=y  fw:app/demo_defconfig:1", "CONFIG_SHELL=y  fw:app/prj.conf:1",
+                          "CONFIG_STACK=1024  default"]                     # a name already listed is not repeated
+    assert listed[3] == "CONFIG_SHEL: not a symbol of this build (nearest CONFIG_SHELL)"
+    assert "src: none" in query.config(a, [])
+
+
+def test_config_list_without_kconfig_json_says_per_line_what_it_could_not_give(atlas_dir):
+    out = query.config(query.Atlas(atlas_dir), "SHELL,FANCY,STACK")
+    body = out.split("\n\n", 1)[1].splitlines()
+    assert body[0].startswith("(core@000000000003 has no kconfig.json")
+    assert body[1] == "CONFIG_SHELL=y  fw:app/prj.conf:1"
+    assert body[2] == ("CONFIG_FANCY=n  fw:app/prj.conf:2 asked y, not applied [not given: depends on]")
+    assert body[3] == "CONFIG_STACK=1024  no fragment [not given: select/default]"
+
+
+def test_config_list_pages_to_the_uncut_answer(atlas_dir, monkeypatch):
+    from paging_synth import assert_exact
+
+    _kconfig_json(atlas_dir / "atlases" / "core@000000000003")
+    a = query.Atlas(atlas_dir)
+    assert_exact(monkeypatch, "config", lambda o: query.config(a, ["SHELL", "FANCY", "STACK", "GPIO"], offset=o))
+
+
+# ---- two builds that differ in exactly three symbols and one devicetree property
+
+def _second_build(atlas_dir: Path, tmp_path: Path, monkeypatch, zephyr_matches: bool = True) -> Path:
+    """build/bringup beside the atlas: the pinned build's .config with STACK 2048 and LOG on (bringup.conf),
+    which selects NEWSYM, and FANCY dropped from .config (still n); its devicetree differs only in conv0's
+    `slew`, and its node ordinals moved (not a difference)."""
+    from embarch_atlas import buildq
+
+    b = tmp_path / "fw" / "build" / "bringup"
+    zb = tmp_path / "zb"
+    zb.mkdir(exist_ok=True)
+    app = tmp_path / "fw" / "app"
+    write_text(app / "bringup.conf", "CONFIG_LOG=y\nCONFIG_STACK=2048\n")
+    write_text(b / "build.ninja", f"  COMMAND = /usr/bin/cmake -E env ZEPHYR_BASE={zb} /py "
+                                  f"{zb}/scripts/kconfig/menuconfig.py {zb}/Kconfig\n")
+    write_text(b / "zephyr" / ".config", "CONFIG_GPIO=y\nCONFIG_SHELL=y\nCONFIG_LOG=y\nCONFIG_NEWSYM=y\nCONFIG_STACK=2048\n")
+    write_text(b / "build_info.yml", BUILD_INFO.format(d=app).replace(f"     - '{app}/prj.conf'\n",
+                                                                       f"     - '{app}/prj.conf'\n     - '{app}/bringup.conf'\n", 1))
+    write_text(b / "zephyr" / "include" / "generated" / "zephyr" / "version.h", "#define BUILD_VERSION v9.9.0\n")
+    (b / "zephyr" / "edt.pickle").write_bytes(b"not really a pickle")
+    pinned_dt = read_json(atlas_dir / "atlases" / "core@000000000003" / "dt.json")
+    dt = json.loads(json.dumps(pinned_dt))
+    dt["nodes"]["/soc/i2c@100/conv@74"]["props"]["slew"] = {"loc": "fw:app/bringup.overlay:3", "val": 7}
+    dt["nodes"]["/soc/i2c@100/conv@74"]["ordinal"] = 9
+    dt["instantiated_ordinals"] = [9]
+    kc = {"zephyr": "v9.9.0", "symbols": {
+        "SHELL": {"t": "bool", "v": "y", "asg": [["fw:app/prj.conf", 1, "y"]]},
+        "GPIO": {"t": "bool", "v": "y", "asg": [["fw:app/demo_defconfig", 1, "y"]]},
+        "FANCY": {"t": "bool", "v": "n", "dep": "SHELL && NET", "dv": "n", "asg": [["fw:app/prj.conf", 2, "y"]]},
+        "LOG": {"t": "bool", "v": "y", "asg": [["fw:app/prj.conf", 3, "n"], ["fw:app/bringup.conf", 1, "y"]]},
+        "NEWSYM": {"t": "bool", "v": "y", "sel": [["LOG", "y"]]},
+        "STACK": {"t": "int", "v": "2048", "asg": [["fw:app/bringup.conf", 2, "2048"]],
+                  "def": [["1024", "y"]]}}}
+    if zephyr_matches:
+        monkeypatch.setattr(KC, "workspace_mismatch", lambda z: None)
+    else:
+        monkeypatch.setattr(KC, "workspace_mismatch", lambda z: "the build used Zephyr v9.9.0; zb is at v9.9.1 now")
+    monkeypatch.setattr(KC, "extract", lambda z, bases: kc)
+    monkeypatch.setattr(buildq, "_dt_of_build", lambda *a: dt)
+    return b
+
+
+def test_config_and_dt_node_vs_list_exactly_the_differences(atlas_dir, tmp_path, monkeypatch):
+    _kconfig_json(atlas_dir / "atlases" / "core@000000000003")
+    b = _second_build(atlas_dir, tmp_path, monkeypatch)
+    a = query.Atlas(atlas_dir)
+    out = query.config(a, build="build/bringup", vs="pinned")
+    head, body = out.split("\n\n", 1)
+    assert head.startswith(f"src: build {b} (app ?, zephyr v9.9.0;") and " kconfig vs atlas core@000000000003 kconfig" in head
+    assert head.endswith("query='*'")
+    lines = body.splitlines()
+    assert lines[0] == "3 of 6 symbols differ (this build | vs):"
+    assert lines[1:] == [
+        "CONFIG_LOG: y (fw:app/bringup.conf:1) | vs n (fw:app/prj.conf:3)",
+        "CONFIG_NEWSYM: y (selected by CONFIG_LOG) | vs absent (not a symbol of that build)",
+        "CONFIG_STACK: 2048 (fw:app/bringup.conf:2) | vs 1024 (default)"]
+    # named symbols and patterns narrow it; an unchanged one is not listed
+    narrowed = query.config(a, "SHELL,ST*", build="build/bringup", vs="pinned").split("\n\n", 1)[1].splitlines()
+    assert narrowed == ["1 of 2 symbols differ (this build | vs):",
+                        "CONFIG_STACK: 2048 (fw:app/bringup.conf:2) | vs 1024 (default)"]
+    assert "no difference in the 1 symbols compared" in query.config(a, "GPIO", build="build/bringup", vs="pinned")
+    assert "no difference in the 5 symbols compared" in query.config(a, vs="pinned")
+
+    dt = query.dt_node(a, build="build/bringup", vs="pinned")
+    head, body = dt.split("\n\n", 1)
+    assert " devicetree vs atlas core@000000000003 devicetree" in head
+    assert body.splitlines() == ["1 of 2 nodes differ (this build | vs):", "/soc/i2c@100/conv@74",
+                                 "  slew = 7 (fw:app/bringup.overlay:3) | vs 5 (binding default)"]
+    assert query.dt_node(a, "conv0", build="build/bringup", vs="pinned").split("\n\n", 1)[1] == body.replace(
+        "1 of 2 nodes", "1 of 1 nodes")
+    assert "no difference in the 1 nodes compared" in query.dt_node(a, "i2c1", build="build/bringup", vs="pinned")
+    assert "in either build" in query.dt_node(a, "nope", build="build/bringup", vs="pinned")
+    # the named build's extraction was cached in the atlas dir, never in the build
+    assert list((atlas_dir / "cache" / "kconfig").glob("*.json")) and list((atlas_dir / "cache" / "dt").glob("*.json"))
+
+
+def test_vs_keeps_the_zephyr_guard_and_says_per_line_what_it_could_not_give(atlas_dir, tmp_path, monkeypatch):
+    _kconfig_json(atlas_dir / "atlases" / "core@000000000003")
+    _second_build(atlas_dir, tmp_path, monkeypatch, zephyr_matches=False)
+    a = query.Atlas(atlas_dir)
+    lines = query.config(a, build="build/bringup", vs="pinned").split("\n\n", 1)[1].splitlines()
+    assert lines[0] == "3 of 6 symbols differ (this build | vs):"
+    assert lines[1].startswith("(this build: the build used Zephyr v9.9.0; zb is at v9.9.1 now")
+    assert lines[2:] == [
+        "CONFIG_LOG: y (fw:app/bringup.conf:1) | vs n (fw:app/prj.conf:3)",
+        "CONFIG_NEWSYM: y (no fragment [not given: select/default]) | vs absent (not a symbol of that build)",
+        "CONFIG_STACK: 2048 (fw:app/bringup.conf:2) | vs 1024 (default)"]
+    dt = query.dt_node(a, build="build/bringup", vs="pinned")
+    assert "no devicetree comparison: this build: the build used Zephyr v9.9.0" in dt and "vs:" not in dt.split("\n\n", 1)[1]
+    assert not (atlas_dir / "cache" / "kconfig").exists()
+
+
+def test_config_and_dt_node_vs_page_to_the_uncut_answer(atlas_dir, tmp_path, monkeypatch):
+    from paging_synth import assert_exact
+
+    _kconfig_json(atlas_dir / "atlases" / "core@000000000003")
+    _second_build(atlas_dir, tmp_path, monkeypatch)
+    a = query.Atlas(atlas_dir)
+    assert_exact(monkeypatch, "config", lambda o: query.config(a, build="build/bringup", vs="pinned", offset=o))
+    assert_exact(monkeypatch, "dt_node", lambda o: query.dt_node(a, build="build/bringup", vs="pinned", offset=o))
+
+
+def test_mcp_and_q_verb_take_the_list_and_vs(atlas_dir, tmp_path, monkeypatch, capsys):
+    import asyncio
+
+    from embarch_atlas import cli
+
+    _kconfig_json(atlas_dir / "atlases" / "core@000000000003")
+    _second_build(atlas_dir, tmp_path, monkeypatch)
+    want = query.config(query.Atlas(atlas_dir), ["SHELL", "FANCY"])
+    assert cli.main(["--atlas-dir", str(atlas_dir), "q", "config", "SHELL,FANCY"]) == 0
+    assert capsys.readouterr().out == want
+    assert cli.main(["--atlas-dir", str(atlas_dir), "q", "config", "SHELL", "FANCY"]) == 0
+    assert capsys.readouterr().out == want
+    assert cli.main(["--atlas-dir", str(atlas_dir), "q", "dt-node", "--build", "build/bringup", "--vs", "pinned"]) == 0
+    assert "slew = 7" in capsys.readouterr().out
+    pytest.importorskip("mcp")
+    from embarch_atlas.mcp_server import build_server
+
+    server = build_server(atlas_dir, live=False)
+
+    def call(tool, args):
+        res = asyncio.run(server.call_tool(tool, args))
+        return json.dumps(res.model_dump() if hasattr(res, "model_dump") else res, default=str)
+
+    assert "CONFIG_FANCY=n  fw:app/prj.conf:2 asked y" in call("config", {"symbols": ["SHELL", "FANCY"]})
+    assert "CONFIG_FANCY=n  fw:app/prj.conf:2 asked y" in call("config", {"symbol": "SHELL", "symbols": ["FANCY"]})
+    assert "why n: the fragment asks for it" in call("config", {"symbol": "FANCY"})
+    assert "CONFIG_STACK: 2048" in call("config", {"build": "build/bringup", "vs": "pinned"})
+    assert "slew = 7" in call("dt_node", {"node": "conv0", "build": "build/bringup", "vs": "pinned"})

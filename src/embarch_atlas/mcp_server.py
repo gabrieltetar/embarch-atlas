@@ -102,18 +102,24 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         return query.net_trace(view(), net_or_pin, board, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def config(symbol: str, build: str | None = None, offset: int = 0) -> str:
-        """A Kconfig symbol (CONFIG_X or X; `USB_*` lists matches): value, the fragment that set it,
-        depends on and whether it is met, selected/implied by, the default that applies, where defined.
+    def config(symbol: str | None = None, symbols: list[str] | None = None, build: str | None = None,
+               vs: str | None = None, offset: int = 0) -> str:
+        """A Kconfig symbol (CONFIG_X or X): value, the fragment that set it, depends on and whether it is
+        met, selected/implied by, the default that applies, where defined. Several at once in `symbols` (or
+        comma-separated in `symbol`), `USB_*` patterns too: one line each, value, the fragment line or
+        select/default that set it, an unmet depends on. `vs` (a build dir, or "pinned"): only the symbols
+        that differ from that build, both values and where each was set; no symbol compares all.
         `build`: a build dir (absolute or relative to the fw repo); default the atlas's pinned build."""
-        return query.config(view(), symbol, build, offset)
+        return query.config(view(), [*([symbol] if symbol else []), *(symbols or [])], build=build, vs=vs, offset=offset)
 
     @server.tool(annotations=READ_ONLY)
-    def dt_node(node: str, build: str | None = None, offset: int = 0) -> str:
+    def dt_node(node: str | None = None, build: str | None = None, vs: str | None = None, offset: int = 0) -> str:
         """A devicetree node by path, label, alias, chosen name or compatible: status, binding, the driver
         compiled for it, whether its device is in the ELF, each property with the file:line that set it,
-        its pins, children. `build`: a build dir; default the atlas's pinned build."""
-        return query.dt_node(view(), node, build, offset)
+        its pins, children. `vs` (a build dir, or "pinned"): only what differs from that build, both values
+        and the line that set each; no node compares every node. `build`: a build dir; default the atlas's
+        pinned build."""
+        return query.dt_node(view(), node, build=build, vs=vs, offset=offset)
 
     @server.tool(annotations=READ_ONLY)
     def footprint(build: str | None = None, vs: str | None = None, by: str = "dir", offset: int = 0) -> str:

@@ -7,6 +7,10 @@ workspace's Zephyr is the one the build used (`kconfig.workspace_mismatch`); oth
 falls back to the value and the fragment assignments, and `dt_node` says why it cannot answer.
 The `src:` line names the build: the atlas, or the dir with the app and Zephyr versions it
 recorded and the fw repo's HEAD and dirty state now.
+
+`config` answers several names or `*` patterns at once, one line per symbol, and both lookups
+compare two builds (`vs=`): only what differs, with where each side's value was set. The `src:`
+line then names both builds.
 """
 from __future__ import annotations
 
@@ -180,6 +184,11 @@ def source(a, build: str | None) -> Source:
     return named(a, build) if build else pinned(a)
 
 
+def versus(a, vs: str) -> Source:
+    """The build a `vs=` names: "pinned" is the atlas's, anything else a build dir."""
+    return pinned(a) if vs == "pinned" else named(a, vs)
+
+
 # ---------------------------------------------------------------- config
 
 def _sym_name(q: str) -> str:
@@ -187,22 +196,205 @@ def _sym_name(q: str) -> str:
     return q[7:] if q.upper().startswith("CONFIG_") else q
 
 
-def config_answer(src: Source, query: str) -> str:
+def _is_glob(q: str) -> bool:
+    return any(c in q for c in "*?[")
+
+
+def names_of(query: str | list[str] | None) -> list[str]:
+    """The names a `config` query asks for: a list as given, or a string split on commas and blanks."""
+    items = query if isinstance(query, (list, tuple)) else [query or ""]
+    return [n for s in items for n in re.split(r"[,\s]+", s or "") if n]
+
+
+def config_answer(src: Source, query: str | list[str]) -> str:
+    """One name: the full answer. Several names or a `*` pattern: one line per symbol."""
+    names = names_of(query)
+    if len(names) == 1 and not _is_glob(names[0]):
+        return _config_one(src, names[0])
+    return config_list_answer(src, names)
+
+
+class _Syms:
+    """One build's symbols for the one-line and `vs` answers: the `.config` values, kconfig.json's
+    symbols when it loaded, and the fragment assignments, read once."""
+
+    def __init__(self, src: Source):
+        src.load_kconfig()
+        self.src = src
+        self.values = KC.read_dotconfig(src.dotconfig)
+        self.syms = (src.kconfig or {}).get("symbols") or {}
+        self._asg: dict | None = None
+        self._lower: dict[str, str] | None = None
+
+    def names(self) -> set[str]:
+        return set(self.syms) | set(self.values)
+
+    def resolve(self, q: str) -> str | None:
+        """A symbol name of this build for `q`, matched exactly, else ignoring case."""
+        known = self.names() | (set() if self.syms else set(self.assignments()))
+        if q in known:
+            return q
+        if self._lower is None:
+            self._lower = {n.lower(): n for n in known}
+        return self._lower.get(q.lower())
+
+    def assignments(self) -> dict:
+        if self._asg is None:
+            self._asg = KC.assignments(self.src.frags)
+        return self._asg
+
+    def matches(self, pat: str) -> tuple[list[str], int]:
+        """Names in .config matching a `*` pattern, and how many more are defined but not in .config."""
+        pat = pat.upper()
+        hits = sorted(n for n in self.values if fnmatch.fnmatchcase(n, pat))
+        return hits, sum(1 for n in self.syms if n not in self.values and fnmatch.fnmatchcase(n, pat))
+
+    def side(self, name: str) -> tuple[str | None, str] | None:
+        """(value, where it came from) for one symbol, or None when it is not one of this build. The
+        value is None when the symbol is not in .config. Where it came from is the fragment line that
+        set it, else what selected it or the default that applies, then an unmet `depends on`; without
+        kconfig.json, `[not given: ...]` names what this line could not say."""
+        e = self.syms.get(name)
+        have = bool(self.syms)
+        asg = (e or {}).get("asg")
+        if asg is None:
+            asg = [[self.src.rel(f), ln, v] for f, ln, v in self.assignments().get(name, [])]
+        if e is None and name not in self.values and (have or not asg):
+            return None
+        if name in self.values:
+            value = (e or {}).get("v", self.values[name])
+        else:
+            value = (e or {}).get("v") or None      # an int or string whose dependencies are off has no value
+        missing = []
+        if asg:
+            f, ln, v = asg[-1]
+            why = f"{f}:{ln}" + ("" if v == (value or "n") else f" asked {v}, not applied")
+        elif e:
+            why = _not_by_fragment(e, value)
+        else:
+            why = "no fragment"
+            if not have:
+                missing.append("select/default")
+        if e and e.get("dep") and e.get("dv") == "n":
+            why += f"; depends on {e['dep']} NOT met"
+        elif not have and value in (None, "", "n"):
+            missing.append("depends on")
+        if not have and value is None:
+            missing.insert(0, "whether it is a symbol here")
+        return value, why + (f" [not given: {', '.join(missing)}]" if missing else "")
+
+
+def _not_by_fragment(e: dict, value: str | None) -> str:
+    on = value not in (None, "", "n")
+    for kind, key in (("selected by", "sel"), ("implied by", "imp")):
+        who = e.get(key) or []
+        if who and on:
+            return f"{kind} " + ", ".join(f"CONFIG_{s}" for s, _ in who[:2]) + (f" (+{len(who) - 2})" if len(who) > 2 else "")
+    if e.get("choice"):
+        return f"member of choice {e['choice']}"
+    for v, cond in (e.get("def") or [])[:1]:
+        return "default" + ("" if v == value else f" {v}") + (f" if {cond}" if cond != "y" else "")
+    return "nothing sets it"
+
+
+def _shown(value: str | None) -> str:
+    return "not in .config" if value is None else (value if value else '""')
+
+
+def _not_found(k: _Syms, q: str) -> str:
+    close = difflib.get_close_matches(q.upper(), sorted(k.names()), n=3, cutoff=0.7)
+    what = ("not a symbol of this build" if k.syms
+            else "not in .config and assigned by no fragment [not given: whether it is a symbol here]")
+    return f"CONFIG_{q}: {what}" + (f" (nearest {', '.join('CONFIG_' + c for c in close)})" if close else "")
+
+
+def config_list_answer(src: Source, names: list[str]) -> str:
+    """One line per symbol: value, the fragment line or the select/default that set it, an unmet
+    `depends on`. Patterns expand over .config, in name order; a name may appear once."""
+    k = _Syms(src)
+    lines, seen, hidden = [], set(), 0
+    if not k.syms:
+        lines.append(f"({src.kconfig_why})")
+    for q in names:
+        n = _sym_name(q)
+        if _is_glob(n):
+            hits, more = k.matches(n)
+            hidden += more
+            if not hits:
+                lines.append(f"no symbol in .config matches {q!r}")
+        else:
+            r = k.resolve(n)
+            hits = [r] if r else []
+            if not r:
+                lines.append(_not_found(k, n))
+        for h in hits:
+            if h in seen:
+                continue
+            seen.add(h)
+            s = k.side(h)
+            if s is None:
+                lines.append(_not_found(k, h))
+                continue
+            value, why = s
+            lines.append(f"CONFIG_{h}" + (": not in .config" if value is None else f"={_shown(value)}") + f"  {why}")
+    if hidden:
+        lines.append(f"({hidden} more match a pattern but are not in .config: their dependencies are off)")
+    return "\n".join(lines)
+
+
+def _same(a: tuple[str | None, str] | None, b: tuple[str | None, str] | None) -> bool:
+    """Whether two sides hold the same value; absent, unset and `n` all read as `n`."""
+    def v(s):
+        return "n" if s is None or s[0] in (None, "", "n") else s[0]
+    return v(a) == v(b)
+
+
+def _side_text(s: tuple[str | None, str] | None, k: _Syms) -> str:
+    if s is None:
+        return "absent (not a symbol of that build)" if k.syms else "absent (not in .config, no fragment)"
+    return f"{_shown(s[0])} ({s[1]})"
+
+
+def config_diff_answer(src: Source, other: Source, names: list[str]) -> str:
+    """The symbols whose value differs between `src` and `other`, each with both values and where
+    each side's value was set. No names compares every symbol either .config holds."""
+    a, b = _Syms(src), _Syms(other)
+    lines, universe = [], []
+    whys = [(side, k.src.kconfig_why) for side, k in (("this build", a), ("vs", b)) if not k.syms]
+    if len(whys) == 2 and whys[0][1] == whys[1][1]:
+        whys = [("both builds", whys[0][1])]
+    lines += [f"({side}: {why})" for side, why in whys]
+    if not names or names == ["*"]:
+        universe = sorted(set(a.values) | set(b.values))
+    else:
+        for q in names:
+            n = _sym_name(q)
+            if _is_glob(n):
+                hits = sorted(set(a.matches(n)[0]) | set(b.matches(n)[0]))
+                if not hits:
+                    lines.append(f"no symbol in either .config matches {q!r}")
+            else:
+                r = a.resolve(n) or b.resolve(n)
+                hits = [r] if r else []
+                if not r:
+                    lines.append(f"CONFIG_{n}: not a symbol of either build")
+            universe += [h for h in hits if h not in universe]
+    rows = []
+    for n in sorted(universe):
+        sa, sb = a.side(n), b.side(n)
+        if not _same(sa, sb):
+            rows.append(f"CONFIG_{n}: {_side_text(sa, a)} | vs {_side_text(sb, b)}")
+    head = (f"{len(rows)} of {len(universe)} symbols differ (this build | vs):" if rows
+            else f"no difference in the {len(universe)} symbols compared")
+    return "\n".join([head, *lines, *rows])
+
+
+def _config_one(src: Source, query: str) -> str:
     src.load_kconfig()
     values = KC.read_dotconfig(src.dotconfig)
     syms = (src.kconfig or {}).get("symbols") or {}
     names = set(syms) | set(values)
     q = _sym_name(query)
-    if any(c in q for c in "*?["):
-        pat = q.upper()
-        hits = sorted(n for n in values if fnmatch.fnmatchcase(n, pat))
-        hidden = sum(1 for n in syms if n not in values and fnmatch.fnmatchcase(n, pat))
-        lines = [f"CONFIG_{n}={values[n]}" for n in hits[:MAX_LIST]]
-        if len(hits) > MAX_LIST:
-            lines.append(f"({len(hits) - MAX_LIST} more)")
-        if hidden:
-            lines.append(f"({hidden} more defined but not in .config: their dependencies are off)")
-        return "\n".join(lines) if lines else f"no symbol matches {query!r}"
     name = q if q in names else next((n for n in names if n.lower() == q.lower()), None)
     if not name:
         close = difflib.get_close_matches(q.upper(), sorted(names), n=6, cutoff=0.7)
@@ -338,6 +530,80 @@ def dt_answer(src: Source, query: str) -> str:
     if kids:
         out.append(f"children ({len(kids)}): " + ", ".join(k.rsplit("/", 1)[-1] for k in kids[:MAX_LIST]))
     return "\n".join(out)
+
+
+def _val(pv: Any) -> Any:
+    return pv.get("val") if isinstance(pv, dict) else pv
+
+
+def _prop(pv: Any, k: str) -> str:
+    if pv is None:
+        return "absent"
+    loc = pv.get("loc") if isinstance(pv, dict) else None
+    return f"{_fmt(_val(pv), k)} ({loc or 'binding default'})"
+
+
+def _pins(dt: dict, path: str) -> dict[str, str]:
+    """A node's pin uses, keyed by what they say and mapped to the line that set them."""
+    return {f"{u.get('pin')} {u.get('prop')}[{u.get('index', 0)}] {u.get('flags') or u.get('func') or ''}".rstrip():
+            u.get("loc") or "" for u in dt.get("uses") or [] if u.get("node") == path}
+
+
+def _node_diff(a: dict, b: dict, pa: dict[str, str], pb: dict[str, str]) -> list[str]:
+    out = []
+    pr_a, pr_b = a.get("props") or {}, b.get("props") or {}
+    if bool(a.get("okay")) != bool(b.get("okay")):
+        st = [("okay" if n.get("okay") else "disabled") + (f" ({p['status']['loc']})" if isinstance(p.get("status"), dict)
+              and p["status"].get("loc") else "") for n, p in ((a, pr_a), (b, pr_b))]
+        out.append(f"status {st[0]} | vs {st[1]}")
+    for key, word in (("compats", "compatible"), ("labels", "labels")):
+        if (a.get(key) or []) != (b.get(key) or []):
+            out.append(f"{word} {', '.join(a.get(key) or []) or '-'} | vs {', '.join(b.get(key) or []) or '-'}")
+    for k in sorted(set(pr_a) | set(pr_b)):
+        va, vb = pr_a.get(k), pr_b.get(k)
+        if k == "status" or (va is not None and vb is not None and _val(va) == _val(vb)):
+            continue
+        out.append(f"{k} = {_prop(va, k)} | vs {_prop(vb, k)}")
+    for use in sorted(set(pa) ^ set(pb)):
+        here = use in pa
+        out.append(f"pin {use} ({(pa if here else pb)[use] or 'no line'}): " + ("only in this build" if here else "only in vs"))
+    return out
+
+
+def dt_diff_answer(src: Source, other: Source, query: str | None) -> str:
+    """The devicetree nodes that differ between `src` and `other`: a node only one build has, then per
+    node its status, compatible, labels, each property with both values and the line that set each,
+    and its pins. A query (path, label, alias, chosen name or compatible) narrows to the nodes it finds
+    in either build; none, or `*`, compares every node."""
+    for s in (src, other):
+        s.load_dt()
+    missing = [f"{side}: {s.dt_why}" for side, s in (("this build", src), ("vs", other)) if not s.dt]
+    if missing:
+        return ("no devicetree comparison: " + "; ".join(missing)
+                + ". Each side's devicetree must load (its own Zephyr in the workspace) before the two compare")
+    A, B = src.dt.get("nodes") or {}, other.dt.get("nodes") or {}
+    q = (query or "").strip()
+    if q and q != "*":
+        paths = sorted(set(_find_nodes(src.dt, q)) | set(_find_nodes(other.dt, q)))
+        if not paths:
+            return f"no node, label, alias or compatible {query!r} in either build"
+    else:
+        paths = sorted(set(A) | set(B))
+    rows = []
+    for p in paths:
+        a, b = A.get(p), B.get(p)
+        if a is None or b is None:
+            n = a or b
+            rows.append(f"{p}: only in {'this build' if a else 'vs'} ({'okay' if n.get('okay') else 'disabled'}, "
+                        f"labels {','.join(n.get('labels') or []) or '-'})")
+            continue
+        d = _node_diff(a, b, _pins(src.dt, p), _pins(other.dt, p))
+        if d:
+            rows += [p, *[f"  {x}" for x in d]]
+    n = sum(1 for r in rows if not r.startswith("  "))
+    head = (f"{n} of {len(paths)} nodes differ (this build | vs):" if rows
+            else f"no difference in the {len(paths)} nodes compared")
+    return "\n".join([head, *rows])
 
 
 # ---------------------------------------------------------------- footprint, stacks
