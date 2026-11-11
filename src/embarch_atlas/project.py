@@ -426,6 +426,11 @@ def atlas_state(atlas_dir: Path, stamp: dict[str, Any], head: str | None,
     for label in stamp.get("missing_boards") or []:
         why.append(f"board {label} is declared but has no netlist, so the atlas does not cover it "
                    f"(embarch-atlas schematic <pdf> --board {label}, then join)")
+    if why:
+        from . import bump                       # why the atlas did not follow HEAD: a bump running, stopped or failed
+        b = bump.stale_reason(atlas_dir, stamp.get("target"), head)
+        if b:
+            why.append(b)
     return why
 
 
@@ -442,6 +447,7 @@ def status(atlas_dir: Path) -> dict[str, Any]:
     man = atlas_dir / "inventory" / "manifest.json"
     manifest_sha = common.sources_fingerprint(man)
     sch = _current_schematic_shas(atlas_dir, cfg) if cfg else {}
+    from . import bump
     rows = []
     for stamp_path in sorted((atlas_dir / "atlases").glob("*/atlas.json")):
         try:
@@ -449,11 +455,13 @@ def status(atlas_dir: Path) -> dict[str, Any]:
         except (OSError, ValueError) as e:
             rows.append({"atlas": stamp_path.parent.name, "error": str(e)})
             continue
+        joining = bump.joining(atlas_dir, stamp_path.parent, stamp)   # the previous atlas stays current meanwhile
         rows.append({
             "atlas": stamp_path.parent.name,
             "board": stamp.get("board"),
             "commit": stamp.get("commit"),
-            "matches_head": bool(head) and stamp.get("commit") == head,
+            "matches_head": bool(head) and stamp.get("commit") == head and not joining,
+            "joining": joining,
             "stale": atlas_state(atlas_dir, stamp, head, manifest_sha, sch, cfg),
             "no_build": common.no_build(stamp),
         })
@@ -467,7 +475,7 @@ def status(atlas_dir: Path) -> dict[str, Any]:
         mark_map(atlas_dir, head, rows)
     return {"fw": str(fw), "fw_configured": str(main_fw), "fw_is_worktree": fw.resolve() != Path(main_fw).resolve(),
             "head": head, "dirty": dirty, "manifest_sha256": manifest_sha, "atlases": rows,
-            "current": current}
+            "current": current, "bump": {"hooks": bump.installed(atlas_dir, main_fw), "last": bump.read_state(atlas_dir)}}
 
 
 STALE_MARK = "> **Stale:**"
@@ -517,6 +525,8 @@ def _cmd_init(args) -> int:
     wt = (cfg.get("project") or {}).get("west_topdir")
     print(f"  west_topdir: {wt or 'not found (set it by hand)'}")
     print("  next: set [mcu] part, add one [[boards]] per schematic PDF and one [[targets]] per build")
+    print("  then, optional: `embarch-atlas hook install <target>` bumps the atlas after every commit, checkout, "
+          "merge or rebase, once HEAD has been quiet a while (log embarch/atlas/bump/log)")
     if _git_ignored(fw.resolve(), path.parent) is False:
         print(f"  warning: {path.parent} is not git-ignored in {fw}; add it to .git/info/exclude", file=sys.stderr)
     return 0
@@ -536,7 +546,7 @@ def _cmd_status(args) -> int:
         if "error" in r:
             print(f"  {r['atlas']}: unreadable stamp: {r['error']}")
             continue
-        tag = "current" if r["matches_head"] else "       "
+        tag = "current" if r["matches_head"] else "joining" if r.get("joining") else "       "
         state = "stale: " + "; ".join(r["stale"]) if r["stale"] else "fresh"
         print(f"  {tag} {r['atlas']}  board={r['board'] or 'none (no build)'}  {state}")
         if r.get("no_build"):
@@ -546,6 +556,13 @@ def _cmd_status(args) -> int:
     if head:
         m = st["current"]["matches"]
         print("current.json: " + (", ".join(x["atlas"] for x in m) if m else "no atlas matches HEAD"))
+    b = st["bump"]
+    print("bump on HEAD moves: " + (f"hooks {', '.join(b['hooks'])}" if b["hooks"] else
+                                    "off (`embarch-atlas hook install <target>` turns it on)"))
+    for t, s in sorted(b["last"].items()):
+        print(f"  last bump of {t}: {s.get('result')} at {str(s.get('head') or '?')[:12]} "
+              f"({s.get('finished') or 'since ' + str(s.get('started'))}, {s.get('via')})"
+              + (f": {s['reason']}" if s.get("reason") else ""))
     return 0
 
 

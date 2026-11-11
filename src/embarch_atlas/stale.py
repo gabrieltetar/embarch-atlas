@@ -4,7 +4,8 @@
 answered from a weeks-old atlas with nothing saying so. This module computes the same reasons
 (`project.atlas_state`) per call and keeps them keyed on what they depend on: the mtime of
 `.git/HEAD` and of the ref it names (plus `packed-refs`), and the stat of the atlas stamp, the
-manifest, the engineer's answers, the board PDFs and `atlas.toml`. While none of those move a call costs a handful of
+manifest, the engineer's answers, the board PDFs, `atlas.toml` and the bump state (`bump/state.json`:
+a bump to HEAD that is running, stopped or failed is a reason too). While none of those move a call costs a handful of
 `stat`s; when HEAD moves it costs one `git rev-parse`.
 """
 from __future__ import annotations
@@ -112,8 +113,9 @@ def reasons(atlas_dir: Path, atlas: Path) -> tuple[list[str], str | None]:
     for b in boards:
         p = Path(b.get("pdf") or "")
         pdfs.append(_stat(p if p.is_absolute() else src / p))
+    from . import bump
     sig = (h, _stat(atlas_dir / "atlas.toml"), _stat(atlas / "atlas.json"), _stat(atlas / "inputs.json"),
-           _stat(man), _stat(atlas_dir / "inventory" / "answers.toml"), tuple(pdfs))
+           _stat(man), _stat(atlas_dir / "inventory" / "answers.toml"), tuple(pdfs), _stat(bump.state_path(atlas_dir)))
     key = (str(atlas_dir.resolve()), atlas.name)
     hit = _STALE.get(key)
     if hit and hit[0] == sig:

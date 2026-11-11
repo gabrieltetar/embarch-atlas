@@ -24,11 +24,15 @@ Current state:
 - [ ] 4 bump        embarch-atlas update <target> <commit>
                     (build, join, RM worklist, second-look queue, diff). It stops while a translation is behind
                     its source (a doc not re-prepped, frozen units on changed pages, a netlist from an older PDF),
-                    naming each; documents with no distillation are listed, not blocking
+                    or before building while a west project is not at the manifest's revision (`west update`),
+                    naming each; documents with no distillation are listed, not blocking. Exit 3: another bump
+                    (the hook's, see `embarch-atlas status`) holds the bump lock; wait for it, do not force
 - [ ] 5 RM          if it reports RM units to distil: /atlas-translate-docs rm-worklist <atlas>, then update again
 - [ ] 6 2nd look    the batches it wrote hold only the diff (new or changed facts): one blind subagent per batch,
                     exactly as atlas-build step 5 (prompt, compare, record), then embarch-atlas join <atlas>.
                     After a plain build instead of update: embarch-atlas second-look queue <atlas> --diff-from <previous>
+                    The backlog update leaves alone: embarch-atlas second-look queue <atlas> --used embarch/atlas/usage.jsonl --top <N>
+                    batches the unverified facts sessions' answers actually returned, most used first
 - [ ] 7 report      diff-from-<previous>.md in the new atlas: what changed in firmware (pins, DT, drivers), in the
                     documents, in the board; new and resolved mismatch candidates; the backlog it did not batch
 ```

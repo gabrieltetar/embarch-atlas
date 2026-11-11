@@ -47,7 +47,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         # Re-read per call: an atlas rebuilt while the server runs is picked up.
         return query.Atlas(atlas_dir, atlas)
 
-    @server.tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)  # appends to the atlas's usage log; changes no answer
     def part_card(part: str, board: str | None = None, offset: int = 0) -> str:
         """A part's card (<=1.5K tokens): role, key limits, register summary, quirks, section index.
         `part` is an MPN, doc id or document number; `board` ("all" for every board, or one board's label) adds its refs and nets; omit it for the card alone."""
@@ -66,7 +66,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         for one page's text layer. Long answers end with next=<offset>."""
         return query.doc_section(view(), doc, section, page, tier, offset)
 
-    @server.tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)  # appends to the atlas's usage log; changes no answer
     def find_fact(query_text: str, part: str | None = None, kind: str | None = None, limit: int | None = None, offset: int = 0) -> str:
         """Search every document's facts (one per line, with cite and provenance), ranked lexically.
         A part named in the query narrows to it, like `part`. Without `limit`: the best 10 above 0.4x the
@@ -81,7 +81,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         distillation. `section` limits the search to one section's pages. Long answers end with next=<offset>."""
         return query.find_text(view(), doc, pattern, section, context, offset)
 
-    @server.tool(annotations=READ_ONLY)
+    @server.tool(annotations=READ_ONLY)  # appends to the atlas's usage log; changes no answer
     def register(target: str, field: str | None = None, offset: int = 0) -> str:
         """A register with its fields, rules, quirks, SVD/RM conflicts and firmware references.
         `target` is `PERIPH.REG` for the MCU (I2C1.TIMINGR) or `<part>.<REG>` for an external part; a register

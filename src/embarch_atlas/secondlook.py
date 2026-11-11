@@ -284,6 +284,48 @@ def select(queue: list[dict], why: str | None = None, doc: str | None = None) ->
             and (not ds or q["doc"] in ds)]
 
 
+USED_BY = ("find_fact", "register", "part_card")   # the lookups whose answers return facts (find_text returns pages)
+
+
+def used_counts(log: Path) -> tuple[dict, dict, int]:
+    """From a usage log (`<atlas dir>/usage.jsonl`): how often each record id was returned by `find_fact` or
+    `register`, how often each (doc, page) was cited by a returned `part_card`, and the lines read. A line that
+    is not JSON, or from another lookup, is skipped."""
+    ids: dict[str, int] = {}
+    pages: dict[tuple[str, int], int] = {}
+    n = 0
+    try:
+        lines = log.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ids, pages, 0
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(row, dict) or row.get("tool") not in USED_BY:
+            continue
+        n += 1
+        if row.get("id"):
+            ids[row["id"]] = ids.get(row["id"], 0) + 1
+        elif row.get("doc") and isinstance(row.get("page"), int):
+            k = (row["doc"], row["page"])
+            pages[k] = pages.get(k, 0) + 1
+    return ids, pages, n
+
+
+def rank_used(queue: list[dict], ids: dict, pages: dict) -> list[dict]:
+    """The queue items sessions' answers returned, with `uses` (id hits plus card hits on their pages), most
+    used first, then by priority. The rest of the queue (the backlog no answer touched) is left out."""
+    out = []
+    for q in queue:
+        n = ids.get(q.get("id"), 0) + sum(pages.get((q.get("doc"), p), 0) for p in q.get("p") or [])
+        if n:
+            out.append({**q, "uses": n})
+    out.sort(key=lambda q: (-q["uses"], -q["priority"], q["doc"], str(q["id"])))
+    return out
+
+
 def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
     from embarch_atlas.join import Docs
     stamp = read_json(atlas / "atlas.json")
@@ -345,7 +387,25 @@ def cmd_queue(args) -> int:
     q, st = build_queue(ad, atlas)
     write_jsonl(atlas / "second_look_queue.jsonl", q)
     carried = carry_frozen(ad, atlas, st["frozen_keys"])
-    if getattr(args, "diff_from", None):
+    if getattr(args, "used", None):
+        log = Path(args.used)
+        if not log.is_file():
+            print(f"second-look queue: no usage log at {log}", file=sys.stderr)
+            return 2
+        ids, pages, n = used_counts(log)
+        used = rank_used(select(q, getattr(args, "why", None), getattr(args, "doc", None)), ids, pages)
+        top = args.top or len(used)
+        bs = batches(used, top) if used else []
+        uses = {it["id"]: it["uses"] for it in used}
+        for b in bs:
+            b["uses"] = sum(uses.get(it["id"], 0) for it in b["items"])
+        bs.sort(key=lambda b: (-b["uses"], -b["priority"], b["doc"], b["pages"]))
+        write_json(atlas / "second_look_batches.json", bs)
+        print(f"{len(used)} of {len(q)} queued items were returned by answers in {log} ({n} lookups read); "
+              f"the {min(top, len(used))} most used in {len(bs)} page batches -> {atlas / 'second_look_batches.json'}")
+        for it in used[:10]:
+            print(f"  {it['uses']:4}x {it['id']} ({it['doc']} p{','.join(map(str, it['p'] or []))})")
+    elif getattr(args, "diff_from", None):
         prev = resolve_atlas(ad, args.diff_from)
         owed = owed_by(prev)
         if owed is None:
@@ -919,11 +979,15 @@ def register(sub, groups) -> None:
     p.add_argument("atlas")
     p.add_argument("--top", type=int, help="also group the N highest-priority items into page batches "
                                            "(second_look_batches.json), one fresh subagent per batch")
-    p.add_argument("--diff-from", metavar="ATLAS", help="batch only the items that atlas's queue did not hold "
-                                                        "(new or changed facts), as `update` does; --top caps them")
-    p.add_argument("--why", help="with --top or --diff-from: only items whose reasons contain one of these "
+    how = p.add_mutually_exclusive_group()
+    how.add_argument("--diff-from", metavar="ATLAS", help="batch only the items that atlas's queue did not hold "
+                                                          "(new or changed facts), as `update` does; --top caps them")
+    how.add_argument("--used", metavar="LOG", help="batch only the items sessions' answers returned (find_fact, "
+                                                   "register, part_card lines of the usage log, <atlas dir>/usage.jsonl), "
+                                                   "most used first; --top caps them")
+    p.add_argument("--why", help="with --top, --diff-from or --used: only items whose reasons contain one of these "
                                  "(comma-separated, e.g. llm-unverified,unit)")
-    p.add_argument("--doc", help="with --top or --diff-from: only these doc ids (comma-separated)")
+    p.add_argument("--doc", help="with --top, --diff-from or --used: only these doc ids (comma-separated)")
     p.set_defaults(func=cmd_queue)
     p = g.add_parser("prompt", help="print the blind reader's instructions for one page batch")
     p.add_argument("atlas")

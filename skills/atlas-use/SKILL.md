@@ -16,7 +16,9 @@ PDFs whole, and never answer a hardware question from memory.
    documents tied to no part (standards, specifications, the PRD), the MCU and the
    peripherals in use, the boards and their interfaces, and where the pin map and the
    mismatch report are. If its first lines say it is **stale** (HEAD moved past the
-   atlas's commit), say so in your answer and suggest `/atlas-update`.
+   atlas's commit), say so in your answer and suggest `/atlas-update`; when the line says a
+   bump to HEAD is running, say the atlas is being bumped instead, and when it says the bump
+   stopped or failed, quote its reason (the fix it names, e.g. `west update`).
    **If its first line is `# No hardware atlas is built yet`, there is no atlas**: no
    cards, no pins, no facts. Say so, name the next steps (`/atlas-translate-docs`, then
    `/atlas-build`), do not answer the hardware question from memory, and **stop** - do

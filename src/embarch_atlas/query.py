@@ -48,7 +48,8 @@ def _cap(text: str, tool: str, offset: int = 0) -> str:
 
 
 def current_atlas(atlas_dir: Path, atlas: str | None = None) -> Path | None:
-    """The named atlas, else the one current.json says matches HEAD, else the newest."""
+    """The named atlas, else the one current.json says matches HEAD, else the newest one that a running
+    bump is not still building (`bump.joining`)."""
     root = atlas_dir / "atlases"
     if atlas:
         p = root / atlas
@@ -64,8 +65,16 @@ def current_atlas(atlas_dir: Path, atlas: str | None = None) -> Path | None:
                     return p
         except (OSError, ValueError):
             pass
+    from . import bump
     stamps = sorted(root.glob("*/atlas.json"), key=lambda p: p.stat().st_mtime)
-    return stamps[-1].parent if stamps else None
+    for st in reversed(stamps):                  # an atlas a running bump has not joined yet is not the newest answer
+        try:
+            if bump.joining(atlas_dir, st.parent, common.read_json(st)):
+                continue
+        except (OSError, ValueError):
+            pass
+        return st.parent
+    return None
 
 
 def _stamped(fn):
@@ -239,7 +248,9 @@ def part_card(a: Atlas, part: str, board: str | None = None, offset: int = 0) ->
         # "all" (and "" from the CLI) is every board; anything else is a board label
         every = board.strip().lower() in ("", "all")
         out += "\n## On the boards\n\n" + _bindings(a, d.name, None if every else board)
-    return _cap(out, "part_card", offset)
+    res = _cap(out, "part_card", offset)
+    _log_card(a, d.name, res.split("\n## On the boards")[0])
+    return res
 
 
 def _pdf_extra(a: Atlas, d: Path) -> str:
@@ -481,17 +492,37 @@ def _page_files(d: Path) -> list[tuple[int, Path]]:
     return sorted(out)
 
 
-def _log_usage(a: Atlas, doc: str, hits: list[tuple[str | None, int]]) -> None:
-    """Append what a `find_text` answer returned to `<atlas dir>/usage.jsonl`, for ranking
-    undistilled sections by use. Write-only: nothing here reads it back into an answer."""
-    if not hits:
+def _append_usage(a: Atlas, rows: list[dict]) -> None:
+    """Append rows to `<atlas dir>/usage.jsonl`. Write-only: no answer reads it back; a failed write is ignored."""
+    if not rows:
         return
     try:
         with open(a.dir / USAGE_LOG, "a", encoding="utf-8") as fh:
-            for sec, page in hits:
-                fh.write(json.dumps({"doc": doc, "section": sec, "page": page, "tool": "find_text"}) + "\n")
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
     except OSError:
         pass
+
+
+def _log_usage(a: Atlas, doc: str, hits: list[tuple[str | None, int]]) -> None:
+    """Append what a `find_text` answer returned, for ranking undistilled sections by use."""
+    _append_usage(a, [{"doc": doc, "section": sec, "page": page, "tool": "find_text"} for sec, page in hits])
+
+
+CITE_IN_LINE = re.compile(r"\bcite=(\S+)")
+CARD_PAGE = re.compile(r"\bp\.\s?(\d+)")
+
+
+def _log_facts(a: Atlas, tool: str, facts: list[tuple[str, str]]) -> None:
+    """Append the record ids an answer returned (`find_fact`, `register`): `second-look queue --used` batches the
+    unverified ones sessions actually read."""
+    _append_usage(a, [{"doc": d, "id": i, "tool": tool} for d, i in dict.fromkeys(facts) if i])
+
+
+def _log_card(a: Atlas, doc: str, text: str) -> None:
+    """Append the pages a returned card cites (`p.N`): the facts on them are the ones the card presented."""
+    pages = sorted({int(m) for m in CARD_PAGE.findall(text)})
+    _append_usage(a, [{"doc": doc, "page": p, "tool": "part_card"} for p in pages])
 
 
 @_stamped
@@ -703,7 +734,10 @@ def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = 
     if limit is None and len(hits) < len(scored):
         body += (f"\n({len(scored) - len(hits)} more hits, each under {FIND_FACT_FLOOR:g} of the top score or past "
                  f"the first {FIND_FACT_LIMIT}; pass `limit` to list them)")
-    return _cap(head + body + "\n", "find_fact", offset)
+    res = _cap(head + body + "\n", "find_fact", offset)
+    _log_facts(a, "find_fact", [(m.group(1), ln.split(" ", 1)[0]) for ln in hits if " kind=prose;" not in ln and ln in res
+                                and (m := CITE_IN_LINE.search(ln))])
+    return res
 
 
 def _reg_cands(a: Atlas, hn: str, rn: str, head_doc: str) -> list[tuple[Path, dict]]:
@@ -802,6 +836,8 @@ def _register_pair(a: Atlas, reg: str, msb: tuple[Path, dict], lsb: tuple[Path, 
            f"{reg}: {m.get('name')} addr={m.get('addr')} is bits 15:8, {l.get('name')} addr={l.get('addr')} is bits 7:0",
            f"width=16 reset={reset} access={access} cite={_cite(m)}; {_cite(l)}", ""]
     out += [_field_line(f) for f in fields]
+    _log_facts(a, "register", [(d.name, i) for i in ids] + [(d.name, f.get("id")) for f in fields]
+               + [(dn, r.get("id")) for dn, r in related])
     return _cap("\n".join(out + _reg_tail(a, related, ids)) + "\n", "register", offset)
 
 
@@ -838,6 +874,7 @@ def register_lookup(a: Atlas, target: str, field: str | None = None, offset: int
     out += _reg_tail(a, related, [rid])
     if len(cands) > 1:
         out += ["", "Also named " + reg + " in: " + ", ".join(sorted({c[0].name for c in cands[1:]}))]
+    _log_facts(a, "register", [(d.name, rid)] + [(d.name, f.get("id")) for f in fields] + [(dn, r.get("id")) for dn, r in related])
     return _cap("\n".join(out) + "\n", "register", offset)
 
 

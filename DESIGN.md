@@ -143,6 +143,11 @@ atlases/<target>@<commit12>/
                                 documents, and the documents tied to no part (standards, the PRD)
 current.json                    which atlas matches the checkout (target, commit)
 MAP.md                          copy of the current atlas's MAP.md: the one stable path the session imports
+usage.jsonl                     what lookups returned (find_text pages; find_fact and register record ids; the pages a
+                                part_card cited): write-only, read by `second-look queue --used` and nothing else
+bump/                           bumping on HEAD moves (below): state.json (each target's last bump: running, ok,
+                                stopped or failed, and why), log, moved and handled (the last HEAD move and the last
+                                one bumped), worker.pid, update.lock and worker.lock
 ```
 
 ### The stamp (`atlas.json`)
@@ -360,10 +365,14 @@ document's page, beside this one's; a number on neither cited page still fails. 
   atlas skill loads, but a session may do neither, so staleness is also on **every lookup's `src:`
   line**: `stale=<reasons> (HEAD <sha12>)` whenever HEAD is not the atlas's commit or a source
   changed (`stale.py`). It is computed per call and cached on the mtime of `.git/HEAD`, of the ref
-  it names and of `packed-refs`, plus the stat of the stamp, manifest and board PDFs: one
+  it names and of `packed-refs`, plus the stat of the stamp, manifest, board PDFs and `bump/state.json`: one
   `git rev-parse` when HEAD moves, a few `stat`s otherwise (measured well under 1 ms). A
   `current.json` whose commit is not HEAD is no match; the lookups then read the newest atlas and say
-  it is stale.
+  it is stale. When the last bump to HEAD is running, stopped or failed (`bump/state.json`), a stale atlas
+  of that target carries that as one more reason, with the stop's or failure's own words, so the MAP line
+  and `src:` say why the atlas did not follow HEAD. **The previous atlas answers until the new one has
+  joined**: an atlas that a running bump is still building or joining (its MAP.md not written yet,
+  `bump.joining`) is never a `current.json` match nor the newest atlas the lookups fall back to.
 - The MAP's reference-manual line reads the worklist of *this* atlas. `join` writes that worklist
   (`update.rm_todo`) just before it renders the MAP, so `update` and a hand-run `build` + `join`
   both list the chapters in use; a worklist left for another atlas is rewritten, not skipped.
@@ -405,7 +414,9 @@ or a case-insensitive regex over every page of a document's text layer, `pages/p
 hit with the physical page, the deepest toc section holding it, `s/<file>` or "not distilled", the line and
 `context` lines; `section=` limits it to that section's pages; the `src:` line says
 `<doc> text-layer, <n> pages hits=<n>`. Each answer appends `{doc, section, page, tool}` of the hits it
-returned to `<atlas dir>/usage.jsonl`, so undistilled sections can be ranked by use; the log is write-only,
+returned to `<atlas dir>/usage.jsonl`, so undistilled sections can be ranked by use (`find_fact` and `register`
+append `{doc, id, tool}` for the records they returned, `part_card` `{doc, page, tool}` for the pages its card
+cites, which `second-look queue --used` reads); the log is write-only,
 never read back into an answer, and a failed write is ignored. A toc gives pages, not lines, so a page
 shared by two sections is credited to the deepest, latest-starting one. Measured on a synthetic 400-page
 text layer: a symbol, a state name and a table title each answer in 11-14 ms), `register` (MCU `PERIPH.REG` or
@@ -800,11 +811,12 @@ An atlas id is `<target>@<commit12>`.
 | `kconfig-extract <atlas>` | `build` | writes kconfig.json for an atlas that lacks it, from its build dir: no rebuild, and only while the workspace's Zephyr is the build's |
 | `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md, graph.json |
 | `graph <atlas>` | `graph` | graph.json again from what `join` wrote (also run by `join`) |
-| `second-look queue <atlas> [--top N] [--diff-from <atlas>]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page (`--diff-from`: only those another atlas's queue did not hold under the same `(id, key)`, as `update` batches; a fact that kept its id but changed a checked field is batched and counted as changed); the blind reader's prompt; the deterministic verdict; record and freeze verdicts |
+| `second-look queue <atlas> [--top N] [--diff-from <atlas> \| --used <usage log>]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page (`--diff-from`: only those another atlas's queue did not hold under the same `(id, key)`, as `update` batches; a fact that kept its id but changed a checked field is batched and counted as changed; `--used`: only those the usage log says answers returned, the `find_fact` and `register` record ids and the facts on pages a returned `part_card` cited, most used first, so reading effort goes to facts in use; `update` leaves the backlog alone and this is how it is drained); the blind reader's prompt; the deterministic verdict; record and freeze verdicts |
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name, which must also be the same quantity and role (else "mapping uncertain", not compared); abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
-| `update <target> [commit]` | `update` | bump: stop while a translation is behind its source (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
+| `update <target> [commit]` | `update` | bump, one at a time (the bump lock; a second is refused, exit 3), its outcome and reason in `bump/state.json`: stop while a translation is behind its source or the west workspace is not at the manifest's revisions (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
+| `hook install <target>... [--debounce S]` / `hook uninstall` / `hook run <target>...` | `bump` | opt-in bump on HEAD moves (below): write or remove the `post-commit`, `post-checkout`, `post-merge` and `post-rewrite` hooks; `run` is what a hook starts, detached |
 | `q <lookup>` | `query` | the thirteen lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
@@ -814,14 +826,26 @@ An atlas id is `<target>@<commit12>`.
 
 ### When `update` stops
 
-`update` stops only for a translation that exists and is behind its source, and names the fix:
+`update` stops only for a translation that exists and is behind its source, or for a west workspace off its
+manifest, and names the fix:
 
 - a `docs/<id>` whose `doc.json` hash is not the manifest file's (`doc prep` has not run on the new
   file). The distillation of a manifest file is `docs/<doc_id>`, else the one prepped from the same
   content under another `--doc-id`, else the one prepped from a file of the same name;
 - a distillation whose newest freeze has units on pages that changed (`doc thaw-check`). The
   reference manual's units are the worklist's, which `update` writes itself;
-- a board whose `netlist.json` was made from another PDF than the one `atlas.toml` names.
+- a board whose `netlist.json` was made from another PDF than the one `atlas.toml` names;
+- before building, a west workspace that is not at the manifest's revisions (`update.workspace_drift`): the
+  atlas builds the firmware commit from a worktree but every other module as the workspace has it checked out,
+  so a module the manifest moved and nobody `west update`d would be built against the wrong code. A cloned
+  project whose HEAD is not its revision (a SHA or a tag resolved in its clone; a branch compared with
+  `manifest-rev`, what `west update` last checked out), or whose clone lacks that revision, stops it, named.
+  An uncloned project is listed and does not stop it: a manifest can name projects the build never uses, and
+  a build that needs one fails and says so. The manifest compared is the one west reads (the manifest repo's
+  working tree); the firmware repo itself is skipped, since the atlas builds it at the commit.
+
+Every stop and every failure is recorded in `bump/state.json` with its reason, so the stale line and `src:` carry
+it (above), whether the bump came from the hook or from a hand-run `update`.
 
 A declared board with **no** netlist does not stop it. `update` cannot make the netlist (the schematic
 step is the engineer's, from a PDF), so stopping would block every firmware bump on a board that is not
@@ -835,6 +859,33 @@ A new or changed document with no distillation, of any kind, does not stop it: `
 documents added, changed or removed since the previous atlas (from that atlas's `source_files`,
 else the inventory's own diff) with the distillation each one has, and names the ones without
 (notes and spreadsheets have no distillation: an agent reads them as they are).
+
+### Bumping when HEAD moves (`hook`, `bump.py`)
+
+`update` is one command, so the remaining cost of a current atlas was remembering to run it after every
+commit; in field use nobody did for twelve days while the branches moved about 100 commits. The bump on HEAD
+moves is **opt-in** (`init` offers it): `hook install <target>...` writes a marked block into the firmware
+repo's `post-commit`, `post-checkout` (not for a file checkout), `post-merge` and `post-rewrite` hooks, in the
+hooks dir git resolves (`core.hooksPath`, the common dir of a linked worktree); a hook that is not ours keeps its
+text and gets the block appended, and `hook uninstall` removes the block, deleting a hook that held nothing
+else. The block does the cheap part in shell: it writes the checkout HEAD moved in to `bump/moved` (its mtime is
+the move) and, unless `bump/worker.pid` names a live worker, starts `hook run` detached. It never blocks git.
+
+The worker (`bump.run_worker`) waits until `moved` is `--debounce` seconds old (default 10: a rebase moves HEAD
+many times) and no rebase, merge, cherry-pick, revert or bisect is in progress in that checkout, then runs
+`update <target> HEAD` for each target there, under the bump lock, logging to `bump/log`, and runs `status`
+so `current.json` and the MAP's stale line follow whatever happened. A move during the bump starts another
+round when it ends; `bump/handled` records the last move a bump covered, so the extra workers that hooks start
+before the first one has written its pid find nothing to do. One worker at a time (`bump/worker.lock`) and
+one bump at a time (`bump/update.lock`, an exclusive `flock` that a hand-run `update` takes too and is refused
+on, exit 3, naming the running bump). The worker drops the `GIT_DIR`-style variables a hook's environment
+carries, which would point every `git -C <module>` at the firmware repo.
+
+The previous atlas stays current until the new one has joined (above). A bump that stops or fails leaves its
+reason in `bump/state.json`, from where the MAP's stale line and every `src:` line show it. The hook never runs
+a second look: `update` queues the diff's batches and says so, and a reader is started by a person or a session.
+`status` lists the installed hooks and each target's last bump. Measured on the synthetic project of
+`tests/test_bump.py` with a target that has no board: five commits in a row are one bump, of the last commit.
 
 ## What an LLM step may and may not do
 
