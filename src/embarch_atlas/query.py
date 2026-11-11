@@ -1101,21 +1101,31 @@ def stacks(a: Atlas, build: str | None = None, offset: int = 0) -> str:
 
 
 @_stamped
-def code(a: Atlas, symbol: str, build: str | None = None, show: str = "all", offset: int = 0) -> str:
+def code(a: Atlas, symbol: str, build: str | None = None, show: str = "all", match: str | None = None,
+         vs: str | None = None, offset: int = 0) -> str:
     """A function, struct, union, enum, typedef, macro, enumerator or file-scope variable as the build
     compiled it: each definition's file:line and compiled unit, its body, then every reference in the
     compiled sources as `file:line function`. `<file>:<symbol>` narrows to a file, `<file>:<line>` gives
-    the definition holding that line, a file alone lists its definitions, `*` lists matching names.
-    `show`: all, def (no references) or refs (no bodies). From the pinned build, or the build dir `build` names."""
+    the definition holding that line, `<file>:<a>-<b>` those lines, a file alone lists its definitions,
+    `*` lists matching names; `a,b` answers several. `show`: all, def (no references) or refs (no bodies).
+    `match`: a regex or words; only the matching lines of each body (or file), with a line around each.
+    `vs`: another build dir, or "pinned": each definition's diff between the two (a file: its changed,
+    added and removed definitions). From the pinned build, or the build dir `build` names."""
     from . import buildq, codeq
     try:
         src = buildq.source(a, build)
         idx = codeq.for_source(src)
-        body = codeq.code_answer(idx, symbol, show)
+        other = oidx = None
+        if vs:
+            other = buildq.pinned(a) if vs == "pinned" else buildq.named(a, vs)
+            oidx = codeq.for_source(other)
+        body = codeq.code_answer(idx, symbol, show, match, oidx)
     except (LookupError, FileNotFoundError, OSError, RuntimeError, ValueError) as e:
         return f"src: none\n\n{e}\n"
-    extra = f"query={symbol!r}" + (f" show={show}" if show != "all" else "")
-    return _cap(_header(codeq.src_line(src, idx), extra=extra) + body + "\n", "code", offset)
+    head = codeq.src_line(src, idx) + (f" vs {codeq.src_line(other, oidx)}" if other else "")
+    extra = (f"query={symbol!r}" + (f" show={show}" if show != "all" and not vs else "")
+             + (f" match={match!r}" if match else "") + (f" vs={vs!r}" if vs else ""))
+    return _cap(_header(head, extra=extra) + body + "\n", "code", offset)
 
 
 @_stamped
@@ -1516,7 +1526,9 @@ def register(sub, groups) -> None:
     add("transitions", transitions, (["doc"], {}), (["--state"], {}), (["--on"], {"help": "a message or timer name"}),
         (["--machine"], {}), (["--offset"], {"type": int, "default": 0}))
     add("code", code, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
-        (["--show"], {"choices": ["all", "def", "refs"], "default": "all"}), (["--offset"], {"type": int, "default": 0}))
+        (["--show"], {"choices": ["all", "def", "refs"], "default": "all"}),
+        (["--match"], {"help": "a regex or words: only the matching lines of each body or file"}),
+        (["--vs"], {"help": "compare against this build dir, or `pinned`"}), (["--offset"], {"type": int, "default": 0}))
     add("states", states, (["table"], {"help": "an SMF table name, or a directory or file holding tables"}),
         (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
 

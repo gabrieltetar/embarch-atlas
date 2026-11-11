@@ -138,14 +138,18 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         return query.stacks(view(), build, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def code(symbol: str, build: str | None = None, show: str = "all", offset: int = 0) -> str:
+    def code(symbol: str, build: str | None = None, show: str = "all", match: str | None = None,
+             vs: str | None = None, offset: int = 0) -> str:
         """A C symbol as the build compiled it (function, struct, enum, typedef, macro, enumerator, file-scope
         variable): each definition's file:line and compiled unit, its body with line numbers, then every
         reference in the compiled sources as `file:line function`. `<file>:<symbol>` narrows to a file,
-        `<file>:<line>` returns the definition holding that line, a file alone lists its definitions, `x_*` lists
-        names. `show`: "all", "def" (bodies only) or "refs" (references only). Use it instead of grep then sed -n.
+        `<file>:<line>` returns the definition holding that line, `<file>:<a>-<b>` those lines, a file alone lists
+        its definitions, `x_*` lists names, `a,b,c` answers each. `show`: "all", "def" (bodies only) or "refs"
+        (references only). `match`: a regex or words; only matching lines (and one around each) of each body, or
+        of a file. `vs`: a second build dir or "pinned": each definition's diff between the builds (a file: its
+        changed, added, removed definitions). Use it instead of grep, sed -n and git diff on the source.
         `build`: a build dir (a variant, a patched Zephyr worktree, a version bump); default the pinned build."""
-        return query.code(view(), symbol, build, show, offset)
+        return query.code(view(), symbol, build, show, match, vs, offset)
 
     @server.tool(annotations=READ_ONLY)
     def states(table: str, build: str | None = None, offset: int = 0) -> str:

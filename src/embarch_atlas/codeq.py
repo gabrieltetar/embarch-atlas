@@ -47,6 +47,7 @@ INDEX_VERSION = 1
 MAX_LIST = 60
 DOC_LINES = 40          # longest comment block shown above a definition
 WINDOW = 15             # lines either side of a `file:line` that is in no definition
+MATCH_CONTEXT = 1       # lines kept either side of a `match=` hit
 
 KW = {"if", "for", "while", "switch", "return", "sizeof", "do", "else", "case", "goto", "typeof",
       "__typeof__", "_Static_assert", "static_assert", "defined"}
@@ -1009,13 +1010,64 @@ def _outline(idx: Index, fi: int) -> str:
     return head + "\n" + "\n".join(rows)
 
 
-def code_answer(idx: Index, query: str, show: str = "all") -> str:
-    q = query.strip()
+def compile_match(match: str | None) -> re.Pattern | None:
+    """`match=`: a regular expression when it has regex syntax, else words, any of which may match."""
+    if not match or not match.strip():
+        return None
+    m = match.strip()
+    if re.search(r"[\\^$.|?*+()\[\]{}]", m):
+        return re.compile(m)
+    return re.compile("|".join(re.escape(w) for w in m.split()))
+
+
+def _view(lines: list[str], a: int, b: int, rx: re.Pattern | None, keep_lines: tuple[int, ...] = ()) -> str:
+    """Lines a..b numbered; with `rx`, only the matching ones, MATCH_CONTEXT lines around each, `--` between
+    runs, plus `keep_lines` (a definition's own name line, so the reader knows what it is)."""
+    b = min(b, len(lines))
+    if rx is None:
+        return _num(lines, a, b)
+    keep: set[int] = set()
+    for k in range(a, b + 1):
+        if rx.search(lines[k - 1]):
+            keep.update(range(max(a, k - MATCH_CONTEXT), min(b, k + MATCH_CONTEXT) + 1))
+    if not keep:
+        return "(no line matches)"
+    keep.update(x for x in keep_lines if a <= x <= b)
+    w = len(str(b))
+    out, prev = [], None
+    for k in sorted(keep):
+        if prev is not None and k != prev + 1:
+            out.append("--")
+        out.append(f"{k:>{w}} {lines[k - 1]}")
+        prev = k
+    return "\n".join(out)
+
+
+def code_answer(idx: Index, query: str, show: str = "all", match: str | None = None,
+                other: "Index | None" = None) -> str:
+    """The `code` body: each comma-separated item of `query` answered in turn."""
     if show not in ("all", "def", "refs"):
         return f"show={show!r}: use all, def or refs"
+    try:
+        rx = compile_match(match)
+    except re.error as e:
+        return f"match={match!r} is not a regular expression: {e}"
+    items = [q.strip() for q in query.split(",") if q.strip()]
+    if not items:
+        return "no symbol given"
+    outs = [_code_one(idx, q, show, rx, other) for q in items]
+    if len(items) == 1:
+        return outs[0]
+    return "\n\n".join(f"=== {q}\n{o}" for q, o in zip(items, outs))
+
+
+def _code_one(idx: Index, q: str, show: str, rx: re.Pattern | None, other: "Index | None") -> str:
+    m = re.fullmatch(r"(.+?):(\d+)-(\d+)", q)
+    if m:
+        return _range(idx, m.group(1), int(m.group(2)), int(m.group(3)), rx)
     m = re.fullmatch(r"(.+?):(\d+)", q)
     if m:
-        return _at_line(idx, m.group(1), int(m.group(2)))
+        return _at_line(idx, m.group(1), int(m.group(2)), rx)
     file_part, sym = None, q
     if ":" in q:
         a, _, b = q.rpartition(":")
@@ -1024,9 +1076,13 @@ def code_answer(idx: Index, query: str, show: str = "all") -> str:
     if file_part is None and not IDENT.fullmatch(q.replace("*", "x").replace("?", "x")):
         fis = _match_file(idx, q)
         if len(fis) == 1:
-            return _outline(idx, fis[0])
+            if other is not None:
+                return _file_vs(idx, other, fis[0], rx)
+            return _file_match(idx, fis[0], rx) if rx else _outline(idx, fis[0])
         if fis:
             return f"{len(fis)} compiled files match {q!r}:\n" + "\n".join(idx.rel(f) for f in fis[:MAX_LIST])
+        if other is not None and _match_file(other, q):
+            return f"{q} is compiled in the other build only"
         return f"no compiled file or symbol {q!r} in this build ({len(idx.files)} files)"
     if any(c in sym for c in "*?[") and file_part is None:
         names = sorted(n for n in idx.by_name if fnmatch.fnmatchcase(n, sym))
@@ -1037,6 +1093,8 @@ def code_answer(idx: Index, query: str, show: str = "all") -> str:
         if len(names) > MAX_LIST:
             rows.append(f"({len(names) - MAX_LIST} more)")
         return "\n".join(rows) if rows else f"no symbol matches {sym!r}"
+    if other is not None:
+        return _symbol_vs(idx, other, sym, file_part, rx)
     found = idx.defs(sym)
     fis: set[int] | None = None
     elsewhere = ""
@@ -1070,12 +1128,181 @@ def code_answer(idx: Index, query: str, show: str = "all") -> str:
     if show in ("all", "def") and not elsewhere:
         cache: dict = {}
         for fi, d in shown:
-            out.append(f"{idx.rel(fi)}:{min(d[5], d[4])}-{d[3]}\n{_def_block(idx, fi, d, cache)}")
+            if fi not in cache:
+                cache[fi] = idx.text(fi).split("\n")
+            a = min(d[5], d[4])
+            out.append(f"{idx.rel(fi)}:{a}-{d[3]}" + (f" lines matching {rx.pattern!r}" if rx else "")
+                       + f"\n{_view(cache[fi], a, d[3], rx, (d[2],))}")
     if show in ("all", "refs"):
         skip = {(fi, d[2]) for fi, d in found}
         refs, roff = references(idx, sym, skip, fis)
         out.append(f"references ({len(refs)}" + (f"; +{roff} in #if branches not compiled" if roff else "") + "):\n"
                    + ("\n".join(refs) if refs else "(none in the compiled sources)"))
+    return "\n\n".join(out)
+
+
+def _file_match(idx: Index, fi: int, rx: re.Pattern) -> str:
+    """The lines of one compiled file that match, with context, each run under the definition holding it."""
+    lines = idx.text(fi).split("\n")
+    hits = [k for k in range(1, len(lines) + 1) if rx.search(lines[k - 1])]
+    head = f"{idx.rel(fi)}: {idx.unit_note(fi)}, {len(hits)} line{'s' if len(hits) != 1 else ''} matching {rx.pattern!r}"
+    if not hits:
+        return head
+    runs: list[list[int]] = []
+    for k in hits:
+        if runs and k - runs[-1][-1] <= 2 * MATCH_CONTEXT + 1:
+            runs[-1].append(k)
+        else:
+            runs.append([k])
+    out = [head]
+    w = len(str(len(lines)))
+    for run in runs:
+        a, b = max(1, run[0] - MATCH_CONTEXT), min(len(lines), run[-1] + MATCH_CONTEXT)
+        off = idx.off_at(fi, run[0])
+        out.append(f"-- {_enclosing(idx, fi, run[0])}" + (f" (not compiled: #if {off})" if off else ""))
+        out += [f"{k:>{w}} {lines[k - 1]}" for k in range(a, b + 1)]
+    return "\n".join(out)
+
+
+def _range(idx: Index, file_part: str, a: int, b: int, rx: re.Pattern | None) -> str:
+    fis = _match_file(idx, file_part)
+    if not fis:
+        return f"no compiled file matches {file_part!r}"
+    if len(fis) > 1:
+        return f"{len(fis)} compiled files match {file_part!r}; name one:\n" + "\n".join(idx.rel(f) for f in fis[:MAX_LIST])
+    fi = fis[0]
+    lines = idx.text(fi).split("\n")
+    a, b = max(1, min(a, b)), min(len(lines), max(a, b))
+    changed = " (CHANGED since the build: this is the file now)" if fi in idx.changed else ""
+    return (f"{idx.rel(fi)}:{a}-{b} in {_enclosing(idx, fi, a)}" + (f" to {_enclosing(idx, fi, b)}" if
+            _enclosing(idx, fi, b) != _enclosing(idx, fi, a) else "") + changed + "\n" + _view(lines, a, b, rx))
+
+
+# ---------------------------------------------------------------- `code ... vs=`: two builds
+
+def _def_lines(ix: Index, fi: int, d: list) -> tuple[int, list[str]]:
+    a = min(d[5], d[4])
+    return a, ix.text(fi).split("\n")[a - 1:d[3]]
+
+
+def _rebase_hunks(diff: list[str], off_from: int, off_to: int) -> list[str]:
+    """unified_diff numbers a snippet from 1; put the file's own line numbers in the hunk headers."""
+    out = []
+    for line in diff:
+        m = re.match(r"@@ -(\d+)(,\d+)? \+(\d+)(,\d+)? @@", line)
+        if m:
+            line = f"@@ -{int(m.group(1)) + off_from}{m.group(2) or ''} +{int(m.group(3)) + off_to}{m.group(4) or ''} @@"
+        out.append(line)
+    return out
+
+
+def _hunks_matching(diff: list[str], rx: re.Pattern | None) -> list[str]:
+    if rx is None:
+        return diff
+    head, hunks, cur = [], [], None
+    for line in diff:
+        if line.startswith("@@"):
+            cur = [line]
+            hunks.append(cur)
+        elif cur is None:
+            head.append(line)
+        else:
+            cur.append(line)
+    kept = [h for h in hunks if any(l[:1] in "+-" and rx.search(l[1:]) for l in h[1:])]
+    return head + [l for h in kept for l in h] if kept else []
+
+
+def _pair_diff(this: Index, other: Index, a: tuple[int, list] | None, b: tuple[int, list] | None,
+               rx: re.Pattern | None) -> str:
+    d = (a or b)[1]
+    lines = [f"{_label(d[1], d)} {d[0]}"]
+    if a:
+        lines.append(f"  this build:  {this.rel(a[0])}:{min(a[1][5], a[1][4])}-{a[1][3]}")
+    if b:
+        lines.append(f"  other build: {other.rel(b[0])}:{min(b[1][5], b[1][4])}-{b[1][3]}")
+    if not a or not b:
+        ix, (fi, dd) = (this, a) if a else (other, b)
+        start, body = _def_lines(ix, fi, dd)
+        lines.append(f"only in the {'this' if a else 'other'} build:")
+        lines.append(_view(body, 1, len(body), rx, (dd[2] - start + 1,)) if rx else _num(ix.text(fi).split("\n"), start, dd[3]))
+        return "\n".join(lines)
+    sa, la = _def_lines(this, *a)
+    sb, lb = _def_lines(other, *b)
+    if la == lb:
+        lines.append("same in both builds")
+        return "\n".join(lines)
+    diff = list(difflib.unified_diff(lb, la, fromfile=f"other {other.rel(b[0])}", tofile=f"this {this.rel(a[0])}",
+                                     lineterm="", n=3))
+    diff = _hunks_matching(_rebase_hunks(diff, sb - 1, sa - 1), rx)
+    lines += diff if diff else [f"(no changed line matches {rx.pattern!r})" if rx else "same in both builds"]
+    return "\n".join(lines)
+
+
+def _pick(ix: Index, sym: str, file_part: str | None) -> list[tuple[int, list]]:
+    found = [(fi, d) for fi, d in ix.defs(sym) if not ix.off_at(fi, d[2])]
+    if file_part is not None:
+        fis = set(_match_file(ix, file_part))
+        found = [x for x in found if x[0] in fis]
+    full = [x for x in found if x[1][1] != "declaration"]
+    return full or found
+
+
+def _pairs(this: Index, other: Index, A: list, B: list) -> list[tuple[Any, Any]]:
+    """Each definition here with its counterpart there: same file and kind first, then same kind."""
+    left = list(B)
+    out = []
+    for fa, da in A:
+        j = next((i for i, (fb, db) in enumerate(left) if other.rel(fb) == this.rel(fa) and db[1] == da[1]), None)
+        if j is None:
+            j = next((i for i, (fb, db) in enumerate(left) if db[1] == da[1]), None)
+        out.append(((fa, da), left.pop(j) if j is not None else None))
+    out += [(None, x) for x in left]
+    return out
+
+
+def _symbol_vs(this: Index, other: Index, sym: str, file_part: str | None, rx: re.Pattern | None) -> str:
+    A, B = _pick(this, sym, file_part), _pick(other, sym, file_part)
+    if not A and not B:
+        return _nearest(this, sym, file_part)
+    out = [f"{sym}: {len(A)} definition{'s' if len(A) != 1 else ''} in this build, {len(B)} in the other"]
+    out += [_pair_diff(this, other, a, b, rx) for a, b in _pairs(this, other, A, B)]
+    return "\n\n".join(out)
+
+
+def _file_vs(this: Index, other: Index, fi: int, rx: re.Pattern | None) -> str:
+    """One file's definitions compared between two builds: changed (with their diffs), added, removed."""
+    rel = this.rel(fi)
+    ofs = [f for f in range(len(other.files)) if other.rel(f) == rel]
+    if not ofs:
+        return f"{rel} is compiled in this build only"
+
+    def defs(ix: Index, f: int) -> list[tuple[int, list]]:
+        return [(f, d) for d in sorted(ix.ex[f].get("d") or [], key=lambda d: d[2])
+                if d[1] not in ("declaration", "enumerator") and not ix.off_at(f, d[2])]
+    A, B = defs(this, fi), defs(other, ofs[0])
+    by_b: dict[tuple[str, str], list] = {}
+    for x in B:
+        by_b.setdefault((x[1][0], x[1][1]), []).append(x)
+    changed, added, same = [], [], 0
+    for a in A:
+        lst = by_b.get((a[1][0], a[1][1]))
+        if not lst:
+            added.append(a)
+            continue
+        b = lst.pop(0)
+        if _def_lines(this, *a)[1] == _def_lines(other, *b)[1]:
+            same += 1
+        else:
+            changed.append((a, b))
+    removed = [x for lst in by_b.values() for x in lst]
+    out = [f"{rel}: {len(changed)} changed, {len(added)} only in this build, {len(removed)} only in the other, "
+           f"{same} the same (lines outside a definition are not compared)"]
+    out += [_pair_diff(this, other, a, b, rx) for a, b in changed]
+    out += [_pair_diff(this, other, a, None, rx) for a in added]
+    out += [_pair_diff(this, other, None, b, rx) for b in removed]
+    if rx is not None:                  # with match=, only the definitions whose changed lines match
+        quiet = ("(no changed line matches", "(no line matches)")
+        out = out[:1] + [o for o in out[1:] if not o.split("\n")[-1].startswith(quiet)]
     return "\n\n".join(out)
 
 
@@ -1088,7 +1315,7 @@ def _nearest(idx: Index, sym: str, file_part: str | None) -> str:
             + (f". Nearest: {', '.join(close)}" if close else ""))
 
 
-def _at_line(idx: Index, file_part: str, line: int) -> str:
+def _at_line(idx: Index, file_part: str, line: int, rx: re.Pattern | None = None) -> str:
     fis = _match_file(idx, file_part)
     if not fis:
         return f"no compiled file matches {file_part!r}"
@@ -1106,11 +1333,11 @@ def _at_line(idx: Index, file_part: str, line: int) -> str:
     changed = " (CHANGED since the build: this is the file now)" if fi in idx.changed else ""
     if best is None or best[3] - min(best[4], best[5]) > 400:
         a, b = max(1, line - WINDOW), min(len(lines), line + WINDOW)
-        return f"{idx.rel(fi)}:{a}-{b} (in no definition){changed}\n{_num(lines, a, b)}"
+        return f"{idx.rel(fi)}:{a}-{b} (in no definition){changed}\n{_view(lines, a, b, rx)}"
     a = min(best[4], best[5])
     off = idx.off_at(fi, best[2])
     return (f"{_label(best[1], best)} {best[0]} {idx.rel(fi)}:{a}-{best[3]} holds line {line}{changed}"
-            + (f" (not compiled: #if {off})" if off else "") + f"\n{_num(lines, a, best[3])}")
+            + (f" (not compiled: #if {off})" if off else "") + f"\n{_view(lines, a, best[3], rx, (best[2], line))}")
 
 
 # ---------------------------------------------------------------- `states`

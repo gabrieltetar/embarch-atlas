@@ -422,3 +422,60 @@ def test_states_reads_setters_one_helper_down_and_skips_off_branches(project, tm
     assert "parent DEMO_IDLE" in rows["DEMO_BUSY"] and rows["DEMO_BUSY"].endswith("entry -> DEMO_IDLE")
     assert "entry busy_entry demo_sm.c:26" in rows["DEMO_BUSY"]
     assert rows["DEMO_ERROR"] == "DEMO_ERROR | parent - | entry - | run - | exit -"
+
+
+# ---------------------------------------------------------------- match=, vs=, lists and line ranges
+
+def test_match_keeps_only_the_matching_lines_of_a_body_or_a_file(project):
+    a = query.Atlas(project["a"])
+    out = query.code(a, "long_one", build="build-patched", show="def", match=r"x \+= 7;")
+    body = out.split("\n\n", 2)[2]
+    assert "fw:app/main.c:15-139 lines matching 'x \\\\+= 7;'" in out
+    assert "\tx += 7;" in body and "\tx += 6;" in body and "\tx += 8;" in body      # one line around the hit
+    assert "\tx += 50;" not in body and "int long_one(void)" in body                # the name line stays
+    words = query.code(a, "long_one", build="build-patched", show="def", match="77 99")
+    assert "\tx += 77;" in words and "\tx += 99;" in words and "\n--\n" in words
+    assert "(no line matches)" in query.code(a, "init", build="build-patched", show="def", match="nothing_here")
+    f = query.code(a, "app/main.c", build="build-patched", match="thing_limit")
+    assert "fw:app/main.c: a compiled unit, 1 line matching 'thing_limit'" in f and "-- init" in f
+    assert "is not a regular expression" in query.code(a, "init", build="build-patched", match="(")
+
+
+def test_a_list_and_a_line_range_answer_in_one_call(project):
+    a = query.Atlas(project["a"])
+    out = query.code(a, "init, thing_limit", build="build-patched", show="def")
+    assert "=== init\ninit: 2 definitions" in out and "=== thing_limit\nthing_limit: 1 definition" in out
+    rng = query.code(a, "main.c:3-5", build="build-patched")
+    assert "fw:app/main.c:3-5 in init" in rng and "5 \treturn thing_limit();" in rng and "6 }" not in rng
+
+
+def test_vs_diffs_a_definition_between_two_builds(project):
+    a = query.Atlas(project["a"])
+    out = query.code(a, "thing_limit", build="build-patched", vs="pinned")
+    head = out.split("\n")[0]
+    assert "zephyr v9.9.0-1-gpatched" in head and " vs atlas core@000000000004 (zephyr v9.9.0)" in head
+    assert "thing_limit: 1 definition in this build, 1 in the other" in out
+    assert "  this build:  zephyr:lib/thing.c:3-7" in out and "  other build: zephyr:lib/thing.c:3-6" in out
+    assert "-\treturn THING_MAX;" in out and "+\treturn THING_MAX - 1;" in out
+    assert "+\t/* patched: clamp to the board's limit */" in out and "@@ -3,4 +3,5 @@" in out
+    assert "same in both builds" in query.code(a, "init", build="build-patched", vs="pinned")
+    f = query.code(a, "lib/thing.c", build="build-patched", vs="pinned")
+    assert "zephyr:lib/thing.c: 1 changed, 0 only in this build, 0 only in the other, 0 the same" in f
+    assert "(no changed line matches" not in query.code(a, "lib/thing.c", build="build-patched", vs="pinned",
+                                                       match="clamp")
+    assert "function thing_limit" not in query.code(a, "lib/thing.c", build="build-patched", vs="pinned",
+                                                    match="nothing_here")
+
+
+def test_a_long_diff_pages_to_the_uncut_answer(project, monkeypatch):
+    from paging_synth import assert_exact
+    long_ws = "int big(void)\n{\n" + "".join(f"\tstep({i});\n" for i in range(150)) + "}\n"
+    long_patched = "int big(void)\n{\n" + "".join(f"\tstep({i} + 1);\n" for i in range(150)) + "}\n"
+    for root, text in ((project["ws"], long_ws), (project["scratch"], long_patched)):
+        write_text(root / "lib" / "thing.c", text)
+        past = time.time() - 7200
+        os.utime(root / "lib" / "thing.c", (past, past))
+    a = query.Atlas(project["a"])
+    assert "+\tstep(149 + 1);" in query.code(a, "big", build="build-patched", vs="pinned")
+    assert_exact(monkeypatch, "code", lambda o: query.code(a, "big", build="build-patched", vs="pinned", offset=o),
+                 tokens=300)

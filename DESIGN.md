@@ -610,9 +610,18 @@ it dropped. `code <symbol>` gives each definition's file:line and compiled unit 
 units included it), the comment block above it and its body with line numbers, then every reference in
 the source set as `file:line function`, a definition in several units listing each one; a prototype
 is listed as a declaration and shown only when no definition is compiled. `<file>:<symbol>` narrows to
-a file, `<file>:<line>` returns the definition holding that line (else the lines around it), a file
-alone lists its definitions, a `*` pattern lists names, and `show=def|refs` drops the references or the
-bodies. `states <table | directory | file>` reads `SMF_CREATE_STATE` tables, the designated index
+a file, `<file>:<line>` returns the definition holding that line (else the lines around it), `<file>:<a>-<b>`
+those lines and the definitions they fall in, a file alone lists its definitions, a `*` pattern lists names,
+`a,b,c` answers each item in turn in one call, and `show=def|refs` drops the references or the bodies.
+`match=` (a regular expression when it has regex syntax, else words, any of which may match) keeps only
+the matching lines of each body, one line either side, `--` between runs and the definition's own name line
+kept; on a file it gives the file's matching lines, each run under the definition holding it. `vs=<build dir |
+pinned>` compares two builds, both named on the `src:` line with their Zephyr versions: a symbol gives each
+definition's counterpart (same file and kind first, then same kind), both sides' file:line and a unified
+diff whose hunk headers carry the files' own line numbers, or "same in both builds", or the side it exists
+on; a file gives its definitions changed (with their diffs), only in this build, only in the other and the
+same, comparing definitions only, never the lines between them. With `match=` a diff keeps only the hunks
+whose changed lines match. A diff pages with `next=` like any answer. `states <table | directory | file>` reads `SMF_CREATE_STATE` tables, the designated index
 naming each state, and gives one row per compiled state: parent, initial, entry/run/exit with
 file:line, and the states each moves to. A move is `smf_set_state(ctx, &table[X])`, or a call to a
 setter, a function whose body sets the table's state from one of its parameters (`pe_set_state(dev,
