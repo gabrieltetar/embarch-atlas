@@ -1,7 +1,6 @@
 ---
 name: atlas-update
 description: Brings embarch-atlas up to date after new firmware commits or changed hardware documents - re-translates only what changed, builds a new atlas for the new commit reusing every unchanged translation and verdict, and diffs it against the previous atlas. Run when the engineer asks to update the atlas or when status reports it stale.
-disable-model-invocation: true
 argument-hint: "<target> [<commit>, default HEAD]"
 ---
 

@@ -9,8 +9,9 @@
   symlink: an installed skill should change only when someone re-installs, never
   because a working tree moved under it.
 
-The skills carry `disable-model-invocation: true`, so an agent session (the
-fleet's included) can list them but never invoke one by itself.
+No skill carries `disable-model-invocation`: a session may invoke any of them, the
+three that build or update an atlas included (owner decision, 2026-11-10; DESIGN.md
+"The skills").
 
 Usage:
   ./install.py            install or refresh

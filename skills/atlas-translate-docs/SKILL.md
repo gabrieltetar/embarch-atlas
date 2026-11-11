@@ -1,7 +1,6 @@
 ---
 name: atlas-translate-docs
 description: Turns the hardware documents the engineer supplied for this firmware project (schematic PDFs, component datasheets, the MCU reference manual, the PRD) into embarch-atlas's tiered, page-cited, cross-checked distillations and a schematic netlist. Run when documents are added or changed under the project's sources dir, or when atlas-build asks for reference-manual sections.
-disable-model-invocation: true
 argument-hint: "[all | <file in sources> | rm-worklist <atlas>]"
 ---
 

@@ -1,7 +1,6 @@
 ---
 name: atlas-build
 description: Builds an embarch-atlas for one firmware target at one git commit - its own worktree and build, the pin/net map, the mismatch report and MAP.md - joined to the translated hardware documents, then runs the second, independent look on the facts that atlas uses. Run when the engineer asks for an atlas of a given commit, usually HEAD.
-disable-model-invocation: true
 argument-hint: "<target> [<commit>, default HEAD]"
 ---
 

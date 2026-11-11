@@ -54,9 +54,12 @@ every file, and a missing one becomes a question.
 | `atlas-update` | a new commit or changed documents | a new atlas that reuses every unchanged translation and verdict; a diff against the previous atlas |
 | `atlas-use` | a hardware question in a repo with an atlas | the protocol MAP → card → section → page, cite everything |
 
-The first three are user-invoked (`disable-model-invocation: true`) and call the
-`embarch-atlas` CLI for every deterministic step; `atlas-use` is the one skill an
-agent loads by itself. `install.py` copies them to `~/.claude/skills/`.
+All four call the `embarch-atlas` CLI for every deterministic step, and a session may invoke any of them
+(owner decision, 2026-11-10): the first three no longer carry `disable-model-invocation: true`, so "update the
+atlas" said in a session starts `atlas-update` rather than the session following its steps by hand. The flag is
+all-or-nothing, so a session may also start one on its own judgement, a trade-off the owner accepted. Most bumps
+need no skill at all once `hook install` is on ("Bumping when HEAD moves"). `atlas-use` is the one skill an agent
+loads for every hardware question. `install.py` copies them to `~/.claude/skills/`.
 
 ## On-disk layout (under `<fw>/embarch/atlas/`, git-excluded)
 
