@@ -418,6 +418,7 @@ def test_mcp_tools_answer(std):
 def test_the_procedure_examples_are_valid_records():
     text = (Path(__file__).parents[1] / "skills" / "atlas-translate-docs" / "reference" / "standard-procedure.md").read_text()
     blocks = [b.split("```", 1)[0] for b in text.split("```json\n")[1:]]
+    blocks = [b for b in blocks if '"fw_check"' not in b]          # the procedure's fw_check examples are 004's
     dec, recs = json.JSONDecoder(), []
     for b in blocks:
         i = 0

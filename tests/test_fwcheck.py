@@ -300,7 +300,7 @@ def test_the_procedures_worked_example_is_a_valid_fw_check():
     import json
     import re
     text = (Path(__file__).parents[1] / "skills" / "atlas-translate-docs" / "reference" / "standard-procedure.md").read_text()
-    blocks = re.findall(r"```json\n(.*?)```", text, re.S)
+    blocks = [b for b in re.findall(r"```json\n(.*?)```", text, re.S) if '"fw_check"' in b]   # the fw_check examples only
     fcs = []
     for b in blocks:
         obj = json.loads(b if b.lstrip().startswith("{") else "{" + b + "}")
