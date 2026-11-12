@@ -1,4 +1,4 @@
-"""The fifteen atlas lookups, as plain functions returning markdown.
+"""The seventeen atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -226,7 +226,7 @@ def _missing(what: str, hint: str) -> str:
     return f"src: none\n\n{what} not found. {hint}\n"
 
 
-# --------------------------------------------------------------------------- the fifteen
+# --------------------------------------------------------------------------- the seventeen
 
 @_stamped
 def part_card(a: Atlas, part: str, board: str | None = None, offset: int = 0) -> str:

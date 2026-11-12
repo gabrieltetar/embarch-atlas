@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's fifteen lookups as an MCP server over stdio, and the live
+"""`embarch-atlas mcp`: the atlas's seventeen lookups as an MCP server over stdio, and the live
 module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
@@ -268,6 +268,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's fifteen lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's seventeen lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)

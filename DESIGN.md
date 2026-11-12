@@ -510,7 +510,7 @@ rule a configuration value can break. `join` evaluates every one against the pin
 
 ## Query surface
 
-`query.py` holds the fifteen lookups as plain functions returning markdown: `part_card` (`board="all"`
+`query.py` holds the seventeen lookups as plain functions returning markdown: `part_card` (`board="all"`
 adds every board's refs and nets, a label one board's; no tool documents an empty string as a value: a model
 writes `"board": }` for it, and the call never reaches the server. **With no atlas** it still answers a board
 MPN: the MPN-to-document join `pins.json` would hold is made from the netlists and `coverage.py`
@@ -757,7 +757,7 @@ scoring each declared interface.
 
 ## Live (`live.py`)
 
-The live module reads the running board. It is not part of the fifteen lookups: the atlas never
+The live module reads the running board. It is not part of the seventeen lookups: the atlas never
 touches hardware, so `reg_read` names addresses and decodes the answer, and embarch-core does the
 read (its decision 81) through the `embarch-api mem-read` subcommand, which resolves Core and its
 token the way every suite tool does. Core picks the probe and chip from the role's enrollment,
@@ -993,12 +993,12 @@ An atlas id is `<target>@<commit12>`.
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump, one at a time (the bump lock; a second is refused, exit 3), its outcome and reason in `bump/state.json`: stop while a translation is behind its source or the west workspace is not at the manifest's revisions (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
 | `hook install <target>... [--debounce S]` / `hook uninstall` / `hook run <target>...` | `bump` | opt-in bump on HEAD moves (below): write or remove the `post-commit`, `post-checkout`, `post-merge` and `post-rewrite` hooks; `run` is what a hook starts, detached |
-| `q <lookup>` | `query` | the fifteen lookups (same answers as the MCP tools) |
+| `q <lookup>` | `query` | the seventeen lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
-| `mcp` | `mcp_server` | the fifteen lookups as an MCP server over stdio, and `reg_read` when Core answers |
+| `mcp` | `mcp_server` | the seventeen lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ### When `update` stops
 
