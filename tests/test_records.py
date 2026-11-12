@@ -38,6 +38,13 @@ GOOD = [
     {"id": "demo-gauge.bus.i2c", "kind": "bus", "doc": "demo-gauge@A", "p": [12], "src": "text",
      "q": "multibyte values are ordered least significant byte first", "iface": "i2c", "byte_order": "lsb-first",
      "reg_addr_bytes": 1, "windows": [{"from": "0x100", "to": "0x1FF", "addr": "0x0B", "base": "0x100"}]},
+    {"id": "demo-link.appl.3-1.widget-query.hub", "kind": "applicability", "doc": "demo-link@1", "p": 3, "src": "table",
+     "q": "Widget_Query Normative Recommended", "item": "Widget_Query", "item_kind": "message", "role": "Hub",
+     "level": "Normative", "table": "Table 3-1"},
+    {"id": "demo-link.state.hub.Idle", "kind": "state", "doc": "demo-link@1", "p": 6, "src": "text", "q": "x",
+     "machine": "Demo Hub", "name": "Idle", "entry": ["Reset QueryCounter"]},
+    {"id": "demo-link.trans.hub.Idle.Ready", "kind": "transition", "doc": "demo-link@1", "p": 6, "src": "text", "q": "x",
+     "machine": "Demo Hub", "from": "Idle", "to": "Ready", "event": "the link comes up", "trigger": None},
     {"id": "demo-reg.variant.demo-reg-33", "kind": "variant", "doc": "demo-reg@A", "p": 1, "src": "table",
      "q": "DEMO-REG-33 3.3 V SOT-23-5", "mpn": "DEMO-REG-33", "options": {"vout": "3.3 V", "package": "SOT-23-5"}}
 ]

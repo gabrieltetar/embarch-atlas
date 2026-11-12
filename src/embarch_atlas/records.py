@@ -21,7 +21,8 @@ from typing import Any, Iterable
 from . import common
 
 KINDS = ("limit", "timing", "pin", "rule", "register", "field", "quirk", "figure", "strap",
-         "passthrough", "requirement", "conflict", "check", "bus", "variant")
+         "passthrough", "requirement", "conflict", "check", "bus", "variant",
+         "applicability", "state", "transition")
 PROV = ("deterministic", "deterministic+crosschecked", "llm-verified", "llm-unverified",
         "engineer-declared", "engineer-confirmed", "measured")
 DETERMINISTIC = ("deterministic", "deterministic+crosschecked")
@@ -37,7 +38,7 @@ FACT_KEYS = {
     "register": ("name", "addr", "bank", "width", "reset", "access", "summary", "desc"),
     "field": ("reg", "name", "bits", "reset", "access", "enum", "desc"),
     "quirk": ("class", "text", "why", "refs"),
-    "figure": ("fig", "caption", "what"),
+    "figure": ("fig", "caption", "what", "machine", "states"),
     "strap": ("pin", "condition", "value"),
     "passthrough": ("from_pin", "to_pin", "when"),
     "requirement": ("rid", "modality", "role", "cond", "priority", "order", "text", "fw_relevant"),
@@ -45,6 +46,9 @@ FACT_KEYS = {
     "check": ("expr", "expect", "why"),
     "bus": ("iface", "byte_order", "reg_addr_bytes", "windows", "bank_select"),
     "variant": ("mpn", "options"),
+    "applicability": ("item", "item_kind", "role", "as", "cond", "level", "table"),
+    "state": ("machine", "name", "entry"),
+    "transition": ("machine", "from", "to", "event", "trigger"),
 }
 _SKIP_IN_FACTS = {"id", "kind", "doc", "p", "q", "prov", "fn", "note", "src"}
 

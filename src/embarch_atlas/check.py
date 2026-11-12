@@ -25,6 +25,12 @@ Record checks (per record, against the text layer of the pages it cites):
                      by "not"; `should`, `should-not` and `may` likewise); a quote with no keyword passes only
                      when `note` says where the force comes from (a table heading). Runs on standards only:
                      a PRD's requirements take their force from its own tables
+  L  applicability   an `applicability` record's `item` and `level` are both in its quoted row (as words: a
+                     line break inside them is allowed, a longer name around them is not). It cannot tell
+                     which column of the row the level sits in
+  E  state machines  a `transition`'s `from` and `to` are `state` records of its `machine`; every state a
+                     `figure` record lists in `states` has a `state` record of the figure's `machine`. A
+                     state record the machine's figure does not list is a warning
   R  references      quirk/conflict refs resolve to a record of any document under docs/ (ids are
                      globally unique, `<part>.<kind>...`: an RM vote conflict refs SVD registers); ids
                      are unique (a deterministic record and an LLM record may share an id: they are
@@ -707,6 +713,9 @@ def record_checks(doc: DocText, rec: dict) -> dict:
     # W
     if kind == "requirement" and qs and rec.get("modality") and doc.meta.get("kind") == "standard":
         out["W"] = modality_check(rec.get("modality"), " ".join(qs), rec.get("note"))
+    # L
+    if kind == "applicability" and qs:
+        out["L"] = applicability_check(rec)
     # O
     if numv:
         order = [float(numv[k]) for k in ("min", "nom", "typ", "max") if k in numv]
@@ -750,7 +759,7 @@ def record_checks(doc: DocText, rec: dict) -> dict:
     return out
 
 
-FAILING = {"V", "A", "N", "C", "U", "O", "R", "G", "X", "W"}
+FAILING = {"V", "A", "N", "C", "U", "O", "R", "G", "X", "W", "L", "E"}
 
 NORMATIVE = (("shall-not", r"\b(?:shall|must)\s+not\b"), ("should-not", r"\bshould\s+not\b"),
              ("shall", r"\b(?:shall|must)\b(?!\s+not\b)"), ("should", r"\bshould\b(?!\s+not\b)"),
@@ -768,6 +777,59 @@ def modality_check(modality: str, quote: str, note: str | None) -> str:
     if not said:
         return "ok" if note else f"modality {modality}: no normative keyword in the quote, and no note saying where the force comes from"
     return f"modality {modality}: the quote says {', '.join(said)}"
+
+
+def in_row(term: Any, row: str) -> bool:
+    """`term` occurs in `row` (both normalized) as a whole name: whitespace may break it anywhere (a text
+    layer wraps a long message name), and no letter, digit or `_` may extend it on either side."""
+    chars = [c for c in normalize(str(term or "")) if not c.isspace()]
+    if not chars:
+        return False
+    rx = r"(?<![a-z0-9_])" + r"\s*".join(re.escape(c) for c in chars) + r"(?![a-z0-9_])"
+    return re.search(rx, row) is not None
+
+
+def applicability_check(rec: dict) -> str:
+    """Check L: 'ok', or which of the item and the level the quoted row does not hold."""
+    row = normalize(" ".join(R.quotes(rec)))
+    miss = [f"{k} {rec.get(k)!r}" for k in ("item", "level") if not in_row(rec.get(k), row)]
+    return "ok" if not miss else f"not in the quoted row: {', '.join(miss)}"
+
+
+def check_machines(recs: list[dict]) -> tuple[dict[str, str], list[str]]:
+    """Check E over one document's state machines: {record id: 'ok' or a finding} for every transition and
+    every figure that lists a machine's states, and the warnings (state records their machine's figure does
+    not list). Machine and state names are compared as printed, surrounding blanks aside."""
+    states: dict[str, set[str]] = {}
+    for r in recs:
+        if r.get("kind") == "state":
+            states.setdefault(r["machine"].strip(), set()).add(r["name"].strip())
+
+    def elsewhere(name: str, m: str) -> str:
+        others = sorted(k for k, v in states.items() if k != m and name in v)
+        return f" (a state of {', '.join(repr(o) for o in others)})" if others else ""
+
+    out: dict[str, str] = {}
+    drawn: dict[str, set[str]] = {}
+    for r in recs:
+        kind = r.get("kind")
+        if kind == "transition":
+            m = r["machine"].strip()
+            miss = [f"{end} {r[end]!r}{elsewhere(r[end].strip(), m)}" for end in ("from", "to")
+                    if r[end].strip() not in states.get(m, set())]
+            out[r["id"]] = "ok" if not miss else f"not a state record of machine {m!r}: {'; '.join(miss)}"
+        elif kind == "figure" and r.get("states"):
+            m = (r.get("machine") or "").strip()
+            if not m:
+                out[r["id"]] = "lists states but names no machine"
+                continue
+            drawn.setdefault(m, set()).update(s.strip() for s in r["states"])
+            miss = [s for s in r["states"] if s.strip() not in states.get(m, set())]
+            out[r["id"]] = "ok" if not miss else f"no state record of machine {m!r} for {', '.join(miss)}"
+    loose = sorted(f"{m}: {s}" for m, names in states.items() if m in drawn for s in names - drawn[m])
+    warnings = [f"E: {len(loose)} state records are not among the states their machine's figure lists: "
+                f"{', '.join(loose[:8])}" + (" ..." if len(loose) > 8 else "")] if loose else []
+    return out, warnings
 
 
 def _is_fail(letter: str, result: Any) -> bool:
@@ -1389,10 +1451,13 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
             by_id[r.get("id")] = r
     xs = check_invariants(by_id, checks)
     xmap = {x["id"]: x for x in xs}
+    emach, ewarn = check_machines(recs)
     prov_changed = 0
     for i, (fname, r) in enumerate(pairs):
         invalid = i in bad
         res = record_checks(doc, r) if r.get("kind") and not invalid else {}
+        if not invalid and r.get("kind") in ("transition", "figure") and r.get("id") in emach:
+            res["E"] = emach[r["id"]]
         extra = [f"V: {e}" for e in verrs[i]]
         if not invalid and not isinstance(r, R.RawLine) and (oor := out_of_range(R.pages(r), doc.n)):
             extra.append(f"P: cites page {', '.join(map(str, oor))}, outside 1-{doc.n}")
@@ -1471,6 +1536,8 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
         "U": {"ok": letter("U"), "of": ran("U")},
         "O": {"ok": letter("O"), "of": ran("O")},
         "W": {"ok": letter("W"), "of": ran("W")},
+        "L": {"ok": letter("L"), "of": ran("L")},
+        "E": {"ok": letter("E"), "of": ran("E")},
         "X": {"as_expected": sum(1 for x in xs if x["ok"]), "of": len(xs)},
         "G": {"diffs": len(greg.get("diff", [])), "structure_issues": len(greg.get("structure", [])),
               **greg.get("summary", {})} if greg else {},
@@ -1497,6 +1564,7 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     if summary["M"]["record_elsewhere"]:
         warnings.append(f"M: {summary['M']['record_elsewhere']} numbers are on no page their line cites and "
                         f"match only a verified record on another page: cite that page")
+    warnings += ewarn
     summary["warnings"] = len(warnings)
     report = {"doc": doc.doc_id, "tool": f"embarch-atlas {__version__}",
               "pdf": doc.pdf_note, "summary": summary, "warnings": warnings, "records": results, "X": xs,
@@ -1521,6 +1589,9 @@ def print_summary(rep: dict, out=None, limit: int = 12) -> None:
         why = (f"{s['K']['no_header']} rows have no MIN/TYP/MAX (or VALUE) header on their page"
                if s["K"].get("no_header") else "no table row was eligible")
         w(f"K did not run: no record was compared with a column ({why}); it checked nothing here")
+    L, E = s.get("L") or {"ok": 0, "of": 0}, s.get("E") or {"ok": 0, "of": 0}
+    if L["of"] or E["of"]:
+        w(f"L applicability rows {L['ok']}/{L['of']} | E state machines {E['ok']}/{E['of']}")
     if s["G"]:
         w(f"G registers: {s['G']}")
     shown = 0

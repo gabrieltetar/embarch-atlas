@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's thirteen lookups as an MCP server over stdio, and the live
+"""`embarch-atlas mcp`: the atlas's fifteen lookups as an MCP server over stdio, and the live
 module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
@@ -70,7 +70,8 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
     def find_fact(query_text: str, part: str | None = None, kind: str | None = None, limit: int | None = None, offset: int = 0) -> str:
         """Search every document's facts (one per line, with cite and provenance), ranked lexically.
         A part named in the query narrows to it, like `part`. Without `limit`: the best 10 above 0.4x the
-        top score. `kind`: limit, timing, pin, rule, register, field, quirk, strap, requirement, conflict."""
+        top score. `kind`: limit, timing, pin, rule, register, field, quirk, strap, requirement, conflict,
+        applicability, state, transition."""
         return query.find_fact(view(), query_text, part, kind, limit, offset)
 
     @server.tool(annotations=READ_ONLY)  # appends to the atlas's usage log; changes no answer
@@ -141,6 +142,26 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         standard's requirements, each with evidence and what would settle it. `scope` filters by substring, `cls`
         by class. `build` (a build dir, or "pinned"): the config-vs-standard checks only, run now against it."""
         return query.mismatch_report(view(), scope, cls, offset, build=build)
+
+    @server.tool(annotations=READ_ONLY)
+    def applies(doc: str, role: str | None = None, item: str | None = None, cond: str | None = None,
+                offset: int = 0) -> str:
+        """What a standard's applicability tables require of a role, one cell per line with its page.
+        `role` (the table's column: Source, Sink): every sequence and message for it, grouped by level
+        (Normative, Recommended, Optional, Shall Not, N/A, as printed). `cond` keeps the cells under that
+        condition and the unconditional ones. `item` (a sequence or message name): its level for every
+        role. Neither: the roles, conditions and tables. A miss lists the nearest names."""
+        return query.applies(view(), doc, role, item, cond, offset)
+
+    @server.tool(annotations=READ_ONLY)
+    def transitions(doc: str, state: str | None = None, on: str | None = None, machine: str | None = None,
+                    offset: int = 0) -> str:
+        """A document's state machines (a standard's, a datasheet's). `state`: its entry actions (messages
+        sent, timers started or stopped, counters reset), its exits with the event that takes each, and the
+        states that lead to it. `on` (a message or timer name): every state that reacts to it, and the
+        states whose entry actions name it. `machine` narrows to one machine; a state name two machines
+        share asks for it. Neither: each machine and its states. A miss lists the nearest names."""
+        return query.transitions(view(), doc, state, on, machine, offset)
 
     if live is None:
         live = live_mod.available(atlas_dir) is None
@@ -223,6 +244,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's thirteen lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's fifteen lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)

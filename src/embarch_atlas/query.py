@@ -1,4 +1,4 @@
-"""The thirteen atlas lookups, as plain functions returning markdown.
+"""The fifteen atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -25,7 +25,7 @@ from .pdftext import tier2_files
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500,
           "register": 1500, "pin_trace": 4000, "net_trace": 4000, "mismatch_report": 4000,
-          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500}
+          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500}
 
 
 # --------------------------------------------------------------------------- plumbing
@@ -225,7 +225,7 @@ def _missing(what: str, hint: str) -> str:
     return f"src: none\n\n{what} not found. {hint}\n"
 
 
-# --------------------------------------------------------------------------- the thirteen
+# --------------------------------------------------------------------------- the fifteen
 
 @_stamped
 def part_card(a: Atlas, part: str, board: str | None = None, offset: int = 0) -> str:
@@ -1186,11 +1186,258 @@ def _mismatch_body(m: dict, out: list[str], scope: str | None, cls: str | None) 
     return out
 
 
+# --------------------------------------------------------------------------- what a role must support, what a state does
+
+def _nearest_names(names: Iterable[str], q: str, k: int = 5) -> list[str]:
+    """The k names sharing the most words with `q`, else the closest by spelling (doc_toc's miss rule)."""
+    import difflib
+    words = {w for w in re.findall(r"[a-z0-9]+", q.lower()) if len(w) > 2}
+    scored = []
+    for n in {n for n in names if n}:
+        sc = len(words & set(re.findall(r"[a-z0-9]+", n.lower()))) \
+            + difflib.SequenceMatcher(None, _norm(q), _norm(n)).ratio()
+        scored.append((-sc, n))
+    return [n for _, n in sorted(scored)[:k]]
+
+
+def _pages(r: dict) -> list[int]:
+    p = r.get("p")
+    return list(p) if isinstance(p, list) else [p] if isinstance(p, int) else []
+
+
+def _pp(r: dict) -> str:
+    """A record's pages as `p.N[,M]`: the answer's `src:` line already names the document."""
+    ps = _pages(r)
+    return "p." + ",".join(map(str, ps)) if ps else ""
+
+
+def _unverified(r: dict) -> str:
+    return " (unverified)" if r.get("prov") in (None, "llm-unverified") else ""
+
+
+def _protocol_records(a: Atlas, doc: str, kinds: tuple[str, ...]) -> tuple[Path | None, list[dict]]:
+    d = a.find_doc(doc)
+    return d, ([r for r in _records(d) if r.get("kind") in kinds] if d else [])
+
+
+def _word_rx(term: str) -> re.Pattern:
+    """`term` as a whole name, case-insensitive: no letter, digit or `_` may extend it."""
+    return re.compile(r"(?<![A-Za-z0-9_])" + re.escape(term.strip()) + r"(?![A-Za-z0-9_])", re.I)
+
+
+LEVEL_ORDER = (   # an applicability level's rank, strongest force first; the first pattern that matches decides
+    (r"\b(?:shall|must)\s+not\b|\bnot\s+(?:allowed|permitted)\b|\bprohibited\b", 3),
+    (r"\bn\s*/\s*a\b|\bnot\s+applicable\b", 4),
+    (r"\bnormative\b|\bmandatory\b|\brequired\b|\bshall\b|\bmust\b", 0),
+    (r"\brecommended\b|\bshould\b", 1),
+    (r"\boptional\b|\bmay\b|\bconditional\b", 2),
+)
+
+
+def _level_rank(level: str) -> int:
+    s = (level or "").lower()
+    return next((rank for rx, rank in LEVEL_ORDER if re.search(rx, s)), len(LEVEL_ORDER))
+
+
+def _cell_tail(r: dict) -> str:
+    """` (<table> p.N)` and the unverified mark, after a cell's level or item."""
+    return f" ({' '.join(x for x in (r.get('table'), _pp(r)) if x)}){_unverified(r)}"
+
+
+@_stamped
+def applies(a: Atlas, doc: str, role: str | None = None, item: str | None = None, cond: str | None = None,
+            offset: int = 0) -> str:
+    """What a standard's applicability tables require of a role: `role` lists every sequence and message
+    for it grouped by level (strongest first, each level as printed); `cond` keeps the cells under that
+    condition and the unconditional ones; `item` lists one item's level for every role. Neither lists the
+    roles, conditions and tables. A role, item or condition that matches no cell lists the nearest names."""
+    d, recs = _protocol_records(a, doc, ("applicability",))
+    if not d:
+        return _missing(f"document {doc!r}", "Doc ids are listed in MAP.md and docs/.")
+    if not recs:
+        return _missing(f"applicability records of {d.name}",
+                        f"Not distilled yet: find the applicability tables with `doc_toc doc={d.name}` or "
+                        f"`find_text doc={d.name} pattern=<table title>`, read them there, and suggest "
+                        f"`/atlas-translate-docs standard {d.name} <section>`.")
+    asked = " ".join(f"{k}={v!r}" for k, v in (("role", role), ("item", item), ("cond", cond)) if v)
+    head = _header(f"{d.name} applicability records", extra=" ".join(
+        x for x in (f"cells={len(recs)}", f"query={asked!r}" if asked else "", _pdf_extra(a, d)) if x))
+    pick = recs
+    for key, want in (("role", role), ("item", item)):
+        if want:
+            hit = [r for r in pick if _norm(r.get(key)) == _norm(want)]
+            if not hit:
+                near = _nearest_names((r.get(key) for r in recs), want)
+                return _missing(f"{key} {want!r} in {d.name}'s applicability records",
+                                f"Nearest {key}s: {', '.join(near)}.")
+            pick = hit
+    if cond:
+        conds = {r.get("cond") for r in recs if r.get("cond")}
+        if not any(_norm(cond) in _norm(c) for c in conds):
+            near = _nearest_names(conds, cond)
+            return _missing(f"condition {cond!r} in {d.name}'s applicability records",
+                            f"Conditions: {', '.join(near) if near else '(no cell is conditional)'}.")
+        pick = [r for r in pick if not r.get("cond") or _norm(cond) in _norm(r["cond"])]
+    out: list[str] = []
+    if not role and not item:
+        count = lambda key: Counter(r.get(key) for r in pick if r.get(key))  # noqa: E731
+        out.append("Roles: " + ", ".join(f"{k} ({n} cells)" for k, n in sorted(count("role").items())))
+        if count("cond"):
+            out.append("Conditions: " + ", ".join(f"{k} ({n} cells)" for k, n in sorted(count("cond").items())))
+        tables: dict[str, set[int]] = {}
+        for r in pick:
+            if r.get("table"):
+                tables.setdefault(r["table"], set()).update(_pages(r))
+        if tables:
+            out.append("Tables: " + ", ".join(f"{t} ({_pp({'p': sorted(ps)})})" for t, ps in sorted(tables.items())))
+        kinds = Counter(k for _, k in {(r.get("item"), r.get("item_kind")) for r in pick})
+        out.append(f"Items: {len({r.get('item') for r in pick})} ("
+                   + ", ".join(f"{n} {k}s" for k, n in sorted(kinds.items())) + ")")
+        out.append("Pass role=<role> [cond=<condition>] for what a role must support, or item=<name> for one "
+                   "item's level per role.")
+    elif item:
+        groups: dict[tuple, list[dict]] = {}
+        for r in pick:
+            groups.setdefault((r.get("item"), r.get("item_kind")), []).append(r)
+        for (name, kind), rs in sorted(groups.items(), key=lambda kv: tuple(map(str, kv[0]))):
+            out += ([""] if out else []) + [f"## {name} ({kind})"]
+            for r in sorted(rs, key=lambda r: (str(r.get("role")), str(r.get("as")), str(r.get("cond")))):
+                who = " ".join(x for x in (r.get("role"), f"as {r['as']}" if r.get("as") else "",
+                                           f"if {r['cond']}" if r.get("cond") else "") if x)
+                out.append(f"- {who}: {r.get('level')}{_cell_tail(r)}")
+    else:
+        levels: dict[str, list[dict]] = {}
+        for r in pick:
+            levels.setdefault(r.get("level"), []).append(r)
+        for lv in sorted(levels, key=lambda lv: (_level_rank(lv), str(lv))):
+            rs = sorted(levels[lv], key=lambda r: (str(r.get("item_kind")), str(r.get("item")), str(r.get("as"))))
+            out += ([""] if out else []) + [f"## {lv} ({len(rs)})"]
+            for r in rs:
+                what = ", ".join(x for x in (r.get("item_kind"), f"as {r['as']}" if r.get("as") else "",
+                                             f"if {r['cond']}" if r.get("cond") else "") if x)
+                out.append(f"- {r.get('item')} ({what}){_cell_tail(r)}")
+    return _cap(head + "\n".join(out) + "\n", "applies", offset)
+
+
+# a name in an event or an entry action that reads as a message, timer or counter: Snake_Case or CamelCase
+SIGNAL_NAME = re.compile(r"\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\b|\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]*)+\b")
+
+
+def _s(v: Any) -> str:
+    return str(v or "").strip()
+
+
+def _edge(t: dict, end: str) -> str:
+    """`<state at end> on <event> [trigger <name>] (p.N)`: the trigger is shown when the event does not name it."""
+    trig = _s(t.get("trigger"))
+    tail = f" [trigger {trig}]" if trig and trig.lower() not in _s(t.get("event")).lower() else ""
+    return f"{_s(t.get(end))} on {_s(t.get('event'))}{tail} ({_pp(t)}){_unverified(t)}"
+
+
+@_stamped
+def transitions(a: Atlas, doc: str, state: str | None = None, on: str | None = None, machine: str | None = None,
+                offset: int = 0) -> str:
+    """A document's state machines, from its `state` and `transition` records. `state`: its entry actions,
+    its exits with the event that takes each, and the states that lead to it. `on` (a message or timer):
+    every transition it triggers or whose event names it, and the states whose entry actions name it; with
+    `state` too, only that state's. `machine` narrows to one machine: a state name two machines share asks
+    for it. Neither `state` nor `on`: each machine and its states. A miss lists the nearest names."""
+    d, recs = _protocol_records(a, doc, ("state", "transition", "figure"))
+    if not d:
+        return _missing(f"document {doc!r}", "Doc ids are listed in MAP.md and docs/.")
+    states = [r for r in recs if r.get("kind") == "state"]
+    trans = [r for r in recs if r.get("kind") == "transition"]
+    figs = [r for r in recs if r.get("kind") == "figure" and _s(r.get("machine"))]
+    if not states and not trans:
+        return _missing(f"state machine records of {d.name}",
+                        f"Not distilled yet: find the state's section with `doc_toc doc={d.name} under=<state>` or "
+                        f"`find_text doc={d.name} pattern=<state>`, read it there, and suggest "
+                        f"`/atlas-translate-docs standard {d.name} <section>`.")
+    machines = sorted({_s(r.get("machine")) for r in states + trans if _s(r.get("machine"))})
+    asked = " ".join(f"{k}={v!r}" for k, v in (("state", state), ("on", on), ("machine", machine)) if v)
+    head = _header(f"{d.name} state machines", extra=" ".join(
+        x for x in (f"states={len(states)} transitions={len(trans)}", f"query={asked!r}" if asked else "",
+                    _pdf_extra(a, d)) if x))
+    if machine:
+        mn = _norm(machine)
+        ms = [m for m in machines if _norm(m) == mn] or [m for m in machines if mn and mn in _norm(m)]
+        if not ms:
+            return _missing(f"machine {machine!r} in {d.name}", f"Machines: {', '.join(machines)}.")
+        if len(ms) > 1:
+            return _cap(head + f"{len(ms)} machines match {machine!r}; pass one as `machine`:\n"
+                        + "".join(f"- {m}\n" for m in ms), "transitions", offset)
+        machines = ms
+        states, trans, figs = ([r for r in rs if _s(r.get("machine")) == ms[0]] for rs in (states, trans, figs))
+    react = names_it = None
+    if on:
+        rx = _word_rx(on)
+        react = lambda t: _norm(t.get("trigger")) == _norm(on) or bool(rx.search(_s(t.get("event"))))  # noqa: E731
+        names_it = lambda act: bool(rx.search(act))  # noqa: E731
+    out: list[str] = []
+    if state:
+        known = {(_s(r.get("machine")), _s(r.get("name"))) for r in states} \
+            | {(_s(t.get("machine")), _s(t.get(e))) for t in trans for e in ("from", "to")}
+        hits = sorted(k for k in known if _norm(k[1]) == _norm(state))
+        if not hits:
+            near = _nearest_names({n for _, n in known}, state)
+            where = {n: sorted(m for m, x in known if x == n) for n in near}
+            listed = "\n".join(f"- {n}" + (f" ({', '.join(where[n])})" if len(machines) > 1 else "") for n in near)
+            return _missing(f"state {state!r} in {d.name}" + (f" machine {machines[0]!r}" if machine else ""),
+                            f"Nearest states:\n{listed}\nCall transitions without `state` to list every machine's states.")
+        if len({m for m, _ in hits}) > 1:
+            rec_of = {(_s(r.get("machine")), _s(r.get("name"))): r for r in states}
+            return _cap(head + f"{len(hits)} machines have a state named {state!r}; pass one as `machine`:\n"
+                        + "".join(f"- {m}" + (f" ({_pp(rec_of[(m, n)])})" if (m, n) in rec_of else "") + "\n"
+                                  for m, n in hits), "transitions", offset)
+        m, name = hits[0]
+        rec = next((r for r in states if (_s(r.get("machine")), _s(r.get("name"))) == (m, name)), None)
+        out.append(f"## {m}: {name}" + (f" ({_pp(rec)}){_unverified(rec)}" if rec else
+                                        " (no state record: `doc check` E fails the transitions naming it)"))
+        entry = [x for x in (rec or {}).get("entry") or [] if not names_it or names_it(x)]
+        exits = [t for t in trans if (_s(t.get("machine")), _s(t.get("from"))) == (m, name) and (not react or react(t))]
+        ins = [t for t in trans if (_s(t.get("machine")), _s(t.get("to"))) == (m, name) and (not react or react(t))]
+        none = ["- (none recorded" + (f" naming {on}" if on else "") + ")"]
+        out += ["On entry:"] + ([f"- {x}" for x in entry] or none)
+        out += ["Exits:"] + ([f"- to {_edge(t, 'to')}" for t in exits] or none)
+        out += ["Entered from:"] + ([f"- {_edge(t, 'from')}" for t in ins] or none)
+        return _cap(head + "\n".join(out) + "\n", "transitions", offset)
+    if on:
+        hit_t = [t for t in trans if react(t)]
+        hit_e = [(s, x) for s in states for x in s.get("entry") or [] if names_it(x)]
+        if not hit_t and not hit_e:
+            names = {_s(t.get("trigger")) for t in trans} \
+                | {x.group(0) for t in trans for x in SIGNAL_NAME.finditer(_s(t.get("event")))} \
+                | {x.group(0) for s in states for act in s.get("entry") or [] for x in SIGNAL_NAME.finditer(act)}
+            return _missing(f"a transition or an entry action naming {on!r} in {d.name}",
+                            f"Nearest messages and timers: {', '.join(_nearest_names(names, on))}.")
+        for m in machines:
+            ts = [t for t in hit_t if _s(t.get("machine")) == m]
+            es = [(s, x) for s, x in hit_e if _s(s.get("machine")) == m]
+            if not ts and not es:
+                continue
+            out += ([""] if out else []) + [f"## {m}"]
+            if ts:
+                out += ["Transitions:"] + [f"- {_s(t.get('from'))} -> {_edge(t, 'to')}" for t in ts]
+            if es:
+                out += ["Entry actions:"] + [f"- {_s(s.get('name'))}: {x} ({_pp(s)}){_unverified(s)}" for s, x in es]
+        return _cap(head + "\n".join(out) + "\n", "transitions", offset)
+    for m in machines:
+        ss = sorted((s for s in states if _s(s.get("machine")) == m), key=lambda s: (_pages(s)[:1], _s(s.get("name"))))
+        n_t = sum(1 for t in trans if _s(t.get("machine")) == m)
+        drawn = "".join(f"; {_s(f.get('fig'))} {_pp(f)}" for f in figs if _s(f.get("machine")) == m)
+        out += ([""] if out else []) + [f"## {m} ({len(ss)} states, {n_t} transitions{drawn})",
+                                         ", ".join(f"{_s(s.get('name'))} ({_pp(s)})" for s in ss) or "(no state records)"]
+    out += ["", "Pass state=<name> for a state's entry actions, exits and the states that lead to it, or "
+                "on=<message or timer> for every state that reacts to it."]
+    return _cap(head + "\n".join(out) + "\n", "transitions", offset)
+
+
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
     "find_text": find_text,
     "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "mismatch_report": mismatch_report,
     "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
+    "applies": applies, "transitions": transitions,
 }
 
 
@@ -1228,6 +1475,10 @@ def register(sub, groups) -> None:
     add("stacks", stacks, (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
     add("mismatch_report", mismatch_report, (["--scope"], {}), (["--cls"], {}), (["--offset"], {"type": int, "default": 0}),
         (["--build"], {"help": "run the config-vs-standard checks against this build dir (or `pinned`) instead"}))
+    add("applies", applies, (["doc"], {}), (["--role"], {}), (["--item"], {}), (["--cond"], {}),
+        (["--offset"], {"type": int, "default": 0}))
+    add("transitions", transitions, (["doc"], {}), (["--state"], {}), (["--on"], {"help": "a message or timer name"}),
+        (["--machine"], {}), (["--offset"], {"type": int, "default": 0}))
 
 
 def _run(ns, fn) -> int:

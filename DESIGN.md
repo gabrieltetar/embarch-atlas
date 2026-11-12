@@ -300,7 +300,7 @@ Kinds and their own fields:
 | `register` | `name`, `addr` (int or `0x..`), `bank` (the page or bank on a part with paged register maps; absent for the main map; check G, codecheck and the live module key a register on `(bank, addr)`), `width`, `reset` (`0b…`/`0x…`), `access`, `summary` |
 | `field` | `reg` (the register's record id; a field has no `bank` of its own, it takes its register's), `name`, `bits` ([hi, lo]), `reset`, `access` (SystemRDL vocabulary: rw, ro, wo, rclr, woclr, w1s, rsvd), `enum` |
 | `quirk` | `class` (table-vs-table, text-vs-table, text-vs-text, text-vs-figure, figure-only, footnote-condition, silent-default, must, do-not, absence, variant, doc-artefact, not-prod-tested, narrow-condition, provenance), `text`, `refs` (other fact ids) |
-| `figure` | `fig`, `caption`, `what` (equations: `src: equation`) |
+| `figure` | `fig`, `caption`, `what` (equations: `src: equation`), `machine` and `states` (a state diagram: the machine it draws and every state on it, as printed; check E wants a `state` record of that machine for each) |
 | `strap` | `pin`, `condition`, `value` (address or mode straps; a fixed address has condition `fixed`) |
 | `variant` | `mpn` (the orderable part number), `options` (an object of option name to value: `{"vout": "3.3 V", "package": "SOT-23-5"}`; at least one). One record per orderable part, from the ordering table. A `variant` lists the parts; a `rule` is behaviour; a `quirk` of class `variant` flags a datasheet row whose value differs by variant without listing them |
 | `passthrough` | `from_pin`, `to_pin`, `when` (transparent-part map: switches, shunts, buffers) |
@@ -308,6 +308,9 @@ Kinds and their own fields:
 | `check` | `expr`, `expect`, `why` (an invariant the checker evaluates); or `fw_check` with `refs` (the requirement ids it encodes), then `expr`/`expect` are optional ("Firmware configuration against a standard") |
 | `requirement` | `rid`, `text`, `fw_relevant`, `modality` (shall, shall-not, should, should-not, may, nice-to-have), `priority`, `order` (PRD), `role` (standard: whom it binds, as printed), `cond`, `fw_check` (a rule over the build's configuration) |
 | `conflict` | `refs`, `sources` (`"<doc> <loc>: <says>"`), `text` |
+| `applicability` | `item` (a sequence or message name, as printed), `item_kind` (sequence, message), `role` (the column, as printed), `cond` (the condition the table attaches to the cell or its column, as printed; absent: unconditional), `as` (initiator, responder, when the table splits the role), `level` (the cell as printed: Normative, Recommended, Optional, Shall Not, N/A), `table`. One record per table cell; `q` is the row (check L: the item and the level are in it), a column heading or a footnote the cell depends on a second `q` part |
+| `state` | `machine` (named the same on each of its state, transition and figure records), `name` (as printed), `entry` (one action each, as printed: a message sent, a timer started or stopped, a counter reset). From the section that describes the state; a datasheet's or reference manual's state machine takes the same kinds |
+| `transition` | `machine`, `from`, `to` (state names, as printed: check E wants both to be `state` records of `machine`), `event` (the event or condition that takes the exit, as printed), `trigger` (the message or timer that fires it; absent for a condition alone) |
 
 `prov` classes: `deterministic`, `deterministic+crosschecked`, `llm-verified`,
 `llm-unverified`, `engineer-declared`, `engineer-confirmed`, `measured`.
@@ -373,11 +376,25 @@ MAP.md lists it under "Other documents".
   version, so a frozen section is never redone and a new revision redoes only changed pages.
 - **Records**: `requirement` first (one per Shall / Should / May statement, `modality` as printed,
   `role` and `cond` as printed), then `limit`/`timing` for parameter tables (group `ec`, so K runs),
-  `quirk`, `figure`.
+  `quirk`, `figure`. An applicability table (which sequences and messages each role supports, at which
+  level) is one `applicability` record per cell, not a requirement per row, so the `applies` lookup answers what
+  a role must support with the cell's own word for the level.
+  A state machine written one subsection per state is one `state` record per state and one `transition`
+  record per exit, plus the state diagram as a `figure` record with `machine` and `states`, so the
+  `transitions` lookup answers a state's entry actions, exits and predecessors, and which states react to a
+  message or a timer.
 - **Check W**: a requirement's `modality` agrees with the normative keyword in its quote (`shall-not`
   needs "shall not" or "must not"; `shall` a "shall" or "must" not followed by "not"). A quote
   without one fails W unless `note` says where the force comes from (a table heading). W runs on a
   standard's requirements only: a PRD's take their force from its own tables.
+- **Check L**: an `applicability` record's `item` and `level` are both in its quoted row, as whole names (a line
+  break inside one is allowed, a longer name around it is not). It does not know which column of the row a
+  level sits in, so a level read from the wrong column of the right row passes it.
+- **Check E**: a `transition`'s `from` and `to` are `state` records of its `machine` (a name that is a state of
+  another machine says so), and every state a `figure` record lists in `states` has a `state` record of the
+  figure's `machine`; a figure that lists states and names no machine fails. A `state` record its machine's
+  diagram does not list is a warning. L and E run on any document, so a datasheet's state machine (a charger's,
+  a peripheral's) is checked the same way.
 - **The worklist** (`standard.py`, `doc sections <doc>`): each section with its pages, tokens, why, key and
   status: `todo` (no frozen `s/<sec>.md`), `frozen` (the newest freeze holds that file and no page it cites
   changed), `redo` (frozen, and a page it rests on changed). `--add` of a section already there only adds its
@@ -472,11 +489,11 @@ rule a configuration value can break. `join` evaluates every one against the pin
   (`update.rm_todo`) just before it renders the MAP, so `update` and a hand-run `build` + `join`
   both list the chapters in use; a worklist left for another atlas is rewritten, not skipped.
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
-  (https://code.claude.com/docs/en/mcp.md), so its 7 tools skip deferred tool search.
+  (https://code.claude.com/docs/en/mcp.md), so its fifteen lookups skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.
 - A tool declares `readOnlyHint` only when it cannot change the board, because a host (plan
   mode, an auto-approval rule, a permission classifier, a worker's allowlist) trusts the hint.
-  The seven static tools and `live_stacks` carry it. `shell` carries it because it runs only
+  The fifteen lookups and `live_stacks` carry it. `shell` carries it because it runs only
   commands that match the `[live] read_only` list (default: `device list`, `kernel thread stacks`,
   `kernel uptime`, `i2c read *`, `i2c read_byte *`; `i2c scan` stays out, it addresses every device
   on the bus) and refuses any other, naming `shell_run`. `reg_read` carries it and refuses
@@ -489,7 +506,7 @@ rule a configuration value can break. `join` evaluates every one against the pin
 
 ## Query surface
 
-`query.py` holds the thirteen lookups as plain functions returning markdown: `part_card` (`board="all"`
+`query.py` holds the fifteen lookups as plain functions returning markdown: `part_card` (`board="all"`
 adds every board's refs and nets, a label one board's; no tool documents an empty string as a value: a model
 writes `"board": }` for it, and the call never reaches the server. **With no atlas** it still answers a board
 MPN: the MPN-to-document join `pins.json` would hold is made from the netlists and `coverage.py`
@@ -515,7 +532,19 @@ cites, which `second-look queue --used` reads; `doc_section tier=text` `{doc, se
 `doc sections --suggest` reads with find_text's); the log is write-only,
 never read back into an answer, and a failed write is ignored. A toc gives pages, not lines, so a page
 shared by two sections is credited to the deepest, latest-starting one. Measured on a synthetic 400-page
-text layer: a symbol, a state name and a table title each answer in 11-14 ms), `register` (MCU `PERIPH.REG` or
+text layer: a symbol, a state name and a table title each answer in 11-14 ms), `applies` (a document's
+`applicability` records: `role=` lists every sequence and message for that role grouped by level, strongest
+first (normative, recommended, optional, shall not, N/A; each level as printed), each with its `as`, its `cond`,
+its table and page; `cond=` keeps the cells under that condition and the unconditional ones; `item=` lists the
+item's level for every role; neither lists the roles, conditions, tables and item counts; a role, item or
+condition that matches no cell lists the nearest names), `transitions` (a document's `state` and `transition`
+records: `state=` gives its entry actions, its exits with the event that takes each (and the trigger when the
+event does not name it) and the states that lead to it; `on=<message or timer>` lists, per machine, every
+transition whose trigger it is or whose event names it, and the states whose entry actions name it; both narrow
+the state's answer to that name; `machine=` narrows to one machine, and a state name two machines share is
+answered with the machines and a request for `machine`; a state or a name that matches nothing lists the nearest
+names, a part of a name not being the name; neither lists each machine with its states and its state diagram;
+a document with no such records names `doc_toc`/`find_text` and the section to distil), `register` (MCU `PERIPH.REG` or
 `<part>.<REG>`, twins merged, rules/quirks/conflicts and firmware references joined; a
 register tabled as `<REG>_MSB` + `<REG>_LSB` bytes answers to `<REG>` as one 16-bit view; firmware's
 CMSIS struct member (`UCPD1.CFG1`) finds the SVD register at the same address, read from the device header
@@ -686,7 +715,7 @@ scoring each declared interface.
 
 ## Live (`live.py`)
 
-The live module reads the running board. It is not part of the thirteen lookups: the atlas never
+The live module reads the running board. It is not part of the fifteen lookups: the atlas never
 touches hardware, so `reg_read` names addresses and decodes the answer, and embarch-core does the
 read (its decision 81) through the `embarch-api mem-read` subcommand, which resolves Core and its
 token the way every suite tool does. Core picks the probe and chip from the role's enrollment,
@@ -922,12 +951,12 @@ An atlas id is `<target>@<commit12>`.
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump, one at a time (the bump lock; a second is refused, exit 3), its outcome and reason in `bump/state.json`: stop while a translation is behind its source or the west workspace is not at the manifest's revisions (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
 | `hook install <target>... [--debounce S]` / `hook uninstall` / `hook run <target>...` | `bump` | opt-in bump on HEAD moves (below): write or remove the `post-commit`, `post-checkout`, `post-merge` and `post-rewrite` hooks; `run` is what a hook starts, detached |
-| `q <lookup>` | `query` | the thirteen lookups (same answers as the MCP tools) |
+| `q <lookup>` | `query` | the fifteen lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
-| `mcp` | `mcp_server` | the thirteen lookups as an MCP server over stdio, and `reg_read` when Core answers |
+| `mcp` | `mcp_server` | the fifteen lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ### When `update` stops
 

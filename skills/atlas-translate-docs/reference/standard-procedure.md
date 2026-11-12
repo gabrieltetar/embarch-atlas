@@ -15,6 +15,8 @@ Output, all under `docs/<std_doc_id>/`:
 | `records/requirement.jsonl` | you: the normative statements of the sections asked for |
 | `records/limit.jsonl`, `records/timing.jsonl` | you: the parameter tables of those sections, as in a datasheet |
 | `records/quirk.jsonl`, `records/figure.jsonl` | you: statements that take back another, state machines and sequence figures |
+| `records/applicability.jsonl` | you: one record per cell of an applicability table (below) |
+| `records/state.jsonl` | you: the `state` and `transition` records of a state machine written one subsection per state (below) |
 | `s/<secid>.md` | you: one tier-2 file per section asked for, at most 4K tokens |
 
 The distillation is **board-independent**, like a datasheet's: no board, no part number, no
@@ -52,7 +54,88 @@ The distillation is **board-independent**, like a datasheet's: no board, no part
   `datasheet-procedure.md` (group `ec` for electrical parameters, so the column check K runs).
 - **quirk**: a statement that takes back or narrows another (class `text-vs-text`, `narrow-condition`),
   a deprecated feature kept for compatibility (`variant`).
-- **figure**: a state machine or a message sequence that a requirement depends on (`src: figure`).
+- **figure**: a state machine or a message sequence that a requirement depends on (`src: figure`). A state
+  diagram also takes `machine` and `states` (below).
+- **applicability**, **state**, **transition**: the two shapes below. Each replaces a pile of requirements
+  that would say the same thing less exactly.
+
+## Applicability tables
+
+A table that lists sequences or messages down the side, roles across the top and a level in each cell
+(Normative, Recommended, Optional, Shall Not, N/A) is **one `applicability` record per cell**, not one
+requirement per row. The `applies` lookup answers "what must a Hub support" from these.
+
+```
+- [ ] a  read the table's pages; an image Read when the text layer loses the column alignment
+- [ ] b  per row, per role column (per initiator/responder column when the table splits a role): one record
+- [ ] c  a footnote or a column heading that adds a condition: `cond` as printed, and the footnote or
+         heading line as a second `q` part; the unconditional cell stays its own record
+- [ ] d  doc check: L wants the item and the level in the quoted row
+```
+
+- `id`: `<std>.appl.<table>.<item-slug>.<role>[.<as>][.<cond-slug>]`.
+- `item`, `level`: as printed, both in `q` (check L). `level` is the cell's word, never a synonym:
+  Recommended is not Required.
+- `item_kind`: `sequence` or `message`. `role`: the column heading as printed. `as`: `initiator` or
+  `responder` when the table splits the role. `table`: the caption's number.
+- `q`: the row as the text layer prints it. L cannot see columns: read the level from the right column, and
+  Read the page image when the row's cells are not in column order.
+
+Invented example. Table 3-2 of a demo link spec has a row `Link Reset  Normative  Normative  Optional
+Normative` under the headings Hub Initiator, Hub Responder, Node Initiator, Node Responder. Its Node Initiator
+cell is:
+
+```json
+{"id": "demolink.appl.3-2.link-reset.node.initiator", "kind": "applicability", "doc": "demolink-spec@r1.0",
+ "p": 4, "src": "table", "q": "Link Reset Normative Normative Optional Normative", "item": "Link Reset",
+ "item_kind": "sequence", "role": "Node", "as": "initiator", "level": "Optional", "table": "Table 3-2"}
+```
+
+A footnote `(1) Normative for a Node that reports faults.` on a `Fault_Notice ... Optional (1)` row gives two
+records: the Optional one, and a Normative one with `cond: "reports faults"` and
+`q: [<row>, "Normative for a Node that reports faults"]`.
+
+## State sections
+
+A state machine that the standard (or a datasheet: a charger's, a peripheral's) writes **one subsection per
+state**, with a state diagram figure, is one `state` record per state, one `transition` record per exit, and
+the diagram as a `figure` record. The `transitions` lookup answers a state's entry actions, exits and
+predecessors, and which states react to a message or a timer.
+
+```
+- [ ] a  the diagram: a figure record with `machine` (one name for the machine, used on all its records) and
+         `states` (every state it draws, as printed); an image Read of the figure page
+- [ ] b  per state subsection: a state record; `entry` holds what it does on entry, one action each, as printed
+         (a message sent, a timer started or stopped, a counter reset); `q` is the sentence that says it
+- [ ] c  per exit the subsection gives: a transition record; `event` the event or condition as printed,
+         `trigger` the message or timer that fires it (none for a condition alone); `q` the exit's sentence
+- [ ] d  doc check: E wants every transition's `from` and `to`, and every state on the figure, to be a state
+         record of the same machine; a state record missing from the figure is a warning to look at
+```
+
+- `id`: `<std>.state.<machine-slug>.<name>`, `<std>.trans.<machine-slug>.<from>.<to>[.<event-slug>]` (the event
+  slug when two exits join the same pair of states).
+- Names as printed, the same string on every record: a transition naming `Query_Sent` needs a state record
+  named `Query_Sent`, not `Query Sent`.
+- Two machines may share a state name (each has its own `Idle`): `machine` keeps them apart, and the lookup
+  asks for it.
+
+Invented example. A demo link spec's section 5.2.2 says "On entry to the Query_Sent state the Hub shall send a
+Widget_Query Message and start the ReplyWaitTimer", then "The Hub shall transition to the Fault state when the
+ReplyWaitTimer times out":
+
+```json
+{"id": "demolink.state.demo-hub-port.Query_Sent", "kind": "state", "doc": "demolink-spec@r1.0", "p": 6,
+ "src": "text", "q": "On entry to the Query_Sent state the Hub shall send a Widget_Query Message and start the ReplyWaitTimer",
+ "machine": "Demo Hub Port", "name": "Query_Sent", "entry": ["Send Widget_Query Message", "Start ReplyWaitTimer"]}
+{"id": "demolink.trans.demo-hub-port.Query_Sent.Fault", "kind": "transition", "doc": "demolink-spec@r1.0", "p": 6,
+ "src": "text", "q": "The Hub shall transition to the Fault state when the ReplyWaitTimer times out",
+ "machine": "Demo Hub Port", "from": "Query_Sent", "to": "Fault", "event": "the ReplyWaitTimer times out",
+ "trigger": "ReplyWaitTimer"}
+```
+
+A `<!-- atlas:table kind=state -->` or `kind=transition` block in `s/<secid>.md` renders them, as does
+`kind=applicability` for the cells.
 
 ## Rules a configuration value can break (`fw_check`)
 

@@ -393,11 +393,41 @@ def t_check(recs, ctx):
                     fmt(r.get("why")), cite_cell(r)] for r in recs])
 
 
+def t_applicability(recs, ctx):
+    """One row per cell; As, Condition and Table columns appear when any selected cell has them."""
+    extra = [(k, h) for k, h in (("as", "As"), ("cond", "Condition"), ("table", "Table"))
+             if any(r.get(k) not in (None, "") for r in recs)]
+    head = ["Item", "Kind", "Role"] + [h for _, h in extra] + ["Level", "Note", "p"]
+    return _table(head, [[fmt(r.get("item")), fmt(r.get("item_kind")), fmt(r.get("role"))]
+                         + [fmt(r.get(k)) for k, _ in extra] + [fmt(r.get("level")), note_cell(r), cite_cell(r)]
+                         for r in recs])
+
+
+def _machine_col(recs: list[dict]) -> bool:
+    return len({r.get("machine") for r in recs}) > 1
+
+
+def t_state(recs, ctx):
+    """A Machine column appears when the selection spans two machines."""
+    m = _machine_col(recs)
+    return _table((["Machine"] if m else []) + ["State", "On entry", "Note", "p"],
+                  [([fmt(r.get("machine"))] if m else []) + [fmt(r.get("name")), "; ".join(fmt(x) for x in r.get("entry") or []),
+                                                            note_cell(r), cite_cell(r)] for r in recs])
+
+
+def t_transition(recs, ctx):
+    m = _machine_col(recs)
+    return _table((["Machine"] if m else []) + ["From", "To", "Event", "Trigger", "Note", "p"],
+                  [([fmt(r.get("machine"))] if m else []) + [fmt(r.get("from")), fmt(r.get("to")), fmt(r.get("event")),
+                                                            fmt(r.get("trigger")), note_cell(r), cite_cell(r)] for r in recs])
+
+
 RENDERERS: dict[str, Callable[[list[dict], dict], list[str]]] = {
     "limit": t_limit, "timing": t_limit, "pin": t_pin, "rule": t_rule, "register": t_register, "field": t_field,
     "quirk": t_quirk, "figure": t_figure, "strap": t_strap, "passthrough": t_passthrough, "bus": t_bus,
     "variant": t_variant,
     "requirement": t_requirement, "conflict": t_conflict, "check": t_check,
+    "applicability": t_applicability, "state": t_state, "transition": t_transition,
 }
 
 

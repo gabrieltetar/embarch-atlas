@@ -88,3 +88,5 @@ truncation line remains; do not fall back to reading files by hand.
 | How an MCU peripheral must be programmed | `docs/<rm-doc>/s/<ch>.must.md`, then the section |
 | Does DT/driver agree with the board | `atlases/<id>/checks.md` |
 | A product requirement | `docs/<prd-doc>/s/`, `facts.txt` (`requirement` records) |
+| What a standard requires of a role: is a sequence or message Normative, Recommended or Optional for it | `applies <std-doc> role=<role>` (`cond=<condition>` for a conditional column), or `item=<name>` for one item across roles; quote the level as it answers it, never a synonym. No records yet: read the table's pages and suggest `/atlas-translate-docs standard <doc> <section>` |
+| What a protocol or a part's state machine does in a state, or which states react to a message or timer | `transitions <doc> state=<name>` (entry actions, exits, predecessors; `machine=` when two machines share the name), `transitions <doc> on=<message or timer>` |

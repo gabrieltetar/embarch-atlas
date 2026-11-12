@@ -33,7 +33,10 @@
         "conflict",
         "check",
         "bus",
-        "variant"
+        "variant",
+        "applicability",
+        "state",
+        "transition"
       ]
     },
     "doc": {
@@ -370,6 +373,51 @@
       },
       "then": {
         "$ref": "#/$defs/variant"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "applicability"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/applicability"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "state"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/state"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "transition"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/transition"
       }
     }
   ],
@@ -923,6 +971,21 @@
         },
         "what": {
           "$ref": "#/$defs/text"
+        },
+        "machine": {
+          "description": "a state diagram's: the state machine it draws, named as on its state and transition records",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "states": {
+          "description": "a state diagram's: every state it draws, as printed; check E wants a state record of `machine` for each",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "required": [
@@ -940,7 +1003,9 @@
           "note",
           "fig",
           "caption",
-          "what"
+          "what",
+          "machine",
+          "states"
         ]
       }
     },
@@ -1440,6 +1505,176 @@
           "note",
           "mpn",
           "options"
+        ]
+      }
+    },
+    "applicability": {
+      "description": "one cell of an applicability table (`<doc>.appl.<table>.<item>.<role>[.<as>][.<cond-slug>]`): the level the table gives the row's item for one column, as printed. q is the table row; a column heading the cell depends on is a second q part. Check L finds the item and the level in the quoted row",
+      "properties": {
+        "item": {
+          "description": "the sequence or message name, as the row prints it",
+          "type": "string",
+          "minLength": 1
+        },
+        "item_kind": {
+          "enum": [
+            "sequence",
+            "message"
+          ]
+        },
+        "role": {
+          "description": "the column, as printed (Source, Sink)",
+          "type": "string",
+          "minLength": 1
+        },
+        "cond": {
+          "description": "the condition the table attaches to the cell or its column (a feature the role supports, an optional capability), as printed; absent when it applies unconditionally",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "as": {
+          "description": "the part the role plays in the item, when the table splits it",
+          "enum": [
+            "initiator",
+            "responder",
+            null
+          ]
+        },
+        "level": {
+          "description": "the cell, as printed (Normative, Recommended, Optional, Shall Not, N/A)",
+          "type": "string",
+          "minLength": 1
+        },
+        "table": {
+          "description": "the table's number as captioned (\"Table 3-2\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "item",
+        "item_kind",
+        "role",
+        "level"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "item",
+          "item_kind",
+          "role",
+          "cond",
+          "as",
+          "level",
+          "table"
+        ]
+      }
+    },
+    "state": {
+      "description": "one state of a state machine (`<doc>.state.<machine-slug>.<name>`), from the section that describes it. Check E holds the machine's transitions and its state diagram (a figure record with `machine` and `states`) to these records",
+      "properties": {
+        "machine": {
+          "description": "the state machine, named the same on each of its state, transition and figure records",
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "description": "the state's name, as printed",
+          "type": "string",
+          "minLength": 1
+        },
+        "entry": {
+          "description": "what the state does on entry, one action each, as printed: a message sent, a timer started or stopped, a counter reset",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "machine",
+        "name"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "machine",
+          "name",
+          "entry"
+        ]
+      }
+    },
+    "transition": {
+      "description": "one exit of a state (`<doc>.trans.<machine-slug>.<from>.<to>[.<event-slug>]`): `from` and `to` are state records of the same machine (check E)",
+      "properties": {
+        "machine": {
+          "description": "the state machine, named as on its state records",
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "description": "the state left, as printed",
+          "type": "string",
+          "minLength": 1
+        },
+        "to": {
+          "description": "the state entered, as printed",
+          "type": "string",
+          "minLength": 1
+        },
+        "event": {
+          "description": "the event or condition that takes the exit, as printed",
+          "type": "string",
+          "minLength": 1
+        },
+        "trigger": {
+          "description": "the message or timer that fires it, as named (a message received, a timer that expires); absent for a condition alone",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "machine",
+        "from",
+        "to",
+        "event"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "machine",
+          "from",
+          "to",
+          "event",
+          "trigger"
         ]
       }
     }
