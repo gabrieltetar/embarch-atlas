@@ -221,7 +221,8 @@ class _Syms:
     def __init__(self, src: Source):
         src.load_kconfig()
         self.src = src
-        self.values = KC.read_dotconfig(src.dotconfig)
+        # an atlas whose build artifacts were pruned keeps kconfig.json, which then answers alone
+        self.values = KC.read_dotconfig(src.dotconfig) if Path(src.dotconfig).is_file() else {}
         self.syms = (src.kconfig or {}).get("symbols") or {}
         self._asg: dict | None = None
         self._lower: dict[str, str] | None = None

@@ -12,8 +12,10 @@ annotations vs truth, cross-board names), plus two record-fed hooks: a `conflict
 record whose `sources` include a driver (driver-vs-datasheet), and a second-look
 verdict of `conflict` (document-reading conflict). The `reg-*` classes (register
 constants in the driver sources vs the part's register/field records) come from
-`codecheck.py`, and the `dt-limit-*` classes (DT unit properties vs the part's
-limit/timing records) from `limits.py`; this report runs both.
+`codecheck.py`, the `dt-limit-*` classes (DT unit properties vs the part's
+limit/timing records) from `limits.py`, and `config-vs-standard` (the build's
+devicetree and Kconfig vs the `fw_check` of a standard's requirement records)
+from `fwcheck.py`; this report runs all three.
 """
 from __future__ import annotations
 
@@ -21,13 +23,14 @@ import collections
 import re
 from typing import Any
 
+from embarch_atlas import fwcheck
 from embarch_atlas.common import board_phrase, read_jsonl, write_json, write_text
 from embarch_atlas.dt import pin_decoder
 
 # rank order: most actionable first
 ORDER = [
     "cross-board-net-name", "device-signal-mismatch", "i2c-address-strap", "i2c-bus-membership",
-    "dt-limit-over-abs-max", "dt-value-vs-bom", "dt-comment-vs-net", "driver-vs-datasheet", "dt-limit-outside-recommended",
+    "dt-limit-over-abs-max", "config-vs-standard", "dt-value-vs-bom", "dt-comment-vs-net", "driver-vs-datasheet", "dt-limit-outside-recommended",
     "dt-limit-declared-unknown", "reg-field-in-other-register", "reg-address-vs-name",
     "reg-mask-vs-field", "reg-reset-vs-datasheet", "reg-address-unknown", "document-reading-conflict",
     "pinctrl-func-vs-net-name", "polarity-vs-net-name", "open-drain-no-pull", "pull-conflict",
@@ -42,6 +45,7 @@ SETTLE = {
     "i2c-address-strap": "the strap pin's net or resistor on the schematic against the datasheet strap table",
     "i2c-bus-membership": "is the part on this bus meant to have a DT node (or is it driven another way)",
     "dt-value-vs-bom": "the fitted resistor (BOM, rework) against the DT property",
+    fwcheck.CLS: fwcheck.SETTLE,
     "dt-comment-vs-net": "fix the comment or the pin: the netlist is the schematic's own compile",
     "driver-vs-datasheet": "re-read the cited datasheet page against the driver line; one of them is wrong",
     "document-reading-conflict": "a third read of the cited page, or the engineer",
@@ -88,6 +92,7 @@ NEEDS_BUILD = [
     ("open-drain far end has a pull", "the pull may be a DT flag, and no devicetree is read"),
     ("register constants vs the datasheet register map (reg-* classes)", "no firmware driver sources or devicetree: they come from a build"),
     ("DT unit properties vs the part's limits (dt-limit-* classes)", _NO_DT),
+    fwcheck.NEEDS_BUILD,
     ("second look agrees with the first pass", "no atlas: second_look.jsonl is kept in an atlas"),
 ]
 
@@ -587,6 +592,17 @@ def run(J, stamp: dict, pins: dict, netlist_only: bool = False, no_build: bool =
             R.folded[k] += v
         R.not_run += lm["not_run"]
         R.sections.append(lm["section"])
+        # ---- the build's devicetree and Kconfig vs a standard's requirements (fw_check records)
+        fc = fwcheck.run_join(J, stamp)
+        for c in fc["checks"]:
+            R.check(c["check"], c["sources"], c["ran"], c["passed"])
+        for f in fc["findings"]:
+            R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
+        for k, v in fc["folded"].items():
+            R.folded[k] += v
+        R.not_run += fc["not_run"]
+        if fc["section"]:
+            R.sections.append(fc["section"])
     sl = None if netlist_only else J.atlas / "second_look.jsonl"
     if sl is not None and sl.is_file():
         R.check("second look agrees with the first pass", "second_look.jsonl")

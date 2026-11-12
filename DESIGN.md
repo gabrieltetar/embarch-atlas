@@ -305,8 +305,8 @@ Kinds and their own fields:
 | `variant` | `mpn` (the orderable part number), `options` (an object of option name to value: `{"vout": "3.3 V", "package": "SOT-23-5"}`; at least one). One record per orderable part, from the ordering table. A `variant` lists the parts; a `rule` is behaviour; a `quirk` of class `variant` flags a datasheet row whose value differs by variant without listing them |
 | `passthrough` | `from_pin`, `to_pin`, `when` (transparent-part map: switches, shunts, buffers) |
 | `bus` | `iface`, `byte_order` (lsb-first, msb-first), `reg_addr_bytes`, `windows` ([{from, to, addr, base}]: register ranges per bus address, for a part with more than one), `bank_select` ({reg, values}: the 8-bit page-select register and the value that selects each `bank` the register records state, for a paged part) |
-| `check` | `expr`, `expect`, `why` (an invariant the checker evaluates) |
-| `requirement` | `rid`, `text`, `fw_relevant`, `modality` (shall, shall-not, should, should-not, may, nice-to-have), `priority`, `order` (PRD), `role` (standard: whom it binds, as printed), `cond` |
+| `check` | `expr`, `expect`, `why` (an invariant the checker evaluates); or `fw_check` with `refs` (the requirement ids it encodes), then `expr`/`expect` are optional ("Firmware configuration against a standard") |
+| `requirement` | `rid`, `text`, `fw_relevant`, `modality` (shall, shall-not, should, should-not, may, nice-to-have), `priority`, `order` (PRD), `role` (standard: whom it binds, as printed), `cond`, `fw_check` (a rule over the build's configuration) |
 | `conflict` | `refs`, `sources` (`"<doc> <loc>: <says>"`), `text` |
 
 `prov` classes: `deterministic`, `deterministic+crosschecked`, `llm-verified`,
@@ -391,6 +391,54 @@ MAP.md lists it under "Other documents".
   there is none) naming the distilled sections, the ones asked for and not distilled yet, and `doc_toc` /
   `find_text` for every other. `doc freeze` reads the card without that block's body and check M skips it, so
   a worklist change never thaws the card.
+
+### Firmware configuration against a standard (`fwcheck.py`)
+
+A standard's `requirement` record, or a `check` record whose `refs` name requirements, may carry `fw_check`: a
+rule a configuration value can break. `join` evaluates every one against the pinned build. Invented example:
+
+```json
+"fw_check": {"inputs": {"src":   {"dt": "usb-c-connector", "prop": "source-pdos", "decode": "pd_pdo"},
+                        "pdp_w": {"declared": "pdp_w"}},
+             "applies_when": "CONFIG_DEMO_SOURCE == 'y'",
+             "expr": "all(p.ma <= min(2500, pdp_w * 1000000 // p.mv) for p in src if p.type == 'fixed')"}
+```
+
+- **Inputs** say where each value comes from: a devicetree property (`dt` is a node path, label, alias, chosen
+  name or compatible, matched exactly and on okay nodes only; `prop` is read from `dt.json`), a Kconfig symbol
+  (`kconfig`, from `kconfig.json`, else the build's `.config`), or a value the engineer declares (`declared`). A
+  `decode` names a helper applied to the property's value first. A `CONFIG_<SYM>` name in either expression reads
+  that symbol with no input: bool and tristate as `'y'`/`'n'`/`'m'`, int and hex as integers, the rest as strings;
+  absent, unset and `n` are one value, as `config` reads them, and a symbol the build does not define says so in
+  the evidence.
+- **Expressions** run in the doc check's invariant evaluator (`check.safe_eval`), widened for this caller only by
+  slices, dict literals, the decode helpers and the fields they return. `expr` is true when the configuration
+  complies, whatever the requirement's modality. The helpers are per standard and carry its prefix. USB PD's are
+  `pd_pdo` (a Source_Capabilities PDO or APDO word) and `pd_sink_pdo` (a Sink_Capabilities one), decoded by the
+  public PDO layout into `type` (fixed, battery, variable, pps, epr-avs, spr-avs, reserved), `mv`, `min_mv`,
+  `max_mv`, `ma`, `mw` (battery), `pdp_w` (EPR AVS), `ma_15v`, `ma_20v` (SPR AVS), the flag bits and the raw
+  `peak` and `frs` codes. A field its type does not carry is `None`.
+- **Where it runs**: a `dt` selector matching several okay nodes runs the rule once per node (each port of a
+  two-port product); a rule whose `dt` inputs all read one node runs on that node; any other rule runs once.
+- **Engineer-declared values** (`[standards."<doc_id>"]`, "atlas.toml" below) are the values a rule reads that
+  the firmware does not state: a port's maximum power, which devicetree node is which port. A table is found by
+  the record's doc_id, else by its slug before `@`, so a new revision of the standard keeps it; a port's own value
+  overrides the standard's. Evidence marks each `engineer-declared` with the table line it came from. The join
+  validates them: a table naming no document, a port whose `node` is not exactly one okay node, a value that is
+  not a number, string or boolean are listed under Not run and their values are not used. A declared key no rule
+  reads is listed in the section, which is how a misspelt key shows.
+- **What the report says**: a rule that ran is a row of `checks.md`'s table, `config vs standard: <rid>`, counted
+  per node, its sources the requirement's cite. The section "Firmware configuration vs standards" lists every
+  rule and its outcome on each node. A failed rule is a candidate of class `config-vs-standard`: the
+  requirement's doc and page, each input's value with the file:line that set it (the line `dt_node` and `config`
+  resolve), the declared values, and the record. A false `applies_when` skips the rule and folds it into the
+  expected counts with the symbol's value and line. A rule that cannot run (no node matches, no Kconfig, a value
+  not declared, an expression error, an absent property its `expr` reads) is under Not run with why, never
+  counted as passed. An absent property is `None`, so an `applies_when` may test for it.
+- **Another build**: `mismatch_report` with `build=<dir | pinned>` runs every rule in memory against that build,
+  writing nothing; the other checks stay the pinned atlas's join.
+- A `check` record with a `fw_check` names what it encodes in `refs` (check R resolves them) and needs no
+  `expr` or `expect`; doc check X evaluates an `expr` only.
 
 ## How a session sees the atlas
 
@@ -477,7 +525,8 @@ read from the netlists through the join at query time: members across connector 
 what feeds the net from datasheet pin records with `flow` only, the feeding parts' enables and
 their MCU port or pull, and the datasheets still needed; a part the engineer answered with a generic
 card is walked through and its hop marked `[generic card, engineer-declared]`), `mismatch_report`
-(a stored atlas's report, as written; **with no atlas** it runs, in memory and writing nothing, the checks
+(a stored atlas's report, as written; `build=<dir | pinned>` runs the `config-vs-standard` rules alone against
+that build, in memory, writing nothing; **with no atlas** it runs, in memory and writing nothing, the checks
 that read only the netlists, the BOM, the interface mating rules and the distillations' pin and conflict
 records: net names across a board connector, DNI parts on the MCU's paths, pulls against the MCU's I/O
 supply, the MCU symbol against its datasheet, far-end output level against pin tolerance, driver claims
@@ -821,6 +870,12 @@ name = "bringup"
 no_board = true                      # no `board`, no `app`: `build` skips west and everything that reads its build
 schematic_boards = ["A"]
 
+[standards."<doc_id>"]               # optional: values a standard's fw_check rules read and the firmware does not state
+pdp_w = 30                           # engineer-declared; the key is a doc_id, or its slug before `@`
+[standards."<doc_id>".ports.<name>]  # one per port: which DT node it is, and values of its own (they override)
+node = "<DT node path or label>"
+pdp_w = 15
+
 [live]                               # optional: the live module
 api = "embarch-api"                  # the embarch-api binary
 console = "<signal>"                 # optional: the console signal (default: the role's direct writable one)
@@ -862,6 +917,7 @@ An atlas id is `<target>@<commit12>`.
 | `graph <atlas>` | `graph` | graph.json again from what `join` wrote (also run by `join`) |
 | `second-look queue <atlas> [--top N] [--diff-from <atlas> \| --used <usage log>]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page (`--diff-from`: only those another atlas's queue did not hold under the same `(id, key)`, as `update` batches; a fact that kept its id but changed a checked field is batched and counted as changed; `--used`: only those the usage log says answers returned, the `find_fact` and `register` record ids and the facts on pages a returned `part_card` cited, most used first, so reading effort goes to facts in use; `update` leaves the backlog alone and this is how it is drained); the blind reader's prompt; the deterministic verdict; record and freeze verdicts |
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name, which must also be the same quantity and role (else "mapping uncertain", not compared); abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
+| (in `join`) | `fwcheck` | every `fw_check` of a requirement or check record vs the build's devicetree, Kconfig and `atlas.toml` `[standards]`: one checks row per rule, `config-vs-standard` candidates, the guard-skipped rules folded ("Firmware configuration against a standard") |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump, one at a time (the bump lock; a second is refused, exit 3), its outcome and reason in `bump/state.json`: stop while a translation is behind its source or the west workspace is not at the manifest's revisions (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
@@ -1130,3 +1186,7 @@ crop and reads it, and `declare-pin-name` records the result as `llm-unverified`
 
 Reading a board part's package from the BOM's footprint string, or from `variant` records, to fill
 `bindings.json` `packages` (today the engineer states it).
+
+Anchoring the numbers inside a `fw_check` expression to the cited page: check N covers a requirement's `text`,
+and an expression, like an invariant's, is not a numeric claim yet. A `fw_check` over the role a build chooses
+against the sequences a standard makes normative for that role waits for records that say which (applicability).

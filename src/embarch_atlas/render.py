@@ -381,9 +381,15 @@ def t_conflict(recs, ctx):
                   [[R.short_id(r["id"]), fmt(r.get("text")), fmt(r.get("sources")), note_cell(r), cite_cell(r)] for r in recs])
 
 
+def _check_expr(r: dict) -> str:
+    """The invariant's expression, or a firmware rule's (`fw_check`, evaluated at join, marked `fw:`)."""
+    fc = r.get("fw_check") if isinstance(r.get("fw_check"), dict) else {}
+    return r.get("expr") or (f"fw: {fc['expr']}" if fc.get("expr") else "")
+
+
 def t_check(recs, ctx):
     return _table(["Invariant", "Expression", "Expect", "Why", "p"],
-                  [[R.short_id(r["id"]), f"`{r.get('expr', '')}`".replace("|", "\\|"), fmt(r.get("expect")),
+                  [[R.short_id(r["id"]), f"`{_check_expr(r)}`".replace("|", "\\|"), fmt(r.get("expect")),
                     fmt(r.get("why")), cite_cell(r)] for r in recs])
 
 

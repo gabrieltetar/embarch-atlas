@@ -1078,6 +1078,9 @@
             "null"
           ],
           "minimum": 1
+        },
+        "fw_check": {
+          "$ref": "#/$defs/fw_check"
         }
       },
       "required": [
@@ -1102,7 +1105,8 @@
           "priority",
           "order",
           "role",
-          "cond"
+          "cond",
+          "fw_check"
         ]
       }
     },
@@ -1143,7 +1147,7 @@
       }
     },
     "check": {
-      "description": "an invariant the LLM proposes; doc check evaluates expr with R['<id>'].min/nom/typ/max",
+      "description": "an invariant the LLM proposes; doc check evaluates expr with R['<id>'].min/nom/typ/max. With fw_check, a firmware-configuration rule the join evaluates against the build, encoding the requirements `refs` names; expr and expect are then optional",
       "properties": {
         "expr": {
           "type": "string",
@@ -1157,12 +1161,39 @@
         },
         "why": {
           "$ref": "#/$defs/text"
+        },
+        "refs": {
+          "description": "the requirement record ids a fw_check encodes",
+          "$ref": "#/$defs/ids"
+        },
+        "fw_check": {
+          "$ref": "#/$defs/fw_check"
         }
       },
-      "required": [
-        "expr",
-        "expect"
+      "anyOf": [
+        {
+          "required": [
+            "expr",
+            "expect"
+          ]
+        },
+        {
+          "required": [
+            "fw_check",
+            "refs"
+          ]
+        }
       ],
+      "if": {
+        "required": [
+          "expr"
+        ]
+      },
+      "then": {
+        "required": [
+          "expect"
+        ]
+      },
       "propertyNames": {
         "enum": [
           "id",
@@ -1175,9 +1206,108 @@
           "note",
           "expr",
           "expect",
-          "why"
+          "why",
+          "refs",
+          "fw_check"
         ]
       }
+    },
+    "fw_check": {
+      "description": "a rule over the firmware configuration: inputs read from the build's devicetree and Kconfig and from values the engineer declares in atlas.toml [standards.\"<doc_id>\"]; applies_when, when false, skips it; expr is true when the configuration complies. Both expressions run in the invariant evaluator, plus slices, dict literals, the decode helpers (pd_pdo, pd_sink_pdo) and a CONFIG_<SYM> name for any Kconfig symbol (DESIGN.md, Firmware configuration against a standard)",
+      "type": "object",
+      "required": [
+        "expr"
+      ],
+      "properties": {
+        "inputs": {
+          "description": "name -> where its value comes from; a name is an identifier, not CONFIG_* (read directly)",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^(?!CONFIG_|__)[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/fw_input"
+          }
+        },
+        "applies_when": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expr": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "propertyNames": {
+        "enum": [
+          "inputs",
+          "applies_when",
+          "expr"
+        ]
+      }
+    },
+    "fw_input": {
+      "description": "one fw_check input: a devicetree property (dt: a node path, label, alias or compatible; a selector matching several okay nodes runs the rule once per node; decode: a helper applied to the value), a Kconfig symbol, or a value declared in atlas.toml",
+      "type": "object",
+      "properties": {
+        "dt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prop": {
+          "type": "string",
+          "minLength": 1
+        },
+        "decode": {
+          "enum": [
+            "pd_pdo",
+            "pd_sink_pdo"
+          ]
+        },
+        "kconfig": {
+          "type": "string",
+          "pattern": "^(CONFIG_)?[A-Za-z0-9_]+$"
+        },
+        "declared": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "dt",
+            "prop"
+          ],
+          "propertyNames": {
+            "enum": [
+              "dt",
+              "prop",
+              "decode"
+            ]
+          }
+        },
+        {
+          "required": [
+            "kconfig"
+          ],
+          "propertyNames": {
+            "enum": [
+              "kconfig"
+            ]
+          }
+        },
+        {
+          "required": [
+            "declared"
+          ],
+          "propertyNames": {
+            "enum": [
+              "declared"
+            ]
+          }
+        }
+      ]
     },
     "bus": {
       "description": "how a host reads the part's registers over its serial interface: one record per interface (`<part>.bus.<iface>`). byte_order is the order a multi-byte register's bytes come off the bus; windows, when the part answers at more than one bus address, map every register range to the address that serves it",

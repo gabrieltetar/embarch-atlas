@@ -1100,8 +1100,12 @@ def stacks(a: Atlas, build: str | None = None, offset: int = 0) -> str:
 
 
 @_stamped
-def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
-    """Checks run and passed first, then candidates (claim, evidence, what would settle it)."""
+def mismatch_report(a: Atlas, scope: str | None = None, cls: str | None = None, offset: int = 0,
+                    build: str | None = None) -> str:
+    """Checks run and passed first, then candidates (claim, evidence, what would settle it). With `build` (a build
+    dir, or "pinned"): the config-vs-standard checks only, run now against that build, writing nothing."""
+    if build:
+        return _mismatch_build(a, build, scope, cls, offset)
     if not a.atlas:
         return _mismatch_no_atlas(a, scope, cls, offset)
     m = _json(a.atlas / "mismatches.json")
@@ -1132,6 +1136,28 @@ def _mismatch_no_atlas(a: Atlas, scope: str | None, cls: str | None, offset: int
     out = [_header(f"boards/{labels} netlist.json + BOM + coverage + distillations, no atlas",
                    extra="(only the checks that need no build; the rest are under Not run)").rstrip("\n"), ""]
     return _cap("\n".join(_mismatch_body(m, out, scope, cls)) + "\n", "mismatch_report", offset)
+
+
+def _mismatch_build(a: Atlas, build: str, scope: str | None, cls: str | None, offset: int) -> str:
+    """Every requirement and check record's fw_check against a named build, in memory: the stored report is the
+    pinned build's join and is not re-run (it needs the netlists joined to that build)."""
+    from . import buildq, fwcheck
+    try:
+        src = buildq.versus(a, build)
+        rep = fwcheck.run_source(a.dir, src)
+    except (LookupError, FileNotFoundError, OSError, RuntimeError) as e:
+        return f"src: none\n\n{e}\n"
+    out = [_header(f"{src.label} devicetree + kconfig",
+                   extra=f"(the {fwcheck.CLS} checks only, run now; every other check is the pinned atlas's join: "
+                         "call without build)").rstrip("\n"), ""]
+    m = {"summary": rep["summary"] or "no requirement or check record carries a fw_check, and atlas.toml declares "
+                                      "no [standards] values",
+         "checks": rep["checks"], "not_run": rep["not_run"], "candidates": rep["findings"]}
+    body = _mismatch_body(m, out, scope, cls)
+    skipped = rep["folded"].get(fwcheck.FOLD_GUARD) or []
+    if skipped:
+        body += ["Skipped (applies_when false):"] + [f"- {s}" for s in skipped]
+    return _cap("\n".join(body).rstrip("\n") + "\n", "mismatch_report", offset)
 
 
 def _mismatch_body(m: dict, out: list[str], scope: str | None, cls: str | None) -> list[str]:
@@ -1200,7 +1226,8 @@ def register(sub, groups) -> None:
         (["--vs"], {"help": "compare against this build dir, or `pinned`"}),
         (["--by"], {"choices": ["dir", "file", "symbol"], "default": "dir"}), (["--offset"], {"type": int, "default": 0}))
     add("stacks", stacks, (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}), (["--offset"], {"type": int, "default": 0}))
-    add("mismatch_report", mismatch_report, (["--scope"], {}), (["--cls"], {}), (["--offset"], {"type": int, "default": 0}))
+    add("mismatch_report", mismatch_report, (["--scope"], {}), (["--cls"], {}), (["--offset"], {"type": int, "default": 0}),
+        (["--build"], {"help": "run the config-vs-standard checks against this build dir (or `pinned`) instead"}))
 
 
 def _run(ns, fn) -> int:

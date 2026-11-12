@@ -135,10 +135,12 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         return query.stacks(view(), build, offset)
 
     @server.tool(annotations=READ_ONLY)
-    def mismatch_report(scope: str | None = None, cls: str | None = None, offset: int = 0) -> str:
-        """Checks run and passed, then candidate mismatches between schematic, DT, driver and datasheet,
-        each with evidence and what would settle it. `scope` filters by substring, `cls` by class."""
-        return query.mismatch_report(view(), scope, cls, offset)
+    def mismatch_report(scope: str | None = None, cls: str | None = None, build: str | None = None,
+                        offset: int = 0) -> str:
+        """Checks run and passed, then candidate mismatches between schematic, DT, driver, datasheet and a
+        standard's requirements, each with evidence and what would settle it. `scope` filters by substring, `cls`
+        by class. `build` (a build dir, or "pinned"): the config-vs-standard checks only, run now against it."""
+        return query.mismatch_report(view(), scope, cls, offset, build=build)
 
     if live is None:
         live = live_mod.available(atlas_dir) is None

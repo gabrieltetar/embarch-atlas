@@ -790,22 +790,27 @@ _SAFE_FUNCS = {"abs": abs, "all": all, "any": any, "min": min, "max": max, "roun
 _ATTRS = set(NUMERIC_KEYS) | {"value", "reset", "bits", "addr", "width"}
 
 
-def safe_eval(expr: str, env: dict) -> Any:
+def safe_eval(expr: str, env: dict, *, funcs: dict | None = None, attrs: tuple[str, ...] = (),
+              nodes: tuple[type, ...] = ()) -> Any:
     """Evaluate an LLM-proposed invariant: arithmetic, comparisons, comprehensions, R['id'].typ, and a
-    few pure functions. Anything else (imports, dunders, other calls) is refused."""
+    few pure functions. Anything else (imports, dunders, other calls) is refused. `funcs`, `attrs` and
+    `nodes` widen it for one caller and no other: a `fw_check` (`fwcheck.py`) adds its decode helpers, the
+    fields they return, slices and dict literals."""
+    fns = {**_SAFE_FUNCS, **(funcs or {})}
+    ok_attrs, ok_nodes = _ATTRS | set(attrs), _SAFE_NODES + tuple(nodes)
     tree = ast.parse(expr, mode="eval")
     for node in ast.walk(tree):
-        if not isinstance(node, _SAFE_NODES):
+        if not isinstance(node, ok_nodes):
             raise ValueError(f"not allowed in an invariant: {type(node).__name__}")
         if isinstance(node, ast.Name) and node.id.startswith("__"):
             raise ValueError(f"name {node.id} not allowed")
-        if isinstance(node, ast.Attribute) and node.attr not in _ATTRS:
+        if isinstance(node, ast.Attribute) and node.attr not in ok_attrs:
             raise ValueError(f"attribute .{node.attr} not allowed (use .min/.nom/.typ/.max/.value/.reset/"
-                             ".bits/.addr/.width)")
-        if isinstance(node, ast.Call) and not (isinstance(node.func, ast.Name) and node.func.id in _SAFE_FUNCS):
-            raise ValueError("only abs/all/any/min/max/round/sum/len may be called")
+                             ".bits/.addr/.width" + "".join(f"/.{a}" for a in attrs) + ")")
+        if isinstance(node, ast.Call) and not (isinstance(node.func, ast.Name) and node.func.id in fns):
+            raise ValueError(f"only {'/'.join(fns)} may be called")
     # env goes into globals: a generator expression cannot see eval's locals
-    return eval(compile(tree, "<invariant>", "eval"), {"__builtins__": {}, **_SAFE_FUNCS, **env})
+    return eval(compile(tree, "<invariant>", "eval"), {"__builtins__": {}, **fns, **env})
 
 
 def _attr(rec: dict, a: str) -> Any:
@@ -1377,7 +1382,7 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
             documented_resets.append(f"{x['id']} ({x['source']}, {documented[x['id']]})")
             continue
         struct_issue.setdefault((x["id"], x["source"]), []).append(f"G: {x['issue']} ({x['source']})")
-    checks = [r for r in recs if r.get("kind") == "check"]
+    checks = [r for r in recs if r.get("kind") == "check" and r.get("expr")]   # a fw_check alone runs at join
     by_id: dict[str, dict] = {}
     for r in recs:  # a twin pair resolves to the LLM record, the one invariants were written against
         if r.get("id") not in by_id or r.get("prov") in R.LLM:
