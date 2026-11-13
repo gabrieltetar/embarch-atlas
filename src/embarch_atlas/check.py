@@ -14,7 +14,10 @@ Record checks (per record, against the text layer of the pages it cites):
                      magnitude (the record keeps the string `"±X"`, or X); `X%` is X with unit %; `a to
                      b` in a VALUE column is min a, max b. A record value kept as an expression string
                      is not compared. Two MIN/TYP/MAX groups side by side in one header band are read
-                     one at a time (the record is held to the group that holds its numbers); a lone TYP
+                     one at a time. When the group headers carry a condition (a supply voltage, a temperature) the
+                     record is held to the group its `cond` names, so numbers copied from the other group
+                     disagree; a header whose condition no `cond` matches, or one that carries none, falls
+                     back to the group that holds the record's numbers (the first says so in a warning). A lone TYP
                      column beside a UNIT header is a header. A row K cannot find is a warning, counted per document
   C  conditions      every number in `cond` is on a cited page
   U  units           the unit's dimension fits the symbol (V, I, t, R, T, f, C, P, L) or the parameter,
@@ -445,12 +448,21 @@ class DocText:
             return {"status": "no-header-above"}
         hy, groups, hws = above[-1]
         starts = sorted(min(g.values()) - 30 for g in groups)
-        best: tuple | None = None
-        for gi, hdr in enumerate(groups):
+        reads = []
+        for hdr in groups:
             r = self._read_group(hdr, hws, words, n, starts, rec)
             if isinstance(r, str):
                 return {"status": r}
-            det, pct, score = r
+            reads.append((r, hdr))
+        gconds = [self._group_conds(bands, hy, hws, hdr, starts) for hdr in groups] if len(groups) > 1 else []
+        rconds = _conds(normalize(rec["cond"])) if isinstance(rec.get("cond"), str) else set()
+        named = [bool(c) and c <= rconds for c in gconds] if gconds else []
+        cond_note = None
+        if any(gconds) and not any(named):
+            cond_note = "unmatched"
+        pool = [(r, h) for (r, h), m in zip(reads, named) if m and r[0]] if any(named) else []
+        best: tuple | None = None
+        for (det, pct, score), hdr in pool or reads:
             if det and (best is None or score > best[0]):
                 best = (score, det, pct, hdr)
         if best is None:
@@ -484,7 +496,21 @@ class DocText:
                                 unit = joined
         if unit is None and pct:
             unit = "%"
-        return {"status": "ok", "det": det, "unit": unit}
+        return {"status": "ok", "det": det, "unit": unit, **({"cond_note": cond_note} if cond_note else {})}
+
+    def _group_conds(self, bands: list, hy: float, hws: list, hdr: dict, starts: list) -> set:
+        """The conditions printed over one group of a header band: the band itself and up to COND_BANDS
+        bands within COND_SPAN points above it, over the group's columns (from its left edge to the next
+        group's)."""
+        left = min(hdr.values()) - 30
+        right = min((x for x in starts if x > left), default=None)
+        ws = list(hws)
+        for yc, bws in bands:
+            if hy - COND_SPAN <= yc < hy:
+                ws += bws
+        txt = " ".join(w[4] for w in sorted(ws, key=lambda w: w[0])
+                       if left <= (w[0] + w[2]) / 2 and (right is None or (w[0] + w[2]) / 2 < right))
+        return _conds(normalize(txt))
 
 
 def _hdr_groups(ws: list) -> list[dict]:
@@ -503,6 +529,15 @@ def _hdr_groups(ws: list) -> list[dict]:
     return [g for g in groups if len(g) >= 2 or (len(groups) == 1 and has_unit)]
 
 
+_COND_RE = re.compile(r"(?<![\w.])(-?\d+(?:\.\d+)?)\s*(?:°\s*)?(V|C)(?![A-Za-z])", re.I)   # the text layer is lower-cased by normalize
+
+
+def _conds(text: str) -> set:
+    """The voltages and temperatures a string names, as (unit, value): `VCC = 3.3 V` is ("V", 3.3),
+    `TA = -40 °C` and `-40C` are ("C", -40.0). `mV`, `VDD` and a bare number are none."""
+    return {(m.group(2).upper(), float(m.group(1))) for m in _COND_RE.finditer(text)}
+
+
 def _agree(rec: dict, det: dict) -> int:
     """How many of the record's numeric keys equal the reading's, to choose between groups."""
     n = 0
@@ -513,6 +548,7 @@ def _agree(rec: dict, det: dict) -> int:
     return n
 
 
+COND_SPAN = 30.0     # points: how far above a header band a group's condition is still its heading
 ROW_SPAN = 12.0      # points: stacked lines of one table row
 PAST_LAST = 60.0     # points: how far right of the last value header a value still belongs to it
 # K statuses where the row is on the page but K could not read it: warnings, counted per document
@@ -737,6 +773,8 @@ def record_checks(doc: DocText, rec: dict) -> dict:
                 diff["unit"] = {"record": rec["unit"], "columns": c["unit"]}
             out["K"] = "ok" if not diff else {"disagree": diff}
             out["K_unit_seen"] = c.get("unit") is not None
+            if c.get("cond_note"):
+                out["K_cond"] = c["cond_note"]
         else:
             out["K"] = f"not checkable: {c['status']}"
     # C
@@ -1491,6 +1529,9 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
         if kst.removeprefix("not checkable: ") in K_WARN:
             warns.append(f"K: {K_WARN[kst.removeprefix('not checkable: ')]} on p{R.pages(r)[0]}: "
                          "the column check did not run")
+        if res.get("K_cond"):
+            warns.append(f"K: p{R.pages(r)[0]} group headers name conditions no `cond` of this record matches, "
+                         "so it was held to the group that agrees with its numbers")
         results.append({"id": r.get("id"), "file": fname, "kind": r.get("kind"), "status": status,
                         "prov": r.get("prov"), "checks": res, "issues": issues,
                         **({"warnings": warns} if warns else {})})
@@ -1561,6 +1602,11 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
             warnings.append(f"K: {len(ids)} table rows {what.split(' ', 1)[1]} on their page, so their columns were "
                             f"not checked (they are verified by A/N/C/U/O only): {', '.join(ids[:8])}"
                             + (" ..." if len(ids) > 8 else ""))
+    ids = [x["id"] for x in results if x["checks"].get("K_cond")]
+    if ids:
+        warnings.append(f"K: {len(ids)} rows sit under group headers that name a condition (supply, temperature) "
+                        f"no `cond` of theirs matches, so each was held to the best-agreeing group instead: "
+                        f"{', '.join(ids[:8])}" + (" ..." if len(ids) > 8 else ""))
     if summary["M"]["record_elsewhere"]:
         warnings.append(f"M: {summary['M']['record_elsewhere']} numbers are on no page their line cites and "
                         f"match only a verified record on another page: cite that page")

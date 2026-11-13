@@ -828,6 +828,39 @@ def test_k_reads_each_side_by_side_group(tmp_path):
     assert "typ" in _k(doc, bad)["disagree"]
 
 
+CONDS_PAGE = [
+    (150, 44, "VCC = 3.3 V"), (440, 44, "VCC = 5 V"),
+    (40, 60, "PARAMETER"), (150, 60, "MIN"), (190, 60, "TYP"), (230, 60, "MAX"), (270, 60, "UNIT"),
+    (330, 60, "PARAMETER"), (440, 60, "MIN"), (480, 60, "TYP"), (520, 60, "MAX"), (560, 60, "UNIT"),
+    (40, 76, "Delta delay"), (150, 76, "1.1"), (190, 76, "2.2"), (230, 76, "3.3"), (270, 76, "ms"),
+    (440, 76, "4.4"), (480, 76, "5.5"), (520, 76, "6.6"), (560, 76, "ms"),
+]
+DELTA = "Delta delay 1.1 2.2 3.3 ms 4.4 5.5 6.6 ms"
+
+
+def test_k_holds_a_record_to_the_group_its_cond_names(tmp_path):
+    doc = check.DocText(_table_doc(tmp_path, [CONDS_PAGE]))
+    lo = _lim("t.delta", DELTA, 1, group="ec", kind="timing", min=1.1, typ=2.2, max=3.3, unit="ms",
+              cond="VCC = 3.3 V")
+    hi = dict(lo, min=4.4, typ=5.5, max=6.6, cond="VCC = 5V, TA = 25 C")
+    assert _k(doc, lo) == "ok" and _k(doc, hi) == "ok"
+    # the 3.3 V group's numbers under a record that names 5 V: best-agreement used to pass it
+    k = _k(doc, dict(lo, cond="VCC = 5 V"))
+    assert isinstance(k, dict) and {"min", "typ", "max"} <= set(k["disagree"])
+    assert "K_cond" not in check.record_checks(doc, dict(lo, cond="VCC = 5 V"))
+    # a cond that names neither header falls back to agreement and says so
+    r = check.record_checks(doc, dict(lo, cond="VCC = 12 V"))
+    assert r["K"] == "ok" and r["K_cond"] == "unmatched"
+
+
+def test_k_without_a_condition_in_the_headers_falls_back_to_agreement(tmp_path):
+    doc = check.DocText(_table_doc(tmp_path, [GROUPS_PAGE]))
+    b = _lim("t.beta", "Beta delay 4.4 5.5 6.6 us", 1, group="ec", kind="timing", min=4.4, typ=5.5, max=6.6,
+             unit="us", cond="VCC = 3.3 V")
+    r = check.record_checks(doc, b)
+    assert r["K"] == "ok" and "K_cond" not in r
+
+
 def test_k_reads_a_lone_typ_column(tmp_path):
     doc = check.DocText(_table_doc(tmp_path, [LONE_PAGE]))
     r = _lim("t.gamma", "Gamma offset 7.7 mV", 1, group="ec", typ=7.7, unit="mV")

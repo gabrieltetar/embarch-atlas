@@ -274,6 +274,20 @@ absence, never a pass):
   `REV. A` / `DOC NO. 001` (upper-case, line-anchored; prose never matches), in the
   manifest and in `doc.json`, when no vendor convention named them. `doc check` prints
   `K did not run` when no record was compared with a column (no MIN/TYP/MAX header).
+- **Check K and a table with two side-by-side MIN/TYP/MAX groups.** When the group headers carry a
+  condition, K holds a record to the group its `cond` names: a record whose numbers sit in the other
+  group is a K disagreement. A header's condition is the set of voltages and temperatures printed over
+  its columns (the header band and the bands up to 30 points above it), each normalized to unit and
+  value (`VCC = 3.3 V` is (V, 3.3), `-40 °C` and `-40C` are (C, -40)), so spelling and spacing do not
+  matter. A group matches when **every** condition in its header is in the record's `cond`; a record
+  that names two conditions still matches the group that names one of them, and a header naming two
+  is matched only by a `cond` naming both. Exact text was rejected: `cond` is free text
+  (`VCC = 5V, TA = 25 C`), and a datasheet's own header prints the same voltage three ways. When no
+  group matches (the record has no `cond`, or names a condition no header prints), or the headers
+  carry none, K falls back to the group that agrees with most of the record's numbers, as before; in
+  the unmatched case the report says so (`K_cond: unmatched`, a per-record and a document warning), because
+  that is where a wrong-group number can pass. Conditions are read only from words over the group's own
+  columns; one printed once across both groups names neither.
 - Pages are **1-based physical PDF page indices** (what `Read(pages=N)` takes).
   The printed label is stored only where it differs.
 - Section ids are the document's own numbering (`32.9.5`, `7.6.6`); a title slug
