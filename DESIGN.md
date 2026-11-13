@@ -426,6 +426,14 @@ MAP.md lists it under "Other documents".
   there is none) naming the distilled sections, the ones asked for and not distilled yet, and `doc_toc` /
   `find_text` for every other. `doc freeze` reads the card without that block's body and check M skips it, so
   a worklist change never thaws the card.
+- **A cite of another document rests no unit of this one** (`doc freeze`, `freeze.own_cited_pages`): a page
+  cite whose preceding token names a sibling document (`other-doc p.7`, the test check M's `split_cites` and
+  `find_sibling` already apply) is left out of the unit's pages. The other choice, filing the page under the
+  other document, would make a unit rest on pages that `thaw-check` of this document cannot read (it reads only
+  this document's `pages/`), so a freeze would need a second set of page hashes and `--from` a second rule. A
+  unit that cites only other documents has no page of its own and rests on every page, as a unit with no cite
+  does. The cost is that a changed page of the other document does not thaw the unit: its `doc freeze` of that
+  document is where that page is read.
 
 ### Firmware configuration against a standard (`fwcheck.py`)
 

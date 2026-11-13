@@ -1267,6 +1267,19 @@ def _values_by_page(recs: list[dict]) -> dict[int, list[float]]:
     return out
 
 
+def find_sibling(docdir: Path, name: str, own_id: str | None = None) -> Path | None:
+    """The directory of the other document `name` names (a directory beside `docdir`, by name or by
+    doc_id, with pages), or None; a document's own name is never another document."""
+    docdir = Path(docdir)
+    if name == own_id or name == docdir.name:
+        return None
+    for d in sorted(docdir.parent.glob("*/doc.json")):
+        meta = common.read_json(d)
+        if d.parent.name == name or (meta.get("doc_id") or meta.get("id")) == name:
+            return d.parent if int(meta.get("pages") or 0) else None
+    return None
+
+
 def check_markdown_file(doc: DocText, path: Path, rec_values: dict[int, list[float]] | list[float]) -> dict:
     """M on one file. `rec_values`: page -> values of the verified records citing it (a plain list
     anchors on any page, the old behaviour). A number held only by a record on a page the line does
@@ -1277,14 +1290,8 @@ def check_markdown_file(doc: DocText, path: Path, rec_values: dict[int, list[flo
     def sibling(name: str) -> "DocText | None":
         """The other document a cite names: a directory beside this one, by name or by doc_id."""
         if name not in siblings:
-            siblings[name] = None
-            if name != doc.doc_id and name != doc.dir.name:
-                for d in sorted(doc.dir.parent.glob("*/doc.json")):
-                    meta = common.read_json(d)
-                    if d.parent.name == name or (meta.get("doc_id") or meta.get("id")) == name:
-                        if int(meta.get("pages") or 0):
-                            siblings[name] = DocText(d.parent, use_pdf=False)
-                        break
+            d = find_sibling(doc.dir, name, doc.doc_id)
+            siblings[name] = DocText(d, use_pdf=False) if d else None
         return siblings[name]
 
     everywhere = [x for vs in by_page.values() for x in vs] if by_page else list(rec_values)

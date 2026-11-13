@@ -14,6 +14,9 @@ A unit is one piece of LLM-written output and the pages it rests on:
                      An s/invariants.md the renderer wrote and nobody edited is not LLM output
   card               card.md; its pages are the pages it cites
 
+A cite that names another document (`other-doc p.7`) is not a page of this one: it is left out of the
+unit's pages, and a unit that cites only other documents rests on every page.
+
 A unit with no page (no `p`, no cite) rests on every page.
 
 The key of a unit is the RM worklist's (`rm.unit_key`): sha256 over {"sec": <unit id>, "intro":
@@ -36,7 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from . import common, records as R
-from .check import cited_pages, out_of_range as _out_of_range
+from .check import find_sibling, out_of_range as _out_of_range, split_cites
 from .pdftext import page_file
 from .render import END, INVARIANTS, START, invariants_stub
 from .rm import page_sha
@@ -93,6 +96,14 @@ def _hash(content: Any) -> str:
     return common.sha256_text(json.dumps(content, sort_keys=True, ensure_ascii=False))
 
 
+def own_cited_pages(docdir: Path, text: str) -> set[int]:
+    """The pages `text` cites in this document: a cite that names another document (`other-doc p.7`,
+    split_cites' test) is that document's page and rests no unit here (DESIGN.md, `doc freeze`)."""
+    meta = common.read_json(Path(docdir) / "doc.json")
+    own_id = meta.get("doc_id") or meta.get("id")
+    return split_cites(text, lambda n: find_sibling(docdir, n, own_id) is not None)[0]
+
+
 def units(docdir: Path, n_pages: int) -> dict[str, dict]:
     """unit id -> {type, file, pages, content, sha256} for every piece of LLM output of a document."""
     docdir = Path(docdir)
@@ -112,12 +123,12 @@ def units(docdir: Path, n_pages: int) -> dict[str, dict]:
         if f.name == INVARIANTS and text == prose(invariants_stub(docdir)):
             continue                     # the renderer wrote it, not the LLM
         rel = f"s/{f.name}"
-        out[f"prose:{rel}"] = {"type": "prose", "file": rel, "pages": sorted(cited_pages(text)) or every,
+        out[f"prose:{rel}"] = {"type": "prose", "file": rel, "pages": sorted(own_cited_pages(docdir, text)) or every,
                                "content": text, "sha256": _hash(text)}
     if (docdir / "card.md").exists():
         # without the bodies of generated blocks (a standard's `sections` list): the LLM did not write them
         text = prose((docdir / "card.md").read_text(encoding="utf-8"))
-        out["card"] = {"type": "card", "file": "card.md", "pages": sorted(cited_pages(text)) or every,
+        out["card"] = {"type": "card", "file": "card.md", "pages": sorted(own_cited_pages(docdir, text)) or every,
                        "content": text, "sha256": _hash(text)}
     return out
 

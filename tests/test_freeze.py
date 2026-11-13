@@ -134,3 +134,19 @@ def test_page_count_is_never_more_than_the_document_s_pages(doc, capsys):
     assert cli.main(["--atlas-dir", str(atlas), "doc", "freeze", ds.DOC_ID]) == 0
     cap = capsys.readouterr()
     assert f"over {n} pages" in cap.out and "prose:s/9.9.md cites page 0" in cap.err
+
+
+def test_cross_document_cite_is_not_a_page_of_the_citing_document(doc):
+    atlas, docdir = doc
+    other = atlas / "docs" / "other-doc"
+    (other / "pages").mkdir(parents=True)
+    (other / "doc.json").write_text(json.dumps({"doc_id": "other-doc", "pages": 9}))
+    (docdir / "s" / "7.1.md").write_text(SECTION + "\nSee other-doc p.5 for the pinout.\n")
+    (docdir / "card.md").write_text("# SYN1234 card\n\nPinout in other-doc p.5 only.\n")
+    us = freeze.units(docdir, 5)
+    assert us["prose:s/7.1.md"]["pages"] == [3]                  # p.3 same-document; other-doc p.5 is not ours
+    assert us["card"]["pages"] == [1, 2, 3, 4, 5]                # only a cross cite: rests on every page
+    _, e = freeze.freeze(atlas, ds.DOC_ID, model="m")
+    _change_page(docdir, 5)
+    redo = {r["unit"] for r in freeze.thaw_check(atlas, ds.DOC_ID)["redo"]}
+    assert "prose:s/7.1.md" not in redo and "card" in redo
