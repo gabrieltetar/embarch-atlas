@@ -1086,6 +1086,14 @@ a second look: `update` queues the diff's batches and says so, and a reader is s
 `status` lists the installed hooks and each target's last bump. Measured on the synthetic project of
 `tests/test_bump.py` with a target that has no board: five commits in a row are one bump, of the last commit.
 
+## The replay harness (`scripts/replay.py`)
+
+A lookup that claims to save calls proves it on recorded sessions, and `scripts/replay.py` is the one way to do it, so the numbers of two units are comparable. It scans a project's Claude Code transcripts (`~/.claude*/projects/<project>*/`, subagents included) for `Bash` calls matching a named pattern, pairs each with its `tool_result`, and with `--atlas-dir` and `--build-dir` replays it: **before** is the shell call re-run read-only against the build dir as it is now (1 call, its output characters), **after** is the mapped lookup, its `next=` pages followed to the end (pages, characters). `--report` prints the numbers-only table a task's `## Result` takes; nothing from the project (symbol, path, value) is printed.
+
+Its table of patterns is the whole of what it may run: `config-grep` (`grep` over a `.config`, to `q config SYMS`) and `config-diff` (`diff` of two such greps, to `q config SYMS --vs`). A recorded command is never executed: it is parsed, and the harness runs an argument vector rebuilt from the parsed parts with whitelisted flags, no shell, so a pipe, a redirect, a substitution or any other command in the recording makes it not match. Every write (the lookup's caches included) goes under a temporary copy of the atlas dir, with `GIT_OPTIONAL_LOCKS=0`; the firmware tree and the real atlas dir are not written. A call whose replay fails is counted as skipped, not dropped. A new lookup adds a row to the table and a parser, not a script.
+
+It is not a CLI verb or an MCP tool because it reads private transcripts: a verb ships in the wheel and an agent can call it, and a transcript holds the owner's prompts and a project's names. It lives in `scripts/`, outside the package, and runs from a checkout with the venv's `embarch_atlas`. Tests (`tests/test_replay.py`) use synthetic transcripts and a synthetic atlas dir only. The first run against a real project is owed.
+
 ## What an LLM step may and may not do
 
 - May: read page images and the text layer; write records, prose, the card, the
