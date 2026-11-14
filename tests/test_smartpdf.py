@@ -385,3 +385,30 @@ def test_net_trace_sees_both_sheets_of_a_joined_net(tmp_path):
     out = query.net_trace(query.Atlas(adir), "T:RAIL_A")
     assert "(3 pins)" in out and "T:U1-1" in out and "T:R1-1" in out  # the Power sheet's pins
     assert "caps (1): C1" in out  # the Load sheet's pin, folded as a decoupling cap
+
+
+def test_issues_md_is_written_with_net_sheet_page():
+    nl = {"board": "T", "source": {"file": "t.pdf"},
+          "sheets": {"Power": {"page": 2, "parent": None}, "Main": {"page": 1, "parent": None}},
+          "issues": ["geometry disagrees on net VX, sheet Main page 1: joined with U1-3",
+                     "port P1 on sheet Power (net VY, VZ) has no partner on another sheet",
+                     "net VW reaches sheet(s) Main, Power only through a net label (no port): joined by name",
+                     "Main: anchor X is shared by pins 1-2; no position for 1-2",
+                     "U2: printed Comment A differs from its MPN parameter B"]}
+    text = sp.render_issues_md(nl)
+    assert "T: geometry-disagrees net=VX sheet=Main page=1 | geometry disagrees" in text
+    assert "T: port-no-partner net=VY,VZ sheet=Power page=2 |" in text
+    assert "T: label-only-join net=VW sheet=Main, Power page=1,2 |" in text
+    assert "T: pin-anchor-shared net=- sheet=Main page=1 |" in text
+    assert "T: other net=- sheet=- page=- | U2:" in text
+
+
+def test_cli_writes_issues_md_and_prints_path(pdf, tmp_path, capsys):
+    adir = tmp_path / "atlas"
+    assert cli.main(["--atlas-dir", str(adir), "schematic", str(pdf), "--board", "T"]) == 0
+    out = adir / "boards" / "T"
+    nl = json.loads((out / "netlist.json").read_text())
+    text = (out / "issues.md").read_text()
+    assert text.startswith("# Extraction issues, board T")
+    assert all(f"| {i}" in text for i in nl["issues"])
+    assert str(out / "issues.md") in capsys.readouterr().out

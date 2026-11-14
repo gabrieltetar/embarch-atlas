@@ -128,7 +128,8 @@ def render(ad: Path, atlas: Path, J, stamp: dict, pins: dict, report: dict, max_
     L += ["## Boards and interfaces", ""]
     for lab, B in sorted((J.boards if J else {}).items()):
         src = (B.nl.get("source") or {}).get("file") or "?"
-        L.append(f"- {lab}: `boards/{lab}/netlist.json` from `{src}` ({len(B.comps)} parts, {len(B.nets)} nets)")
+        L.append(f"- {lab}: `boards/{lab}/netlist.json` from `{src}` ({len(B.comps)} parts, {len(B.nets)} nets, "
+                 f"issues: `boards/{lab}/issues.md`)")
     for i in pins.get("interfaces", []):
         agree = f", {i['agree']}/{i['named']} names agree" if i.get("named") else ""
         L.append(f"- {i['a']} <-> {i['b']}: {i.get('rule') or 'pin map'} ({i['status']}{agree})")

@@ -939,6 +939,52 @@ def render_parts_md(nl: dict[str, Any], bom: list[dict[str, Any]]) -> str:
     return "\n".join(L) + "\n"
 
 
+_ISSUE_PATTERNS = (   # (kind, regex with optional net / sheets / page groups), first match wins
+    ("geometry-disagrees", re.compile(r"^geometry disagrees on net (?P<net>.+?), sheet (?P<sheets>.+?) page (?P<page>\d+): ")),
+    ("geometry-unanchored", re.compile(r"^geometry: \d+ pin\(s\) on page (?P<page>\d+) have no anchor word")),
+    ("port-no-partner", re.compile(r"^port .+? on sheet (?P<sheets>.+?) \(net (?P<net>.+?)\) has no partner")),
+    ("label-only-join", re.compile(r"^net (?P<net>.+?) reaches sheet\(s\) (?P<sheets>.+?) only through a net label")),
+    ("pin-on-two-nets", re.compile(r"^pin .+? is on two nets: (?P<net>.+)$")),
+    ("pin-without-part", re.compile(r"^net (?P<net>.+?) lists pin ")),
+    ("pin-bookmark-designators", re.compile(r"^.+? on (?P<sheets>.+?): pin bookmarks name several designators")),
+)
+
+
+def classify_issue(text: str, sheets: dict[str, Any]) -> dict[str, str]:
+    """One extractor issue as `kind`, `net`, `sheet`, `page`; "-" where the kind carries none of that."""
+    kind, net, sheet, page = "other", "-", "-", "-"
+    for k, rx in _ISSUE_PATTERNS:
+        m = rx.match(text)
+        if m:
+            g = m.groupdict()
+            kind, net, sheet, page = k, g.get("net") or "-", g.get("sheets") or "-", g.get("page") or "-"
+            break
+    else:
+        for sname in sorted(sheets, key=len, reverse=True):   # "<sheet>: anchor ... is shared by pins"
+            if text.startswith(sname + ": "):
+                kind, sheet = "pin-anchor-shared", sname
+                break
+    if page == "-" and sheet != "-":
+        pages = sorted({str(sheets[x.strip()]["page"]) for x in sheet.split(",") if sheets.get(x.strip(), {}).get("page")},
+                       key=natural_key)
+        page = ",".join(pages) or "-"
+    return {"kind": kind, "net": net.replace(" ", "") if "," in net else net, "sheet": sheet, "page": page}
+
+
+def render_issues_md(nl: dict[str, Any]) -> str:
+    b, sheets = nl["board"], nl["sheets"]
+    L = [f"# Extraction issues, board {b}", "",
+         f"From `{nl['source']['file']}`: {len(nl['issues'])} issues the extractor flagged (also `issues` in netlist.json).",
+         f"Line: `{b}: <kind> net=<net(s)> sheet=<sheet(s)> page=<page(s)> | <text>`; `-` = this kind of issue carries "
+         "none (the part-level kinds name a part, not a net, sheet or page).", ""]
+    for text in nl["issues"]:
+        c = classify_issue(text, sheets)
+        L.append(f"{b}: {c['kind']} net={c['net']} sheet={c['sheet']} page={c['page']} | {text}")
+    if not nl["issues"]:
+        L.append("none")
+    return "\n".join(L) + "\n"
+
+
 # ---------------------------------------------------------------- CLI
 
 def run(atlas_dir: Path, pdf: Path, board: str, geometry: bool = True) -> dict[str, Any]:
@@ -960,6 +1006,7 @@ def run(atlas_dir: Path, pdf: Path, board: str, geometry: bool = True) -> dict[s
         (out / "geometry.json").unlink(missing_ok=True)  # never leave a trace of an older run beside this netlist
     common.write_text(out / "nets.md", render_nets_md(nl))
     common.write_text(out / "parts.md", render_parts_md(nl, bom))
+    common.write_text(out / "issues.md", render_issues_md(nl))
     return nl
 
 
@@ -1001,12 +1048,12 @@ def _cmd(args) -> int:
           f"{c['pins_named']}/{c['pins_on_3plus_pin_parts']} pin names "
           f"({c['pins_named_from_overlay']} from pin_names.json, {c['pins_unnamed_on_3plus_pin_parts']} still unnamed "
           f"on 3+-pin parts); {xc}{len(nl['issues'])} issues "
-          f"-> {adir / 'boards' / args.board} in {time.time() - t0:.1f} s")
+          f"({adir / 'boards' / args.board / 'issues.md'}) -> {adir / 'boards' / args.board} in {time.time() - t0:.1f} s")
     return 0
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("schematic", help="netlist.json, bom.json, nets.md, parts.md (+ geometry.json) from an Altium Smart PDF")
+    p = sub.add_parser("schematic", help="netlist.json, bom.json, nets.md, parts.md, issues.md (+ geometry.json) from an Altium Smart PDF")
     p.add_argument("pdf", nargs="?", help="the board's schematic PDF (default: its [[boards]] entry in atlas.toml)")
     p.add_argument("--board", required=True, help="board label, as in atlas.toml [[boards]]")
     p.add_argument("--no-geometry", action="store_true",

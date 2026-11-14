@@ -100,6 +100,7 @@ docs/<std_doc>/                 a standard adds: worklist.json (the sections ask
 boards/<label>/                 schematic analysis, one per board PDF
   netlist.json, bom.json        from the embedded Smart-PDF netlist (below)
   nets.md, parts.md             compact line formats for the LLM
+  issues.md                     the extractor's issues, one per line with its kind, net, sheet and page (`-` where a kind has none); MAP.md links it
   geometry.json                 the geometric cross-check of the netlist (rung 3), per sheet and pin
 boards/system.json              board instances + interfaces (engineer-declared, with machine scores);
                                 power_feeds (engineer-declared: net, from, via, only), shown in MAP.md
@@ -987,7 +988,7 @@ An atlas id is `<target>@<commit12>`.
 | `init <fw>` | `project` | writes `atlas.toml` with defaults; wires `CLAUDE.local.md` and `.mcp.json` |
 | `status` | `project` | atlases, which is current, which are stale; for an atlas with no build, the outputs absent for that reason and the ones reduced |
 | `inventory` | `inventory` | manifest + per-page hashes + diff vs last |
-| `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md |
+| `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md, issues.md (path printed) |
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
 | `declare-pin-name <board> <ref> <pin> <name> [--prov llm-unverified \| engineer-declared \| engineer-confirmed] [--note <text>]` | `pinnames` | records a name for a pin the schematic PDF left unnamed in `boards/<board>/pin_names.json` and merges it into that board's `netlist.json`, `nets.md` and `parts.md` (default `--prov llm-unverified`); refuses a board with no netlist, a ref the netlist lacks, a pin number the part lacks, and a pin the PDF's text already named; the same board/ref/pin again replaces its entry |
 | `declare-interface <board>:<ref> <board>:<ref> (--rule <rule> \| --pin-map 1:6,..) [--prov engineer-declared \| engineer-confirmed] [--note <text>]` | `interfaces` | records the engineer's answer to which connectors mate as an `interfaces` entry in `boards/system.json`, other entries untouched (the same id is replaced); refuses a ref that is not a connector on that board's netlist, a rule outside identity / mirror / row-swap / column-reverse, a pin map naming a contact the connector lacks. It does not promote a proposal by id |

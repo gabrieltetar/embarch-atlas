@@ -90,3 +90,10 @@ def test_map_lists_documents_tied_to_no_board_part(tmp_path):
     assert "| `demo-spec@r2` | standard | Demo Bus Specification | docs/demo-spec@r2/card.md |" in other
     assert "| `demo-prd@1` | prd | - | (no card yet) |" in other
     assert "sns701@a" not in other                         # a part's document stays in the parts table
+
+
+def test_map_links_each_boards_issues_file(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    run_join(ad, atlas)
+    text = (atlas / "MAP.md").read_text()
+    assert "issues: `boards/M/issues.md`" in text and "issues: `boards/S/issues.md`" in text
