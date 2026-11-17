@@ -13,7 +13,9 @@ whole. Scripts do every deterministic step. The LLM steps run in Claude Code
 sessions, driven by skills. Every fact carries a citation and a provenance class.
 
 It is fully local. **The tool never fetches a document**: the engineer supplies
-every file, and a missing one becomes a question.
+every file, and a missing one becomes a question. A shared datasheet library (owner decision,
+2026-11-17; not built yet) keeps that true: it is a folder the engineer fills, read beside the
+sources folder ("Where documents come from").
 
 ## Principles
 
@@ -1149,6 +1151,31 @@ query against the build's `.config`, so the extraction itself never depends on a
 
 ## Document kinds and coverage
 
+### Where documents come from
+
+Today every document is a file in the sources folder (`[project] sources`, relative to `fw`): `inventory`
+lists it (`inventory.list_sources`, `sources_of`), `doc prep` records its path in `doc.json`, and an answer in
+`answers.toml` names it by its sha256. A part with no document is a row of `missing.md`.
+
+**A shared datasheet library, and a copy of every file an atlas used, keyed by sha256** (owner decision,
+2026-11-17; not built yet, "Not yet built"):
+
+- **The library** is one local folder, outside any firmware repo, that the engineer fills by hand and any
+  project's `atlas.toml` can name. `inventory` and `missing` read it beside the sources folder, so a datasheet
+  supplied once serves the next project. The tool never writes into it.
+- **The copy.** A file an atlas reads past the inventory (a document it translates, a schematic it ingests),
+  from the library or the sources folder, is copied into the atlas directory (`<fw>/embarch/atlas/`) under its
+  sha256, and every later step reads the copy. The distillations in `docs/` are shared by every atlas of the
+  project, so the copy sits beside them, not under one `atlases/<id>/`. A library file that is edited,
+  replaced or deleted, or one shared with another project, never changes what an atlas was built from.
+- **Versions and answers stay keyed by content.** A new revision dropped into the library is a new sha256 and
+  comes in as any changed document does: the inventory diff, a confirmed file going back to proposed,
+  `mark_supersession` for an older revision. `answers.toml` needs no new key.
+- **Still no fetching.** The library is filled by the engineer, never by a download, and a part with no
+  document in either folder is still a `missing.md` question. Chosen over an opt-in fetcher (alone, or filling
+  the library), which would put network access and a licensing question inside a tool that is fully local, and
+  over today's rule alone, which has every project supply the same datasheets again by hand.
+
 ### Kinds
 
 `inventory.KINDS`: `schematic`, `datasheet`, `reference-manual`, `errata`, `appnote`, `prd`, `standard`, `spreadsheet`,
@@ -1310,6 +1337,9 @@ crop and reads it, and `declare-pin-name` records the result as `llm-unverified`
 
 Reading a board part's package from the BOM's footprint string, or from `variant` records, to fill
 `bindings.json` `packages` (today the engineer states it).
+
+The shared datasheet library and the sha256 copy of each file an atlas used ("Where documents come from"):
+decided, not built; today every document comes from the sources folder and is read where it lies.
 
 Anchoring the numbers inside a `fw_check` expression to the cited page: check N covers a requirement's `text`,
 and an expression, like an invariant's, is not a numeric claim yet. A `fw_check` over the role a build chooses
