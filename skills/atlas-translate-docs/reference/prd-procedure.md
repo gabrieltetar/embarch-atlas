@@ -34,9 +34,11 @@ Output: `docs/<prd_doc_id>/records/requirement.jsonl`, `card.md`, `s/<secid>.md`
 4. `card.md`: the product in 10–15 bullets, the firmware-relevant requirement
    count per section (a count you computed: tag it `(derived)`), and the
    requirements that disagree with each other, as `conflict` records too. A
-   conflict with a figure on one side is `src: figure`. A conflict proves only that
-   both quotes exist, not that they disagree, so it stays `llm-unverified` until the
-   second look confirms the reading.
+   conflict with a figure on one side is `src: figure`. A conflict's checks prove only
+   that both quotes exist, not that they disagree, so `doc check` holds it at
+   `llm-unverified` even when they pass, until the second look (`atlas-build`) confirms
+   the reading; `second-look record` then runs `doc check` again and makes it
+   `llm-verified`. One with a figure on one side stays `llm-unverified`.
 5. `embarch-atlas doc render`, `doc check`, `doc freeze`, as for a datasheet.
 6. **Do not link requirements to code here.** Proposed trace links are the
    engineer's to confirm, and they are made at build time, where the firmware is

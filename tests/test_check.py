@@ -6,7 +6,7 @@ import pytest
 
 import datasheet_synth as ds
 import mutate_records
-from embarch_atlas import check, cli, common, records as R
+from embarch_atlas import check, cli, common, records as R, secondlook
 
 
 @pytest.fixture()
@@ -915,3 +915,57 @@ def test_register_banks_key_the_address_check():
     assert issues == ["address 0x1 on bank embedded is also A"]
     int_bank = [reg("A", "A", "0x01", bank=1), reg("B", "B", "0x01", bank="1")]
     assert any("is also A" in x["issue"] for x in check.check_registers(int_bank)["structure"])
+
+
+# ---------------------------------------------------------------- a conflict waits for the second look
+
+def _conflict(prov):
+    return {"id": "syn1234.conflict.tsd", "kind": "conflict", "doc": ds.DOC_ID, "p": [1, 3], "src": "text",
+            "prov": prov, "q": ["Thermal shutdown at 165 C typical.", "When TJ exceeds 165 C the switch turns off."],
+            "refs": ["syn1234.rule.tsd", "syn1234.quirk.tsd_above_operating"],
+            "sources": [f"{ds.DOC_ID} p1: typical only", f"{ds.DOC_ID} p3: a hard threshold"],
+            "text": "page 1 gives thermal shutdown as typical only; page 3 states it as a hard threshold"}
+
+
+def test_an_llm_conflict_stays_unverified_until_the_second_look_confirms_it(doc, capsys):
+    atlas, docdir = doc
+    rid = "syn1234.conflict.tsd"
+    common.write_jsonl(docdir / "records" / "conflict.jsonl", [_conflict("llm-verified")])   # verified by an older check
+    rep = check.run_check(docdir, render=False)
+    x = result(rep, rid)
+    assert x["status"] == "verified" and x["prov"] == "llm-unverified"   # both quotes exist; that they disagree is unchecked
+    assert rep["summary"]["held_for_second_look"] == 1 and rep["held_for_second_look"] == [rid]
+    assert rep["summary"]["failed"] == 0                                   # held is not failing
+    check.print_summary(rep)
+    assert "1 conflict records pass their checks and stay llm-unverified" in capsys.readouterr().out
+    key = secondlook.checked_key(recs_by_id(docdir)[rid][1], docdir)
+    # a second look that did not confirm it leaves it there
+    common.write_json(secondlook.cache_path(atlas, key), {"kind": "second-look", "id": rid, "verdict": "conflict"})
+    assert result(check.run_check(docdir, render=False), rid)["prov"] == "llm-unverified"
+    # a confirmed verdict frozen under its current key verifies it
+    common.write_json(secondlook.cache_path(atlas, key), {"kind": "second-look", "id": rid, "verdict": "confirmed"})
+    rep = check.run_check(docdir, render=False)
+    assert result(rep, rid)["prov"] == "llm-verified" and rep["summary"]["held_for_second_look"] == 0
+    assert recs_by_id(docdir)[rid][1]["prov"] == "llm-verified"
+    # a change to what the look checked is a new key: back to unverified until it is looked at again
+    _rewrite(docdir, rid, text="page 1 and page 3 give different thermal shutdown thresholds")
+    assert result(check.run_check(docdir, render=False), rid)["prov"] == "llm-unverified"
+
+
+def test_a_failing_llm_conflict_is_not_verified_by_a_confirmed_verdict(doc):
+    atlas, docdir = doc
+    rec = {**_conflict("llm-unverified"), "q": ["Thermal shutdown at 999 C typical."]}   # a quote not on the page
+    common.write_jsonl(docdir / "records" / "conflict.jsonl", [rec])
+    common.write_json(secondlook.cache_path(atlas, secondlook.checked_key(rec, docdir)),
+                      {"kind": "second-look", "id": rec["id"], "verdict": "confirmed"})
+    x = result(check.run_check(docdir, render=False), rec["id"])
+    assert x["status"] == "failed" and x["prov"] == "llm-unverified"
+
+
+def test_a_deterministic_conflict_is_not_held(doc):
+    _, docdir = doc
+    common.write_jsonl(docdir / "records" / "conflict.jsonl", [_conflict("deterministic")])   # as mcu vote writes one
+    rep = check.run_check(docdir, render=False)
+    assert result(rep, "syn1234.conflict.tsd")["prov"] == "deterministic"
+    assert rep["summary"]["held_for_second_look"] == 0
+    assert recs_by_id(docdir)["syn1234.conflict.tsd"][1]["prov"] == "deterministic"

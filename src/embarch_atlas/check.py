@@ -62,7 +62,10 @@ Markdown checks (card.md, s/*.md):
 
 Then `prov` is set: an LLM record that passes becomes llm-verified, one that fails llm-unverified
 (it is never deleted); a figure or equation fact stays llm-unverified, since only a second look can
-verify it. A deterministic record whose twin agrees becomes deterministic+crosschecked.
+verify it. An LLM `conflict` that passes stays llm-unverified too, until a `confirmed` second-look
+verdict is frozen under its current key: its checks prove only that both quotes exist, not that they
+disagree (owner decision, 2026-11-17). A deterministic record whose twin agrees becomes
+deterministic+crosschecked; a deterministic conflict (`mcu vote`, `doc regparse`) is not held.
 Writes checks.json; exits 1 while anything is failing. Warnings (K rows not found, M numbers anchored
 only by a record on another page) are listed, never failing.
 """
@@ -77,7 +80,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from . import __version__, common, records as R
+from . import __version__, common, records as R, secondlook
 from .pdftext import normalize, page_file, resolve_pdf_path
 
 CARD_BUDGET = 1500
@@ -1430,12 +1433,26 @@ def _status(results: dict, rec: dict, extra: list[str]) -> tuple[str, list[str]]
     return "verified", issues
 
 
-def new_prov(rec: dict, status: str, twin: str | None) -> str | None:
+# Kinds whose checks cannot verify what an LLM record of them claims: a conflict's quotes exist, but
+# only a second look can say they disagree. One stays llm-unverified until that look confirms it.
+SECOND_LOOK_VERIFIES = ("conflict",)
+
+
+def held_for_second_look(rec: dict, status: str) -> bool:
+    """An LLM record whose checks pass and whose kind only the second look can verify."""
+    return rec.get("kind") in SECOND_LOOK_VERIFIES and rec.get("prov") in R.LLM and status == "verified"
+
+
+def new_prov(rec: dict, status: str, twin: str | None, confirmed: bool = False) -> str | None:
+    """The record's `prov` after this check. `confirmed`: a `confirmed` second-look verdict is frozen
+    under the record's current key, which a held kind needs before it is llm-verified."""
     prov = rec.get("prov")
     if prov in R.DETERMINISTIC:
         return "deterministic+crosschecked" if twin == "agree" else "deterministic"
     if prov in R.LLM:
-        return "llm-verified" if status == "verified" else "llm-unverified"
+        if status != "verified" or (held_for_second_look(rec, status) and not confirmed):
+            return "llm-unverified"
+        return "llm-verified"
     return prov
 
 
@@ -1497,6 +1514,9 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     xs = check_invariants(by_id, checks)
     xmap = {x["id"]: x for x in xs}
     emach, ewarn = check_machines(recs)
+    # second-look verdicts are frozen in <atlas dir>/cache/llm/, and a document lives in <atlas dir>/docs/
+    atlas_root = docdir.parent.parent if docdir.parent.name == "docs" else None
+    held: list[str] = []
     prov_changed = 0
     for i, (fname, r) in enumerate(pairs):
         invalid = i in bad
@@ -1524,7 +1544,12 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
             if x and not x["ok"]:
                 extra.append(f"X: expect {x['expect']} got {x['got']}")
         status, issues = _status({k: v for k, v in res.items() if k != "A_by"}, r, extra)
-        np_ = None if isinstance(r, R.RawLine) else new_prov(r, status, twin)
+        confirmed = False
+        if not invalid and held_for_second_look(r, status):
+            confirmed = atlas_root is not None and secondlook.frozen_verdict(atlas_root, r, docdir) == "confirmed"
+            if not confirmed:
+                held.append(r.get("id"))
+        np_ = None if isinstance(r, R.RawLine) else new_prov(r, status, twin, confirmed)
         if not isinstance(r, R.RawLine) and np_ != r.get("prov"):
             prov_changed += 1
             if np_ is None:
@@ -1595,6 +1620,7 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
         "S": len(S),
         "P": len(P) + sum(1 for x in results if any(i.startswith("P:") for i in x["issues"])),
         "T_over": [k for k, v in T.items() if v["over"]],
+        "held_for_second_look": len(held),
         "prov_changed": prov_changed, "rendered": rendered,
     }
     failing = summary["failed"] or summary["M"]["unanchored"] or S or P or summary["T_over"]
@@ -1620,7 +1646,8 @@ def run_check(docdir: Path, write: bool = True, render: bool = True, use_pdf: bo
     warnings += ewarn
     summary["warnings"] = len(warnings)
     report = {"doc": doc.doc_id, "tool": f"embarch-atlas {__version__}",
-              "pdf": doc.pdf_note, "summary": summary, "warnings": warnings, "records": results, "X": xs,
+              "pdf": doc.pdf_note, "summary": summary, "warnings": warnings, "records": results,
+              "held_for_second_look": held, "X": xs,
               "G": {k: v for k, v in greg.items() if k != "verdict"}, "M": M, "S": S, "P": P, "T": T,
               "files_written": written}
     if write:
@@ -1678,6 +1705,10 @@ def print_summary(rep: dict, out=None, limit: int = 12) -> None:
             w(f"T {k}: {v['tokens']} tokens > budget {v['budget']}")
     for x in rep.get("warnings", []):
         w(f"warning: {x}")
+    if s.get("held_for_second_look"):
+        ids = rep.get("held_for_second_look") or []
+        w(f"{s['held_for_second_look']} conflict records pass their checks and stay llm-unverified until the second "
+          f"look (atlas-build) confirms them: {', '.join(map(str, ids[:6]))}" + (" ..." if len(ids) > 6 else ""))
     w(f"prov changed on {s['prov_changed']} records{'; tables re-rendered' if s['rendered'] else ''}; "
       f"exit {s['exit']}")
 

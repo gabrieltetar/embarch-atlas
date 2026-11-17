@@ -55,7 +55,8 @@ embarch-atlas second-look record <atlas> verdicts.jsonl
 
 The queue lists facts this atlas **uses** that need an independent look, ranked: straps and
 pins the join reads first, then figure-only and `llm-unverified` facts, units printed once
-per row group, quirks, register semantics, condition-bearing limits. Items with a frozen
+per row group, quirks and conflicts (the PRD's too), register semantics, condition-bearing
+limits. Items with a frozen
 verdict for the same content hash are skipped, so each round only pays for new facts. Pick
 `N` from the budget: one batch is one set of pages, about 1.5K tokens a page to view.
 
@@ -63,9 +64,12 @@ For each batch, spawn a **fresh subagent** (Agent tool) and give it exactly the 
 `second-look prompt`: the PDF, the pages and what to extract, **never the first-pass
 values**. Collect its JSON Lines into `readings.jsonl`. **The verdict is not yours to
 make**: `second-look compare` decides it deterministically (numbers equal, same unit,
-same strap address, same bits; for quirks and rules the reader's supports/contradicts):
+same strap address, same bits; for quirks, rules and conflicts the reader's
+supports/contradicts):
 
-- `confirmed`: the record becomes `llm-verified` evidence (or stays `deterministic+crosschecked`);
+- `confirmed`: the record becomes `llm-verified` evidence (or stays `deterministic+crosschecked`).
+  An LLM `conflict` record is held at `llm-unverified` by `doc check` until this verdict, and
+  `record` runs `doc check` again on its document so it becomes `llm-verified`;
 - `conflict`: both readings are kept, and the fact appears in the mismatch report as a
   document-reading conflict;
 - `unresolved`: the reader could not find it; the record stays `llm-unverified`.

@@ -30,6 +30,8 @@ def test_reasons():
     assert sl.reasons({"kind": "field", "prov": "llm-verified"}, set()) == ["register semantics"]
     assert sl.reasons({"kind": "strap", "prov": "llm-verified"}, {"strap"}) == ["strap fact read by the join"]
     assert sl.reasons({"kind": "requirement", "prov": "llm-verified"}, {"strap"}) == []
+    assert sl.reasons({"kind": "conflict", "prov": "llm-unverified"}, set()) == ["llm-unverified", "conflict"]
+    assert sl.reasons({"kind": "conflict", "prov": "deterministic"}, set()) == []     # mcu vote's, doc regparse's
 
 
 def test_ask_never_carries_the_first_pass_value():
@@ -365,3 +367,83 @@ def test_open_drain_names_no_pin_state():
 def test_a_negated_pin_state_is_not_counted():
     assert sl.pin_states("SEL not floating") == set()
     assert sl.pin_states("must not be left floating, tie to VDD") == {"vdd"}
+
+
+# ---------------------------------------------------------------- the PRD's conflicts and their promotion
+
+PRD_PAGES = {1: "4.2 Charging shall be allowed from 0 C to 45 C.",
+             2: "6.1 The battery shall only be charged between 5 C and 40 C."}
+
+
+def _prd(ad: Path) -> str:
+    """A PRD whose two requirements disagree, and the LLM conflict record `doc check` holds unverified."""
+    d = ad / "docs" / "prd0@1"
+    write_json(d / "doc.json", {"doc_id": "prd0@1", "kind": "prd", "file": "prd0.pdf", "path": "../src/prd0.pdf",
+                                "sha256": "2" * 64, "pages": len(PRD_PAGES)})
+    (d / "pages").mkdir(parents=True)
+    for n, text in PRD_PAGES.items():
+        (d / "pages" / f"p{n:03d}.txt").write_text(text + "\n", encoding="utf-8")
+    write_jsonl(d / "records" / "requirement.jsonl", [
+        {"id": "prd0.req.4.2.charge-temp", "kind": "requirement", "doc": "prd0@1", "p": 1, "src": "text",
+         "prov": "llm-verified", "q": "Charging shall be allowed from 0 C to 45 C.", "rid": "prd.4.2.charge-temp",
+         "text": "charging allowed from 0 C to 45 C", "fw_relevant": True, "modality": "shall"},
+        {"id": "prd0.req.6.1.charge-temp", "kind": "requirement", "doc": "prd0@1", "p": 2, "src": "text",
+         "prov": "llm-verified", "q": "The battery shall only be charged between 5 C and 40 C.",
+         "rid": "prd.6.1.charge-temp", "text": "charge only between 5 C and 40 C", "fw_relevant": True,
+         "modality": "shall"}])
+    cid = "prd0.conflict.charge-temp"
+    write_jsonl(d / "records" / "conflict.jsonl", [
+        {"id": cid, "kind": "conflict", "doc": "prd0@1", "p": [1, 2], "src": "text", "prov": "llm-unverified",
+         "q": ["Charging shall be allowed from 0 C to 45 C.", "The battery shall only be charged between 5 C and 40 C."],
+         "refs": ["prd0.req.4.2.charge-temp", "prd0.req.6.1.charge-temp"],
+         "sources": ["prd0@1 4.2 p1: 0 C to 45 C", "prd0@1 6.1 p2: 5 C to 40 C"],
+         "text": "the charge temperature range is 0-45 C in 4.2 and 5-40 C in 6.1"}])
+    return cid
+
+
+def _conflict_prov(ad: Path, cid: str) -> str:
+    return next(r for r in read_jsonl(ad / "docs" / "prd0@1" / "records" / "conflict.jsonl") if r["id"] == cid)["prov"]
+
+
+def _look(tmp_path, ad, atlas, cid, claim):
+    q, _ = sl.build_queue(ad, atlas)
+    write_jsonl(atlas / "second_look_queue.jsonl", q)
+    readings = tmp_path / f"readings-{claim}.jsonl"
+    write_jsonl(readings, [{"id": cid, "reader": "second-look", "found": True, "p": 2, "claim": claim,
+                            "q": "The battery shall only be charged between 5 C and 40 C."}])
+    verdicts = tmp_path / f"verdicts-{claim}.jsonl"
+    write_jsonl(verdicts, sl.compare(ad, atlas, readings))
+    return sl.record(ad, atlas, verdicts)
+
+
+def test_the_prds_conflicts_are_queued_and_its_other_records_are_not(tmp_path):
+    ad, atlas = _project(tmp_path)
+    cid = _prd(ad)
+    q, _ = sl.build_queue(ad, atlas)
+    ids = {x["id"]: x for x in q}
+    assert cid in ids and not any(i.startswith("prd0.req") for i in ids)
+    assert ids[cid]["why"] == ["llm-unverified", "conflict"] and ids[cid]["p"] == [1, 2]
+    a = ids[cid]["ask"]
+    assert "really disagree" in a and "prd0@1 4.2 p1" in a and "prd0@1 6.1 p2" in a
+    assert "conflict" in sl.READER_RULES.split('"claim" is only for', 1)[1]
+
+
+def test_a_confirmed_conflict_becomes_llm_verified_and_stays_so(tmp_path):
+    from embarch_atlas import check
+    ad, atlas = _project(tmp_path)
+    cid = _prd(ad)
+    res = _look(tmp_path, ad, atlas, cid, "supports")
+    assert res["by_verdict"]["confirmed"] == 1 and res["promoted"] == [cid] and res["held"] == []
+    assert _conflict_prov(ad, cid) == "llm-verified"
+    rep = check.run_check(ad / "docs" / "prd0@1", render=False)           # the next doc check keeps it
+    assert next(x for x in rep["records"] if x["id"] == cid)["prov"] == "llm-verified"
+    q, st = sl.build_queue(ad, atlas)                                       # and the next queue reuses the verdict
+    assert cid not in {x["id"] for x in q} and st["frozen"] == 1
+
+
+def test_a_contradicted_conflict_stays_llm_unverified(tmp_path):
+    ad, atlas = _project(tmp_path)
+    cid = _prd(ad)
+    res = _look(tmp_path, ad, atlas, cid, "contradicts")
+    assert res["by_verdict"]["conflict"] == 1 and res["promoted"] == [] and res["held"] == []
+    assert _conflict_prov(ad, cid) == "llm-unverified"

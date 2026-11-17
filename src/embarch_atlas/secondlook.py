@@ -2,17 +2,23 @@
 
 The second, independent look happens when an atlas is built, on the facts that
 atlas uses (owner decision). A fact is *used* when it is a record of a document
-whose part is on the target's boards (by MPN), or of an MCU document (reference
-manual, errata, the MCU datasheet) for a peripheral in use. It *needs* a second
+whose part is on the target's boards (by MPN), of an MCU document (reference
+manual, errata, the MCU datasheet) for a peripheral in use, or a `conflict`
+record of the PRD, which every atlas of the product reads. It *needs* a second
 look when an LLM wrote it and it is flagged or high-stakes: figure-only,
 `llm-unverified`, a unit that is not in its quoted row (units printed once per
-row group), a condition-bearing limit, any limit or timing, a quirk, register
-semantics, or a strap, passthrough or pin fact the join reads.
+row group), a condition-bearing limit, any limit or timing, a quirk, a conflict,
+register semantics, or a strap, passthrough or pin fact the join reads.
 
 The queue carries what to extract and the pages to view, never the first-pass
 value. A verdict, once recorded, is frozen in `cache/llm/` under a key over the
 record's content and its pages' text, so the next atlas reuses it and only new
 or changed facts are queued.
+
+An LLM `conflict` is the one kind a verdict promotes: `doc check` holds it at
+`llm-unverified` until a `confirmed` verdict is frozen under its current key
+(owner decision, 2026-11-17), and `record` checks its document again so it
+becomes `llm-verified` by the same rule.
 """
 from __future__ import annotations
 
@@ -44,6 +50,7 @@ CHECKED = {
     "figure": ("fig", "caption", "what"),
     "passthrough": ("from_pin", "to_pin", "when"),
     "bus": ("iface", "byte_order", "reg_addr_bytes", "windows"),
+    "conflict": ("text", "sources", "refs"),
 }
 VERDICTS = ("confirmed", "conflict", "unresolved")
 SKIP_PROV = ("deterministic", "deterministic+crosschecked", "engineer-declared", "engineer-confirmed", "measured")
@@ -88,6 +95,8 @@ def reasons(r: dict, join_kinds: set[str]) -> list[str]:
             why.append("condition-bearing")
     if kind == "quirk":
         why.append("quirk")
+    if kind == "conflict":
+        why.append("conflict")
     if kind in ("register", "field"):
         why.append("register semantics")
     if kind == "bus":
@@ -110,6 +119,10 @@ def ask(r: dict) -> str:
         return f"register {r.get('name')}: address/offset, width, reset value, access"
     if k == "quirk":
         return f"check this claim against the page, quote the text that decides it: {r.get('text')}"
+    if k == "conflict":   # the claim is the disagreement; the sources' locations say where to look
+        where = "; ".join(str(s).split(": ", 1)[0] for s in r.get("sources") or [] if s)
+        return (f"do these passages really disagree, not only in wording or scope{f' ({where})' if where else ''}? "
+                f"Quote the text that decides it: {r.get('text')}")
     if k == "strap":
         return f"the device address (or mode) when pin {r.get('pin')} is {r.get('condition')}"
     if k == "passthrough":
@@ -181,6 +194,20 @@ def frozen_key(ad: Path, r: dict, doc_dir: Path) -> tuple[str, bool]:
     return key, False
 
 
+def frozen_verdict(ad: Path, r: dict, doc_dir: Path) -> str | None:
+    """The verdict frozen for this record as it is now, under its checked key or the older
+    whole-record key; None when there is none. Read-only: unlike frozen_key it writes no alias, so
+    `doc check` can ask it."""
+    for key in dict.fromkeys((checked_key(r, doc_dir), content_key(r, doc_dir))):
+        f = cache_path(ad, key)
+        if f.is_file():
+            try:
+                return read_json(f).get("verdict")
+            except (OSError, ValueError):
+                return None
+    return None
+
+
 def cache_path(ad: Path, key: str) -> Path:
     return ad / "cache" / "llm" / f"sl-{key}.json"
 
@@ -226,7 +253,8 @@ def mcu_record_used(r: dict, used_periph: set[str], chapter_pages: list[tuple[in
 # How much a wrong reading would hurt, per reason: facts the join reads feed every pin and
 # identity check; figure and unverified facts have no deterministic check at all.
 WEIGHTS = [("strap fact read by the join", 100), ("pin fact read by the join", 80), ("figure-only", 60),
-           ("llm-unverified", 50), ("unit not in the quoted row", 40), ("quirk", 30), ("register semantics", 20),
+           ("llm-unverified", 50), ("unit not in the quoted row", 40), ("quirk", 30), ("conflict", 30),
+           ("register semantics", 20),
            ("condition-bearing", 15), ("limit", 10), ("timing", 10)]
 
 
@@ -343,7 +371,9 @@ def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
     queue, stats = [], {"used_records": 0, "needs_look": 0, "frozen": 0, "by_reason": {}, "docs": {}, "frozen_keys": []}
     for d, v in sorted(docs.docs.items()):
         is_mcu = d in mcu_docs
-        if d not in part_docs and not is_mcu:
+        # the PRD is tied to no part, and every atlas of the product reads it: its conflicts are used
+        prd_only = d not in part_docs and not is_mcu and (v["doc"].get("kind") or "") == "prd"
+        if d not in part_docs and not is_mcu and not prd_only:
             continue
         chapter_pages = []
         wl = v["dir"] / "worklist.json"
@@ -356,6 +386,8 @@ def build_queue(ad: Path, atlas: Path) -> tuple[list[dict], dict]:
         for kind, recs in sorted(v["records"].items()):
             for r in recs:
                 if is_mcu and d not in part_docs and not mcu_record_used(r, used_periph, chapter_pages):
+                    continue
+                if prd_only and r.get("kind") != "conflict":
                     continue
                 stats["used_records"] += 1
                 why = reasons(r, {"strap", "passthrough", "pin"} if d in part_docs else set())
@@ -526,8 +558,32 @@ def record(ad: Path, atlas: Path, verdicts_path: Path) -> dict:
         with open(out_f, "a", encoding="utf-8") as f:
             for e in added:
                 f.write(json.dumps(e, sort_keys=True, ensure_ascii=False) + "\n")
+    promoted, held = promote_conflicts(docs, added)
     return {"added": len(added), "skipped": len(rows) - len(added), "warnings": warnings,
-            "by_verdict": {k: sum(1 for e in added if e["verdict"] == k) for k in VERDICTS}}
+            "by_verdict": {k: sum(1 for e in added if e["verdict"] == k) for k in VERDICTS},
+            "promoted": promoted, "held": held}
+
+
+def promote_conflicts(docs, added: list[dict]) -> tuple[list[str], list[str]]:
+    """Check again each document that just gained a `confirmed` verdict on a conflict record, so
+    `doc check`'s own rule (check.new_prov) makes the conflict `llm-verified`. (promoted ids, ids
+    still `llm-unverified`: a check of their own fails, or a figure is on one side.)"""
+    by_doc: dict[str, list[str]] = {}
+    for e in added:
+        if e["verdict"] == "confirmed" and e["kind"] == "conflict":
+            by_doc.setdefault(e["doc"], []).append(str(e["id"]))
+    promoted, held = [], []
+    if not by_doc:
+        return promoted, held
+    from embarch_atlas import check
+    for d, ids in sorted(by_doc.items()):
+        ddir = docs.docs.get(d, {}).get("dir")
+        prov = {}
+        if ddir is not None and (ddir / "doc.json").is_file():
+            prov = {x["id"]: x["prov"] for x in check.run_check(ddir)["records"]}
+        for i in ids:
+            (promoted if prov.get(i) == "llm-verified" else held).append(i)
+    return promoted, held
 
 
 # ---------------------------------------------------------------- blind readers
@@ -552,7 +608,9 @@ register {"addr","width","reset","access"}; figure {"numbers":[every number on i
 bus {"byte_order": "lsb-first"|"msb-first"|"unstated", "reg_addr_bytes", "windows": [{"from","to","addr"}]}
 (addr as a 7-bit hex address; when the part answers at more than one bus address, one window per register
 range with the address that serves it, every range included; else no windows).
-"claim" is only for quirk and rule items: does the page support or contradict the statement?"""
+"claim" is only for quirk, rule and conflict items: does the page support or contradict the statement?
+For a conflict item, "supports" means the passages really disagree; passages that differ only in
+wording, or that speak of different conditions, "contradict" it."""
 
 
 def reader_prompt(batch: dict) -> str:
@@ -812,7 +870,7 @@ def compare_one(first: dict, reading: dict) -> tuple[str, list[str]]:
     k = first.get("kind")
     vals = reading.get("values") or {}
     diffs, soft = [], []
-    if k in ("quirk", "rule"):
+    if k in ("quirk", "rule", "conflict"):
         c = reading.get("claim")
         if c == "supports":
             return "confirmed", []
@@ -967,6 +1025,13 @@ def cmd_record(args) -> int:
     atlas = resolve_atlas(ad, args.atlas)
     res = record(ad, atlas, Path(args.verdicts))
     print(f"recorded {res['added']} verdicts ({res['by_verdict']}), {res['skipped']} already recorded -> {atlas / 'second_look.jsonl'}")
+    if res["promoted"]:
+        print(f"  {len(res['promoted'])} confirmed conflicts are now llm-verified (doc check ran again on their "
+              f"documents): {', '.join(res['promoted'][:8])}" + (" ..." if len(res["promoted"]) > 8 else ""))
+    if res["held"]:
+        print(f"  {len(res['held'])} confirmed conflicts stay llm-unverified (a check of their own fails, or a figure "
+              f"is on one side; see the document's checks.json): {', '.join(res['held'][:8])}"
+              + (" ..." if len(res["held"]) > 8 else ""))
     for w in res["warnings"]:
         print(f"  warning: {w}", file=sys.stderr)
     return 0
@@ -998,7 +1063,8 @@ def register(sub, groups) -> None:
     p.add_argument("readings")
     p.add_argument("-o", "--out", required=True)
     p.set_defaults(func=cmd_compare)
-    p = g.add_parser("record", help="validate verdicts.jsonl, append to second_look.jsonl and freeze in cache/llm/")
+    p = g.add_parser("record", help="validate verdicts.jsonl, append to second_look.jsonl and freeze in cache/llm/; "
+                                    "doc check runs again on a document whose conflict was confirmed")
     p.add_argument("atlas")
     p.add_argument("verdicts")
     p.set_defaults(func=cmd_record)

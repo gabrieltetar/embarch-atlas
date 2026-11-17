@@ -334,6 +334,21 @@ Kinds and their own fields:
 `prov` classes: `deterministic`, `deterministic+crosschecked`, `llm-verified`,
 `llm-unverified`, `engineer-declared`, `engineer-confirmed`, `measured`.
 
+**An LLM-written `conflict` stays `llm-unverified` until the second look confirms it** (owner decision,
+2026-11-17). Its checks prove only that both quotes exist, not that they disagree, so `doc check` holds a
+conflict whose checks pass at `llm-unverified` and says how many it held. It becomes `llm-verified` only
+when a `confirmed` second-look verdict is frozen under its current key (`cache/llm/sl-<key>.json`, "Caching"):
+the reader is asked whether the passages really disagree and answers supports or contradicts, as for a
+quirk, and `second-look record` runs `doc check` again on each document that gained a confirmed conflict,
+so the promotion goes through the one rule (`check.new_prov`). A change to the conflict's `text`,
+`sources` or `refs`, or to a cited page, is a new key, and the conflict is held again until it is looked
+at again. A confirmed conflict with a figure on one side (`src: figure`) stays `llm-unverified`, as every
+figure fact does. The second look reaches a conflict wherever it is used: a part's datasheet, an MCU
+document for a peripheral in use, and the PRD, whose conflicts every atlas queues because the PRD is tied
+to no part. A conflict a producer wrote (`mcu vote`, `doc regparse`: `prov: deterministic`) is not held.
+Chosen over letting `doc check` verify it, which would put a reading that may not be a real disagreement
+on a card as verified.
+
 A deterministic record and an LLM record may share an id as **twins**; `facts.txt`
 keeps both lines and the `register` lookup merges them. `vote` writes its records
 under the **RM** doc (each cites an RM page), with `refs` pointing at SVD ids and
@@ -996,7 +1011,7 @@ An atlas id is `<target>@<commit12>`.
 | `missing --confirm <MPN> [--file <file>]` / `--confirm-all` / `--reject <MPN> --file <file>` | `missing` | accept or refuse a document for a part, recorded in `answers.toml` (`--confirm` with no file takes the part's strongest proposal; `--confirm-all` the first row of each part and the MCU row). `reference-manual` in place of `<MPN>` answers the MCU row |
 | `missing --kind <file> <kind>` | `missing` | override a document's kind, recorded in `answers.toml`; the manifest, and a prepped document's `doc.json`, are rewritten at once |
 | `doc prep <pdf>` | `pdftext` | doc.json, pages/, toc, page classes |
-| `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; a page cite outside 1..pages of `doc.json` (a record's `p`, a `p.N` in card.md or s/*.md) is reported as `P:` naming the unit and the page and fails, as a wrong-page quote does (the same test `doc freeze` records as `out_of_range`); then checks A–W on the rest (U finds the unit on the cited page as a token, so `ua` inside `guaranteed` is not `µA`, and reads a CamelCase symbol such as `LoadReg` whole rather than by its first letter), writes checks.json, sets `prov` |
+| `doc check <doc_id>` | `check` | schema first: a schema-invalid record is reported as `V:` (id and field), stays `llm-unverified` and is kept out of every other check; a line that is not a JSON object is reported as `V:` by file and line and written back as it was; a page cite outside 1..pages of `doc.json` (a record's `p`, a `p.N` in card.md or s/*.md) is reported as `P:` naming the unit and the page and fails, as a wrong-page quote does (the same test `doc freeze` records as `out_of_range`); then checks A–W on the rest (U finds the unit on the cited page as a token, so `ua` inside `guaranteed` is not `µA`, and reads a CamelCase symbol such as `LoadReg` whole rather than by its first letter), writes checks.json, sets `prov` (an LLM `conflict` whose checks pass stays `llm-unverified` until a confirmed second look, "Records") |
 | `doc sections <doc_id> [--add <sec>[,<sec>...] --why <text>] [--suggest [--used <log>] [--level N]]` | `standard` | a standard's worklist: add the sections asked for; list them with pages, tokens and status (todo, frozen, redo); rank the sections not asked for by the lookups that landed in them; rewrite the card's section list |
 | `doc render <doc_id>` | `render` | tier-2 tables and facts.txt from records |
 | `doc regparse <doc_id> --template ti\|maxim` | `regparse` | deterministic register records |
@@ -1009,7 +1024,7 @@ An atlas id is `<target>@<commit12>`.
 | `kconfig-extract <atlas>` | `build` | writes kconfig.json for an atlas that lacks it, from its build dir: no rebuild, and only while the workspace's Zephyr is the build's |
 | `join <atlas>` | `join` | dt.json, in_use.json, pins, checks, mismatches, MAP.md, graph.json |
 | `graph <atlas>` | `graph` | graph.json again from what `join` wrote (also run by `join`) |
-| `second-look queue <atlas> [--top N] [--diff-from <atlas> \| --used <usage log>]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page (`--diff-from`: only those another atlas's queue did not hold under the same `(id, key)`, as `update` batches; a fact that kept its id but changed a checked field is batched and counted as changed; `--used`: only those the usage log says answers returned, the `find_fact` and `register` record ids and the facts on pages a returned `part_card` cited, most used first, so reading effort goes to facts in use; `update` leaves the backlog alone and this is how it is drained); the blind reader's prompt; the deterministic verdict; record and freeze verdicts |
+| `second-look queue <atlas> [--top N] [--diff-from <atlas> \| --used <usage log>]` / `prompt <atlas> <batch>` / `compare <atlas> <readings> -o <verdicts>` / `record <atlas> <verdicts>` | `secondlook` | facts this atlas uses that need a second look, ranked and batched by page (`--diff-from`: only those another atlas's queue did not hold under the same `(id, key)`, as `update` batches; a fact that kept its id but changed a checked field is batched and counted as changed; `--used`: only those the usage log says answers returned, the `find_fact` and `register` record ids and the facts on pages a returned `part_card` cited, most used first, so reading effort goes to facts in use; `update` leaves the backlog alone and this is how it is drained); the blind reader's prompt; the deterministic verdict; record and freeze verdicts, then `doc check` again on each document that gained a confirmed `conflict`, which makes it `llm-verified` |
 | (in `join`) | `limits` | DT properties with a unit suffix, in SI, vs the part's limit/timing records: declared (`prop_limits`) or proposed by unit and name, which must also be the same quantity and role (else "mapping uncertain", not compared); abs max = error, recommended = warn, EC = info; a sense-resistor-scaled property is compared only when a record states the formula |
 | (in `join`) | `fwcheck` | every `fw_check` of a requirement or check record vs the build's devicetree, Kconfig and `atlas.toml` `[standards]`: one checks row per rule, `config-vs-standard` candidates, the guard-skipped rules folded ("Firmware configuration against a standard") |
 | `codecheck <atlas>` | `codecheck` | driver register constants (addresses, masks, resets, comment claims) vs the datasheet's register/field records, joined by (address, bit range); also run by `join` |
@@ -1108,8 +1123,8 @@ the model goes into the cache entry, so regrouping work items never invalidates
 frozen output. Second-look verdicts are frozen as `cache/llm/sl-<key>.json` and
 reused by every later atlas whose fact has the same key: a hash over **the fields the second look
 checks for that kind** (`secondlook.CHECKED`: a pin's number, name, direction, type, active level,
-I/O and power flow; a limit's symbol, condition, values and unit; ...) and the text of the cited
-pages. A field the look does not check (a description, a note, a quote) can change without voiding
+I/O and power flow; a limit's symbol, condition, values and unit; a conflict's text, sources and refs;
+...) and the text of the cited pages. A field the look does not check (a description, a note, a quote) can change without voiding
 the verdict; a verdict found under the older whole-record key is aliased to this one on first use.
 The compare checks every value the reader is asked for that the key covers: a limit or timing's `cond`
 by meaning (`text_value_verdict`: reworded is confirmed, clearly different words or
