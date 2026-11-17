@@ -56,7 +56,7 @@ class BuildError(RuntimeError):
 # ---------------------------------------------------------------- config
 
 def resolve_atlas_dir(args) -> Path:
-    """`--atlas-dir`, else `<fw>/embarch/atlas` when `--fw` is given, else the git toplevel's."""
+    """`--atlas-dir`, else `<fw>/embarch/atlas` when `--fw` is given, else the git toplevel's (the main clone's, from a linked worktree without one: `common.atlas_dir`)."""
     if getattr(args, "atlas_dir", None):
         return Path(args.atlas_dir).resolve()
     if getattr(args, "fw", None):

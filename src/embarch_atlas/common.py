@@ -8,15 +8,36 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 
+def _git_abs(cwd: Path, *args: str) -> Path | None:
+    r = subprocess.run(["git", "-C", str(cwd), "rev-parse", "--path-format=absolute", *args],
+                       capture_output=True, text=True)
+    return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def main_clone_atlas(start: Path | None = None) -> Path | None:
+    """The main clone's `embarch/atlas`, when `start` is in a linked worktree of it and that folder exists."""
+    here = start or Path.cwd()
+    common = _git_abs(here, "--git-common-dir")
+    top = _git_abs(here, "--show-toplevel")
+    if common is None or top is None or common.name != ".git" or common.parent == top:
+        return None
+    cand = common.parent / "embarch" / "atlas"
+    return cand if cand.is_dir() else None
+
+
 def atlas_dir(explicit: str | None = None, start: Path | None = None) -> Path:
-    """`<git toplevel>/embarch/atlas`, unless given explicitly."""
+    """`explicit`, else `<git toplevel>/embarch/atlas`; when that folder is missing (a linked worktree does not
+    carry the git-excluded atlas) and the main clone sharing the git common dir has one, the main clone's."""
     if explicit:
         return Path(explicit).resolve()
     top = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"], cwd=start or Path.cwd(),
         capture_output=True, text=True, check=True,
     ).stdout.strip()
-    return Path(top) / "embarch" / "atlas"
+    own = Path(top) / "embarch" / "atlas"
+    if not own.is_dir():
+        return main_clone_atlas(start) or own
+    return own
 
 
 def sha256_file(path: Path, chunk: int = 1 << 20) -> str:

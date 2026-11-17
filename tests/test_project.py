@@ -315,3 +315,30 @@ def test_status_command_names_the_worktree(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(fw)
     assert cli.main(["--atlas-dir", str(adir), "status"]) == 0
     assert "worktree;" not in capsys.readouterr().out
+
+
+def test_atlas_dir_in_a_worktree_falls_back_to_the_main_clones(tmp_path):
+    fw = make_fw(tmp_path)
+    project.init(fw)
+    adir = fw / "embarch" / "atlas"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "MAP.md").write_text("# map\n")
+    wt = tmp_path / "ws" / "fw-wt"
+    git(fw, "worktree", "add", "-q", "-b", "feature", str(wt))
+    assert not (wt / "embarch" / "atlas").exists()          # git-excluded: the worktree does not carry it
+    assert common.atlas_dir(start=wt) == adir.resolve()
+    sub = wt / "apps" / "demo"
+    assert common.atlas_dir(start=sub) == adir.resolve()
+    assert common.atlas_dir(start=fw) == adir.resolve()      # the main clone itself is unchanged
+    explicit = tmp_path / "elsewhere"
+    assert common.atlas_dir(str(explicit), start=wt) == explicit.resolve()   # --atlas-dir still wins
+
+
+def test_atlas_dir_keeps_its_own_folder_and_a_missing_main_atlas(tmp_path):
+    fw = make_fw(tmp_path)
+    wt = tmp_path / "ws" / "fw-wt"
+    git(fw, "worktree", "add", "-q", "-b", "feature", str(wt))
+    assert common.atlas_dir(start=wt) == wt.resolve() / "embarch" / "atlas"   # main has none either
+    (fw / "embarch" / "atlas").mkdir()
+    (wt / "embarch" / "atlas").mkdir()
+    assert common.atlas_dir(start=wt) == wt.resolve() / "embarch" / "atlas"   # a worktree's own atlas wins

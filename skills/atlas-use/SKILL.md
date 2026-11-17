@@ -1,6 +1,6 @@
 ---
 name: atlas-use
-description: How to answer a hardware question in a firmware repo that has an embarch-atlas (an `embarch/atlas/MAP.md` exists; if it is the "No hardware atlas is built yet" placeholder, there is no atlas yet) - which pin, net, part, register, limit, timing or quirk; what the schematic, a datasheet or the MCU reference manual says; whether the devicetree or a driver agrees with the hardware. Use before writing or reviewing a driver, a devicetree node or board code, and whenever a question depends on the hardware.
+description: How to answer a hardware question in a firmware repo that has an embarch-atlas (an `embarch/atlas/MAP.md` exists in this repo or, from a git worktree, in its main clone; if it is the "No hardware atlas is built yet" placeholder, there is no atlas yet) - which pin, net, part, register, limit, timing or quirk; what the schematic, a datasheet or the MCU reference manual says; whether the devicetree or a driver agrees with the hardware. Use before writing or reviewing a driver, a devicetree node or board code, and whenever a question depends on the hardware.
 ---
 
 # Using the hardware atlas
@@ -8,6 +8,15 @@ description: How to answer a hardware question in a firmware repo that has an em
 The atlas holds the project's schematics, datasheets, MCU reference manual and PRD,
 distilled, page-cited and joined to one firmware build. Read it; do not read the
 PDFs whole, and never answer a hardware question from memory.
+
+## In a git worktree
+
+A worktree does not carry the atlas (git-excluded), so `embarch/atlas/` is missing here and
+the MAP is not auto-loaded. That is not "no atlas": the main clone has it. Find it with
+`git rev-parse --path-format=absolute --git-common-dir` (strip the trailing `/.git`) and `Read`
+`<main clone>/embarch/atlas/MAP.md`; use that folder wherever this skill says `embarch/atlas/`.
+The `embarch-atlas` CLI and MCP server already resolve it from a worktree, so `find_text` and
+the other queries need no `--atlas-dir`. Never fall back to reading a PDF with an inline script.
 
 ## The protocol: MAP → card → section → page
 

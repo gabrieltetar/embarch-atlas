@@ -514,6 +514,12 @@ rule a configuration value can break. `join` evaluates every one against the pin
   atlas header, so `mark_map` leaves it alone and the first `join` that makes an atlas current replaces it.
   The `atlas-use` skill's step 1 knows the placeholder: it says no atlas is built, names the same two
   steps and stops before step 2; `tests/test_project.py` reads both and fails if the steps drift.
+- **A linked worktree does not carry the atlas** (the folder is git-excluded), and neither `CLAUDE.local.md`'s
+  import nor `embarch/atlas/MAP.md` exists there. The atlas folder is looked up in this order: `--atlas-dir`;
+  `<git toplevel>/embarch/atlas` when it exists; else, in a linked worktree whose git common dir belongs to
+  a main clone that has one, that main clone's `embarch/atlas` (`common.atlas_dir`, so the CLI and the MCP
+  server resolve it with no flag). Outside a worktree nothing changes. The `atlas-use` skill fires on an atlas
+  in the main clone too and tells the session to read that clone's `MAP.md`, since the auto-loaded import is not there.
 - When an atlas becomes current (its commit equals HEAD), `embarch/atlas/MAP.md` is
   replaced by that atlas's MAP. When HEAD moves past it (or a source changes), `status`
   puts a `> **Stale:**` line first in that MAP with the reasons and `/atlas-update`; the line
