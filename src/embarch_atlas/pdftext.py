@@ -1028,9 +1028,8 @@ def prep(pdf: Path, atlas: Path, doc_id: str | None = None, bbox: bool = False, 
             lab = ""
         if lab and lab != str(i + 1):
             labels[str(i + 1)] = lab
-    rel = os.path.relpath(pdf, atlas.resolve())
-    if rel.startswith(os.pardir * 1 + os.sep + os.pardir + os.sep + os.pardir):
-        rel = str(pdf)  # far away: keep it absolute
+    from . import library
+    rel = library.copy_rel(sha, library.keep_copy(atlas, pdf, sha).name)   # every later step reads the copy
     meta = {
         "doc_id": doc_id, "file": pdf.name, "path": rel, "sha256": sha,
         "kind": kind or (entry or {}).get("kind") or "datasheet",

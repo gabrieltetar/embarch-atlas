@@ -45,7 +45,9 @@ def test_prep_writes_identity_pages_and_toc(prepped):
     assert docdir.name == ds.DOC_ID
     meta = common.read_json(docdir / "doc.json")
     assert meta["pages"] == 5 and meta["sha256"] == common.sha256_file(pdf) and meta["rev"] == "2b"
-    assert pdftext.resolve_pdf_path(docdir, meta) == pdf.resolve()
+    copy = pdftext.resolve_pdf_path(docdir, meta)       # doc.json names the copy under files/<sha256>/
+    assert copy == (docdir.parent.parent / "files" / meta["sha256"] / pdf.name).resolve()
+    assert common.sha256_file(copy) == meta["sha256"]
     # pages are 1-based, raw pdftotext -layout
     assert "Electrical Characteristics" in (docdir / "pages" / "p002.txt").read_text()
     bbox = common.read_json(docdir / "pages" / "p002.bbox.json")

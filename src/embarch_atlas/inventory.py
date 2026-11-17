@@ -195,6 +195,13 @@ def sources_of(atlas_dir: Path, manifest: dict[str, Any] | None = None) -> Path:
     return project.fw_dir(atlas_dir, cfg) / label if label else project.sources_dir(atlas_dir, cfg)
 
 
+def doc_path(atlas_dir: Path, doc: dict[str, Any], manifest: dict[str, Any] | None = None) -> Path:
+    """Where a manifest document lies today: in the library when it came from there, else in the sources folder."""
+    if doc.get("library") and (manifest or {}).get("library"):
+        return Path(manifest["library"]) / (doc.get("library_path") or doc["file"])
+    return sources_of(atlas_dir, manifest) / doc["file"]
+
+
 def document_pages(atlas_dir: Path, doc: dict[str, Any], manifest: dict[str, Any] | None = None) -> list[str] | None:
     """Text per page of a manifest document: the cache, else the file itself when it still has that
     content (a manifest from before the cache), else None."""
@@ -206,7 +213,7 @@ def document_pages(atlas_dir: Path, doc: dict[str, Any], manifest: dict[str, Any
     if pages is not None:
         return pages
     try:
-        path = sources_of(atlas_dir, manifest) / doc["file"]
+        path = doc_path(atlas_dir, doc, manifest)
         if not path.is_file() or common.sha256_file(path) != sha:
             return None
     except (OSError, IndexError):
@@ -709,15 +716,22 @@ def diff_manifests(prev_docs: list[dict[str, Any]], docs: list[dict[str, Any]]) 
 
 def build_manifest(sources: Path, sources_label: str, previous: dict[str, Any] | None,
                    exclude: list[Path] = (), previous_sha256: str | None = None,
-                   overrides: dict[str, dict[str, Any]] | None = None, atlas_dir: Path | None = None) -> dict[str, Any]:
+                   overrides: dict[str, dict[str, Any]] | None = None, atlas_dir: Path | None = None,
+                   library: Path | None = None, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     docs = [inventory_file(p, rel, overrides, atlas_dir) for p, rel in list_sources(sources, exclude)]
+    if library is not None and atlas_dir is not None:
+        from . import library as lib
+        docs += lib.library_documents(atlas_dir, cfg or {}, library, docs, overrides or {}, exclude)
     mark_supersession(docs)
     if previous and previous.get("documents") == docs and previous.get("diff") is not None:
         diff = previous["diff"]  # nothing changed: keep the last real change visible, and stay byte-identical
     else:
         diff = diff_manifests((previous or {}).get("documents") or [], docs)
         diff["previous"] = (previous_sha256 or "unknown") if previous else None
-    return {"tool": TOOL, "sources": sources_label, "documents": docs, "diff": diff}
+    man = {"tool": TOOL, "sources": sources_label, "documents": docs, "diff": diff}
+    if library is not None:
+        man["library"] = str(library)
+    return man
 
 
 def _cell(s: Any) -> str:
@@ -740,6 +754,8 @@ def render_md(man: dict[str, Any]) -> str:
             extra.append(f"superseded by {r['superseded_by']}")
         if r.get("duplicate_of"):
             extra.append(f"duplicate of {r['duplicate_of']}")
+        if r.get("library"):
+            extra.append("from the library")
         if r["kind"] == "schematic" and "net_info" in r:
             extra.append("net info" if r["net_info"] else "NO net info")
         if r.get("kind_classified"):
@@ -773,9 +789,10 @@ def render_md(man: dict[str, Any]) -> str:
     return "\n".join(L) + "\n"
 
 
-def _prune_text_cache(atlas_dir: Path, docs: list[dict[str, Any]]) -> None:
-    """Drop the page text of documents no longer in the manifest."""
+def _prune_text_cache(atlas_dir: Path, docs: list[dict[str, Any]], also: set[str] = frozenset()) -> None:
+    """Drop the page text of documents no longer in the manifest (the library's scanned files keep theirs)."""
     keep = {text_cache_path(atlas_dir, d["sha256"]).name for d in docs}
+    keep |= {text_cache_path(atlas_dir, sha).name for sha in also}
     folder = Path(atlas_dir) / "inventory" / TEXT_DIR
     for f in folder.glob("*.txt.gz") if folder.is_dir() else []:
         if f.name not in keep:
@@ -793,14 +810,20 @@ def run(atlas_dir: Path, sources: Path | None = None) -> dict[str, Any]:
         label = src.resolve().relative_to(fw.resolve()).as_posix()
     except ValueError:
         label = str(src)
+    from . import library as lib
+    libdir = lib.library_dir(atlas_dir, cfg)
+    if libdir is not None and not libdir.is_dir():
+        raise FileNotFoundError(f"library dir {libdir} does not exist")
     out = atlas_dir / "inventory"
     prev_path = out / "manifest.json"
     previous = common.read_json(prev_path) if prev_path.is_file() else None
     prev_sha = common.sha256_file(prev_path) if previous else None
     man = build_manifest(src, label, previous, exclude=[atlas_dir], previous_sha256=prev_sha,
-                         overrides=answers.load_documents(atlas_dir), atlas_dir=atlas_dir)
+                         overrides=answers.load_documents(atlas_dir), atlas_dir=atlas_dir,
+                         library=libdir, cfg=cfg)
     common.write_json(prev_path, man)
-    _prune_text_cache(atlas_dir, man["documents"])
+    _prune_text_cache(atlas_dir, man["documents"], lib.index_shas(atlas_dir) if libdir is not None else set())
+    lib.adopt_prepped(atlas_dir, man)
     common.write_text(out / "manifest.md", render_md(man))
     return man
 

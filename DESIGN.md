@@ -14,7 +14,7 @@ sessions, driven by skills. Every fact carries a citation and a provenance class
 
 It is fully local. **The tool never fetches a document**: the engineer supplies
 every file, and a missing one becomes a question. A shared datasheet library (owner decision,
-2026-11-17; not built yet) keeps that true: it is a folder the engineer fills, read beside the
+2026-11-17) keeps that true: it is a folder the engineer fills, read beside the
 sources folder ("Where documents come from").
 
 ## Principles
@@ -72,13 +72,18 @@ inventory/
   manifest.json, manifest.md    every source file: kind, doc_id, parts, doc no., rev, date, pages,
                                 sha256, per-page hashes, text-layer coverage, net_info, kind_classified (when
                                 the engineer overrode the kind), needs_export (a Word PRD); diff vs previous
-  text/<sha256[:16]>.txt.gz     page text of each PDF: a cache keyed by content, outside the manifest
+  text/<sha256[:16]>.txt.gz     page text of each PDF: a cache keyed by content, outside the manifest (the library's
+                                scanned files keep theirs too)
+  library-index.json            only with `[project] library`: per library file its size, mtime, sha256 and
+                                record, so a large library is not hashed or read again on every run
   matches.json                  every rung result, before any answer, keyed by the documents and the BOM
   missing.md                    the proposed matches to confirm or reject, then questions for the engineer:
                                 missing datasheets, errata, declarations, Word PRDs to export; the documents
                                 nothing uses
   answers.toml                  the engineer's answers to missing.md (`missing --answer`, `--confirm`,
                                 `--reject`, `--kind`; below)
+files/<sha256>/<file name>      the copy of every file `doc prep` and `schematic` read, from the sources folder or
+                                the library; `doc.json` `path` names it; the tool never deletes one
 docs/<doc_id>/                  one per datasheet / RM / PRD / SVD, board-independent
   doc.json                      identity (file, sha256, kind, part, doc_no, rev, pages)
   toc.md, toc.json              outline: section id | title | pages | tier-2 file | tokens
@@ -963,6 +968,8 @@ fw = "/abs/path/to/fw-repo"          # the firmware git repo (a process in a lin
 west_topdir = "/abs/path/to/ws"      # the west workspace holding .west/
 west = "/abs/path/to/west"           # optional: the west executable
 sources = "embarch/hardware"         # where the engineer drops documents, relative to fw
+library = "/abs/path/to/datasheets"  # optional: a shared folder the engineer fills by hand, outside any firmware repo
+                                     # (`~` expands; relative: to fw). Read-only. Unset: the sources folder alone
 
 [mcu]
 part = "<mcu part>"                  # used to pick SVD/RM
@@ -1159,12 +1166,13 @@ query against the build's `.config`, so the extraction itself never depends on a
 
 ### Where documents come from
 
-Today every document is a file in the sources folder (`[project] sources`, relative to `fw`): `inventory`
-lists it (`inventory.list_sources`, `sources_of`), `doc prep` records its path in `doc.json`, and an answer in
-`answers.toml` names it by its sha256. A part with no document is a row of `missing.md`.
+A document is a file in the sources folder (`[project] sources`, relative to `fw`) or in the shared library
+below: `inventory` lists it (`inventory.list_sources`, `sources_of`, `doc_path`), `doc prep` copies it and
+records the copy's path in `doc.json`, and an answer in `answers.toml` names it by its sha256. A part with no
+document is a row of `missing.md`.
 
 **A shared datasheet library, and a copy of every file an atlas used, keyed by sha256** (owner decision,
-2026-11-17; not built yet, "Not yet built"):
+2026-11-17; built 2026-11-17 as below, in `library.py`):
 
 - **The library** is one local folder, outside any firmware repo, that the engineer fills by hand and any
   project's `atlas.toml` can name. `inventory` and `missing` read it beside the sources folder, so a datasheet
@@ -1181,6 +1189,36 @@ lists it (`inventory.list_sources`, `sources_of`), `doc prep` records its path i
   document in either folder is still a `missing.md` question. Chosen over an opt-in fetcher (alone, or filling
   the library), which would put network access and a licensing question inside a tool that is fully local, and
   over today's rule alone, which has every project supply the same datasheets again by hand.
+
+What was built, and the readings taken where the decision left room:
+
+- **The setting** is `[project] library` in `atlas.toml`. Unset, nothing in `library.py` runs and `inventory`
+  and `missing` write what they wrote before (the manifest has no `library` key). A set folder that does not
+  exist is an error, as a missing sources folder is, so a drive that is not mounted never reads as an empty
+  library.
+- **The scan.** `inventory` hashes and classifies the library's files, but a file enters the manifest only when
+  tied: to a BOM part by a part token (`coverage.doc_patterns`) or a rung (`coverage.match_document`); to the
+  MCU role by `[mcu] part` in its file name, title or pages 1-2; by an engineer's confirmation (the same
+  sha256, or the same file name, so a changed file reaches `missing` as "confirmed earlier; the file changed
+  since"); or by being a `[[boards]] pdf` the sources folder lacks. The others, which serve other projects, are
+  in neither the manifest nor "Supplied documents nothing uses". A tied file carries `library: true`, its
+  `file` relative to the library, and the manifest names the folder in `library`. A file with the sources
+  folder's sha256 is always listed, as `duplicate_of` the sources folder's file, which wins. A name both folders
+  have with different content becomes `library/<name>` with `library_path` for the real one. (The task
+  sketched `origin = "library"`; `origin` already holds the Zone.Identifier host, so the flag is `library`.)
+  Ties read the BOM, so `missing` runs `inventory` again first when a library is set: a library file is
+  picked up once the boards' parts are known, without an `inventory` of the engineer's own.
+- **The index** (`inventory/library-index.json`) holds each library file's size, mtime, sha256 and record; a
+  file whose path, size and mtime match, with the same kind override, is not read again.
+- **The copy.** `doc prep` and `schematic` copy the file they read to `files/<sha256>/<file name>` in the
+  atlas directory (once; an existing copy is kept), and `doc.json` `path` is `files/<sha256>/<file name>`,
+  which every reader (`resolve_pdf_path`, `secondlook`, `columns`, `regparse`, `check`) already resolves
+  against the atlas directory. This holds with no library set: the copy guards a replaced sources file too.
+  `inventory` copies the file of a document prepped before this, when the manifest's file still has the
+  sha256 `doc.json` records. A board PDF is found in the sources folder, else the library (`project.board_pdf`).
+- **Never**: no download, no network call, no write into the library folder (a test runs `inventory`,
+  `missing` and `doc prep` against a read-only library with sockets disabled).
+- **Not wired**: a schematic ingest's `source_file` still names the original path; only the copy is kept.
 
 ### Kinds
 
@@ -1343,9 +1381,6 @@ crop and reads it, and `declare-pin-name` records the result as `llm-unverified`
 
 Reading a board part's package from the BOM's footprint string, or from `variant` records, to fill
 `bindings.json` `packages` (today the engineer states it).
-
-The shared datasheet library and the sha256 copy of each file an atlas used ("Where documents come from"):
-decided, not built; today every document comes from the sources folder and is read where it lies.
 
 Anchoring the numbers inside a `fw_check` expression to the cited page: check N covers a requirement's `text`,
 and an expression, like an invariant's, is not a numeric claim yet. A `fw_check` over the role a build chooses

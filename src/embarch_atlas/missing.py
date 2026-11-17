@@ -132,6 +132,10 @@ def analyse(atlas_dir: Path) -> dict[str, Any]:
     if not man_path.is_file():
         raise FileNotFoundError(f"{man_path} not found; run `embarch-atlas inventory` first")
     manifest = common.read_json(man_path)
+    from . import library
+    if library.library_dir(atlas_dir, cfg) is not None and (atlas_dir / "boards").is_dir():
+        # the boards' parts decide which library files are tied to this project: read them again now
+        manifest = inventory.run(atlas_dir, inventory.sources_of(atlas_dir, manifest))
     nls = interfaces.load_netlists(atlas_dir)
     if not nls:
         raise FileNotFoundError(f"no boards/*/netlist.json under {atlas_dir}; run `embarch-atlas schematic` per board")

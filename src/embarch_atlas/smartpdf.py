@@ -996,6 +996,8 @@ def run(atlas_dir: Path, pdf: Path, board: str, geometry: bool = True) -> dict[s
     except ValueError:
         rel = None
     nl, bom, geo = parse_all(pdf, board, rel or str(Path(pdf).resolve()), geometry)
+    from . import library
+    library.keep_copy(atlas_dir, pdf)       # the file this netlist was read from, kept under its sha256
     out = atlas_dir / "boards" / board
     pinnames.apply(nl, pinnames.load(out / pinnames.OVERLAY))   # the engineer's names stay in effect across a re-run
     common.write_json(out / "netlist.json", nl)
@@ -1021,7 +1023,7 @@ def _resolve_pdf(adir: Path, pdf: str | None, board: str) -> Path:
             raise FileNotFoundError(f"no PDF given and no [[boards]] entry with label {board!r} in atlas.toml")
     p = Path(pdf)
     if not p.is_file() and cfg and not p.is_absolute():
-        p = project.sources_dir(adir, cfg) / pdf
+        p = project.board_pdf(adir, cfg, pdf)
     if not p.is_file():
         raise FileNotFoundError(f"{pdf}: no such file")
     return p

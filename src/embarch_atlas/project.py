@@ -94,6 +94,20 @@ def sources_dir(atlas_dir: Path, cfg: dict[str, Any]) -> Path:
     return src if src.is_absolute() else fw_dir(atlas_dir, cfg) / src
 
 
+def board_pdf(atlas_dir: Path, cfg: dict[str, Any], name: str) -> Path:
+    """A board's PDF: absolute as given, else in the sources folder, else (when the file is not there) in the
+    library; the sources folder's path when neither has it."""
+    p = Path(name or "")
+    if p.is_absolute():
+        return p
+    here = sources_dir(atlas_dir, cfg) / p
+    if here.is_file():
+        return here
+    from . import library
+    lib = library.library_dir(atlas_dir, cfg)
+    return lib / p if lib is not None and (lib / p).is_file() else here
+
+
 def board_entries(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return [b for b in cfg.get("boards") or [] if b.get("label")]
 
@@ -361,10 +375,8 @@ def git_head(fw: Path) -> tuple[str | None, bool]:
 def _current_schematic_shas(atlas_dir: Path, cfg: dict[str, Any]) -> dict[str, str | None]:
     """label -> sha256 of the board PDF today (None when the file is gone)."""
     out: dict[str, str | None] = {}
-    src = sources_dir(atlas_dir, cfg)
     for b in board_entries(cfg):
-        p = Path(b.get("pdf") or "")
-        p = p if p.is_absolute() else src / p
+        p = board_pdf(atlas_dir, cfg, b.get("pdf") or "")
         out[b["label"]] = common.sha256_file(p) if p.is_file() else None
     return out
 

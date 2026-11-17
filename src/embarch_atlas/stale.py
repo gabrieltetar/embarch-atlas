@@ -108,11 +108,9 @@ def reasons(atlas_dir: Path, atlas: Path) -> tuple[list[str], str | None]:
     h = head(atlas_dir)
     man = atlas_dir / "inventory" / "manifest.json"
     boards = project.board_entries(cfg) if cfg else []
-    src = project.sources_dir(atlas_dir, cfg) if cfg else atlas_dir
     pdfs = []
     for b in boards:
-        p = Path(b.get("pdf") or "")
-        pdfs.append(_stat(p if p.is_absolute() else src / p))
+        pdfs.append(_stat(project.board_pdf(atlas_dir, cfg, b.get("pdf") or "")))
     from . import bump
     sig = (h, _stat(atlas_dir / "atlas.toml"), _stat(atlas / "atlas.json"), _stat(atlas / "inputs.json"),
            _stat(man), _stat(atlas_dir / "inventory" / "answers.toml"), tuple(pdfs), _stat(bump.state_path(atlas_dir)))
