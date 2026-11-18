@@ -70,7 +70,7 @@ requirement per row. The `applies` lookup answers "what must a Hub support" from
 - [ ] b  per row, per role column (per initiator/responder column when the table splits a role): one record
 - [ ] c  a footnote or a column heading that adds a condition: `cond` as printed, and the footnote or
          heading line as a second `q` part; the unconditional cell stays its own record
-- [ ] d  doc check: L wants the item and the level in the quoted row
+- [ ] d  doc check: L wants the item and the level in the quoted row, the level under the `role` (and `as`) heading
 ```
 
 - `id`: `<std>.appl.<table>.<item-slug>.<role>[.<as>][.<cond-slug>]`.
@@ -78,8 +78,10 @@ requirement per row. The `applies` lookup answers "what must a Hub support" from
   Recommended is not Required.
 - `item_kind`: `sequence` or `message`. `role`: the column heading as printed. `as`: `initiator` or
   `responder` when the table splits the role. `table`: the caption's number.
-- `q`: the row as the text layer prints it. L cannot see columns: read the level from the right column, and
-  Read the page image when the row's cells are not in column order.
+- `q`: the row as the text layer prints it. L checks by word position that the level sits under the `role`
+  heading (and the `as` sub-heading), so `role` and `as` must name the column as printed; a cell whose level
+  comes from a footnote is "not checkable" there. Read the page image when the row's cells are not in column
+  order.
 
 Invented example. Table 3-2 of a demo link spec has a row `Link Reset  Normative  Normative  Optional
 Normative` under the headings Hub Initiator, Hub Responder, Node Initiator, Node Responder. Its Node Initiator

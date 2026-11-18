@@ -29,8 +29,10 @@ Record checks (per record, against the text layer of the pages it cites):
                      when `note` says where the force comes from (a table heading). Runs on standards only:
                      a PRD's requirements take their force from its own tables
   L  applicability   an `applicability` record's `item` and `level` are both in its quoted row (as words: a
-                     line break inside them is allowed, a longer name around them is not). It cannot tell
-                     which column of the row the level sits in
+                     line break inside them is allowed, a longer name around them is not), and the level
+                     sits under its `role` heading (its `as` sub-heading when the table splits the role),
+                     by word x-positions as K does; not checkable (no word boxes, row or heading not
+                     found) is reported as such, never as a pass
   E  state machines  a `transition`'s `from` and `to` are `state` records of its `machine`; every state a
                      `figure` record lists in `states` has a `state` record of the figure's `machine`. A
                      state record the machine's figure does not list is a warning
@@ -754,7 +756,7 @@ def record_checks(doc: DocText, rec: dict) -> dict:
         out["W"] = modality_check(rec.get("modality"), " ".join(qs), rec.get("note"))
     # L
     if kind == "applicability" and qs:
-        out["L"] = applicability_check(rec)
+        out["L"] = applicability_check(rec, doc)
     # O
     if numv:
         order = [float(numv[k]) for k in ("min", "nom", "typ", "max") if k in numv]
@@ -830,11 +832,73 @@ def in_row(term: Any, row: str) -> bool:
     return re.search(rx, row) is not None
 
 
-def applicability_check(rec: dict) -> str:
-    """Check L: 'ok', or which of the item and the level the quoted row does not hold."""
+def _span(words: list, toks: list[str]) -> list[float]:
+    """x centres of every run of consecutive words (left to right) that reads `toks`."""
+    n, out = len(toks), []
+    for i in range(len(words) - n + 1):
+        if [w[4] for w in words[i:i + n]] == toks:
+            out.append((words[i][0] + words[i + n - 1][2]) / 2)
+    return out
+
+
+def _level_column(doc: DocText, rec: dict) -> str:
+    """The column half of check L: 'ok', a finding, or 'not checkable: <why>'. Like K it reads word
+    x-positions: the level's words in the quoted row (find_row) must sit nearest the heading of the
+    record's `role` column, and of its `as` sub-column when the table splits the role."""
+    ps, qs = R.pages(rec), R.quotes(rec)
+    bands = doc.bands(ps[0]) if ps else []
+    if not bands:
+        return "not checkable: no-words"
+    row = doc.find_row(bands, normalize(qs[0]))
+    if row is None:
+        return "not checkable: row-not-found"
+    if len(qs) > 1 and in_row(rec.get("level"), normalize(" ".join(qs[1:]))):
+        return "not checkable: level-from-note"      # a footnote gives this cell its level, not the column
+    i0, n = row
+    rws = sorted(w for _, ws in bands[i0:i0 + n] for w in ws)
+    yc = bands[i0][0]
+    lvl = _span(rws, normalize(str(rec["level"])).split())
+    if not lvl:
+        return "not checkable: level-not-in-words"
+    above = [b for b in bands if b[0] < yc][::-1]            # nearest heading band first
+    role_t = normalize(str(rec["role"])).split()
+    head = next(((ws, _span(ws, role_t)[0]) for _, ws in above if _span(ws, role_t)), None)
+    if head is None:
+        return "not checkable: no-header"
+    role_ws, role_x = head
+    cols, target = [(w[0] + w[2]) / 2 for w in role_ws], role_x
+    if rec.get("as"):
+        as_t = normalize(str(rec["as"])).split()
+        leaf = next((ws for _, ws in above if _span(ws, as_t)), None)
+        if leaf is None:
+            return "not checkable: no-header"
+        cols = [(w[0] + w[2]) / 2 for w in leaf]
+        # a leaf column belongs to the role heading nearest it (headings are centred over their columns)
+        centres = sorted({(w[0] + w[2]) / 2 for w in role_ws})
+        mine = [c for c in _span(leaf, as_t) if min(centres, key=lambda x: abs(x - c)) == role_x]
+        if not mine:
+            return "not checkable: no-header"
+        target = mine[0]
+    for x in lvl:
+        if min(cols, key=lambda c: abs(c - x)) == target:
+            return "ok"
+    under = min(cols, key=lambda c: abs(c - lvl[0]))
+    return (f"level {rec['level']!r} sits in another column than {rec['role']!r}"
+            f"{' ' + repr(rec['as']) if rec.get('as') else ''}"
+            f" (nearest heading x={under:.0f}, the column's is x={target:.0f})")
+
+
+def applicability_check(rec: dict, doc: DocText | None = None) -> str:
+    """Check L: 'ok' when the item and the level are in the quoted row and the level sits in the record's
+    role column; else which of the item and the level the row does not hold, or the wrong column, or
+    'not checkable: <why>' when the word boxes or the headings cannot say."""
     row = normalize(" ".join(R.quotes(rec)))
     miss = [f"{k} {rec.get(k)!r}" for k in ("item", "level") if not in_row(rec.get(k), row)]
-    return "ok" if not miss else f"not in the quoted row: {', '.join(miss)}"
+    if miss:
+        return f"not in the quoted row: {', '.join(miss)}"
+    if doc is None or not rec.get("role"):
+        return "not checkable: " + ("no-role" if doc is not None else "no-words")
+    return _level_column(doc, rec)
 
 
 def check_machines(recs: list[dict]) -> tuple[dict[str, str], list[str]]:
@@ -878,6 +942,8 @@ def _is_fail(letter: str, result: Any) -> bool:
         return False
     if letter == "K":
         return isinstance(result, dict)
+    if letter == "L" and str(result).startswith("not checkable"):
+        return False
     return letter in FAILING
 
 

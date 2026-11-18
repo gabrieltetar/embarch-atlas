@@ -429,8 +429,14 @@ MAP.md lists it under "Other documents".
   without one fails W unless `note` says where the force comes from (a table heading). W runs on a
   standard's requirements only: a PRD's take their force from its own tables.
 - **Check L**: an `applicability` record's `item` and `level` are both in its quoted row, as whole names (a line
-  break inside one is allowed, a longer name around it is not). It does not know which column of the row a
-  level sits in, so a level read from the wrong column of the right row passes it.
+  break inside one is allowed, a longer name around it is not), and the level sits in the record's column: by
+  word x-positions, as K does, the level's words in the row (`find_row`) are nearest the heading of the
+  record's `role` (of its `as` sub-heading when the table splits the role; a leaf column belongs to the role
+  heading nearest it, so headings are expected centred over their columns). A level read from the
+  neighbouring role's column fails. It is "not checkable" (never a pass, and not a failure) when the page has
+  no word boxes (`no-words`; `--no-pdf` without `pages/*.bbox.json`), the row is not found, a heading is not
+  found (`no-header`), the level is not among the row's words, or a footnote (a second `q` part) carries the
+  level (`level-from-note`, a conditional cell). The summary's L count is the cells proved.
 - **Check E**: a `transition`'s `from` and `to` are `state` records of its `machine` (a name that is a state of
   another machine says so), and every state a `figure` record lists in `states` has a `state` record of the
   figure's `machine`; a figure that lists states and names no machine fails. A `state` record its machine's

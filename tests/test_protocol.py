@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,7 @@ PAGES = {
         "(1) Normative for a Node that reports faults.\n"
         "(2) Optional for a Hub that is a bridge.\n"),
     4: ("Table 3-2 Sequence Applicability\n"
-        "               Hub                       Node\n"
+        "                        Hub                  Node\n"
         "Sequence       Initiator    Responder    Initiator    Responder\n"
         "Link Reset     Normative    Normative    Optional     Normative\n"
         "Widget Swap    Shall Not    N/A          Optional     Recommended\n"),
@@ -135,6 +136,10 @@ def std(tmp_path: Path) -> Path:
         write_text(d / "pages" / f"p{p:03d}.txt", text)
     write_json(d / "toc.json", {"doc_id": DOC, "sections": [
         {"id": i, "title": t, "level": lv, "pages": pg, "tokens": 100} for i, t, lv, pg in SECTIONS]})
+    for p in (3, 4):                       # word boxes of the two tables: 6 points a character, 14 a line
+        write_json(d / "pages" / f"p{p:03d}.bbox.json", {"words": [
+            [c * 6, y * 14, (c + len(w)) * 6, y * 14 + 10, w] for y, line in enumerate(PAGES[p].split("\n"))
+            for c, w in ((m.start(), m.group()) for m in re.finditer(r"\S+", line))]})
     write_jsonl(d / "records" / "applicability.jsonl", cells())
     write_jsonl(d / "records" / "state.jsonl", machine_records())
     write_jsonl(d / "records" / "figure.jsonl", [FIGURE])
@@ -185,9 +190,11 @@ def test_check_l_holds_item_and_level_to_the_quoted_row(std):
     d = std / "docs" / DOC
     rep = check.run_check(d, write=False, use_pdf=False)
     appl = [x for x in rep["records"] if x["kind"] == "applicability"]
-    assert len(appl) == 16 and all(x["checks"]["L"] == "ok" and x["status"] == "verified" for x in appl), \
-        [x for x in appl if x["status"] != "verified"]
-    assert rep["summary"]["L"] == {"ok": 16, "of": 16} and rep["summary"]["failed"] == 0
+    assert len(appl) == 16 and all(x["status"] == "verified" for x in appl), [x for x in appl if x["status"] != "verified"]
+    notes = [x["id"] for x in appl if x["checks"]["L"] == "not checkable: level-from-note"]
+    assert len(notes) == 2 and all(".is-a-bridge" in i or ".reports-faults" in i for i in notes)     # a footnote's level
+    assert all(x["checks"]["L"] == "ok" for x in appl if x["id"] not in notes)
+    assert rep["summary"]["L"] == {"ok": 14, "of": 16} and rep["summary"]["failed"] == 0
     recs = cells()
     recs[0]["level"] = "Optional"                       # the Hub's Widget_Query cell, read from the wrong column
     recs[2]["item"] = "Widget"                          # a name the row prints only as part of a longer one
@@ -196,6 +203,43 @@ def test_check_l_holds_item_and_level_to_the_quoted_row(std):
     assert by[recs[0]["id"]]["checks"]["L"] == "not in the quoted row: level 'Optional'"
     assert by[recs[2]["id"]]["checks"]["L"] == "not in the quoted row: item 'Widget'"
     assert by[recs[0]["id"]]["status"] == "failed"
+
+
+def _l(d, recs):
+    write_jsonl(d / "records" / "applicability.jsonl", recs)
+    return {x["id"]: x for x in check.run_check(d, write=False, use_pdf=False)["records"]}
+
+
+def test_check_l_holds_the_level_to_the_role_column(std):
+    d = std / "docs" / DOC
+    recs = cells()
+    # right row, a level the row prints, but read from the neighbouring role's column
+    hub_q = next(r for r in recs if r["item"] == "Widget_Query" and r["role"] == "Hub")
+    hub_r = next(r for r in recs if r["item"] == "Widget_Reply" and r["role"] == "Hub")
+    swap = next(r for r in recs if r["item"] == "Widget Swap" and r["role"] == "Node" and r.get("as") == "responder")
+    hub_q["level"] = "Recommended"      # the Node's level in that row
+    hub_r["level"] = "Normative"        # the Node's level in that row
+    swap["level"] = "Optional"          # Node Initiator's, not Node Responder's
+    by = _l(d, recs)
+    assert by[hub_q["id"]]["checks"]["L"].startswith("level 'Recommended' sits in another column than 'Hub'")
+    assert by[hub_r["id"]]["checks"]["L"].startswith("level 'Normative' sits in another column than 'Hub'")
+    assert by[swap["id"]]["checks"]["L"].startswith("level 'Optional' sits in another column than 'Node' 'responder'")
+    assert by[hub_q["id"]]["status"] == "failed"
+    ok = [x for i, x in by.items() if x["kind"] == "applicability" and i not in {hub_q["id"], hub_r["id"], swap["id"]}]
+    assert all(x["checks"]["L"] in ("ok", "not checkable: level-from-note") for x in ok)
+
+
+def test_check_l_is_not_checkable_where_it_cannot_read_a_column(std):
+    d = std / "docs" / DOC
+    recs = cells()
+    one = next(r for r in recs if r["item"] == "Widget_Query" and r["role"] == "Hub")
+    one["role"] = "Spoke"                      # no such heading above the row
+    by = _l(d, recs)
+    assert by[one["id"]]["checks"]["L"] == "not checkable: no-header" and by[one["id"]]["status"] != "failed"
+    (d / "pages" / "p003.bbox.json").unlink()   # no word boxes for the page
+    by = _l(d, cells())
+    assert by[one["id"]]["checks"]["L"] == "not checkable: no-words"
+    assert all(x["status"] != "failed" for x in by.values())
 
 
 # ---------------------------------------------------------------- check E
@@ -231,7 +275,7 @@ def test_check_e_fails_an_edge_to_no_state_and_a_drawn_state_with_no_record(std)
 
 def test_doc_check_prints_l_and_e(std, capsys):
     assert cli.main(["--atlas-dir", str(std), "doc", "check", DOC, "--no-pdf"]) == 0
-    assert "L applicability rows 16/16 | E state machines 8/8" in capsys.readouterr().out
+    assert "L applicability rows 14/16 | E state machines 8/8" in capsys.readouterr().out
 
 
 def test_a_figure_with_no_states_and_a_machine_with_no_figure_are_not_checked(std):
@@ -432,7 +476,7 @@ def test_the_procedure_examples_are_valid_records():
         page = normalize(PAGES[r["p"]])
         assert normalize(r["q"]) in page, r["id"]
     appl = next(r for r in recs if r["kind"] == "applicability")
-    assert check.applicability_check(appl) == "ok"
+    assert check.applicability_check(appl) == "not checkable: no-words"      # the row holds both; no word boxes given
 
 
 # ---------------------------------------------------------------- render
