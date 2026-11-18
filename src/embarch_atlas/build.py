@@ -24,6 +24,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tomllib
@@ -557,12 +558,23 @@ def run_build(ad: Path, cfg: dict, commit_ref: str = "HEAD", force: bool = False
     # Kconfig now, while the workspace's Zephyr is the tree this build used (kconfig.py)
     from .dt import rel_bases
     from .kconfig import extract
+    from . import kconfig as KC
     try:
         write_json(out / "kconfig.json", extract(zdir, rel_bases(extra, ad)))
         extra["build"]["kconfig"] = "kconfig.json"
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as e:
         extra["build"]["kconfig"] = f"not extracted: {str(e)[-300:]}"
         log(f"warning: kconfig.json not written: {e}")
+    # the shell commands the image has, read from the ELF just copied (shellcmds.py)
+    from . import shellcmds
+    bases = rel_bases(extra, ad)
+    try:
+        write_json(out / "shell.json", shellcmds.for_build(dst / "zephyr.elf", tools, ad / "cache",
+                                                           lambda p: KC._rel(p, "/", bases), dst / ".config"))
+        extra["build"]["shell"] = "shell.json"
+    except (OSError, ValueError, RuntimeError, struct.error) as e:
+        extra["build"]["shell"] = f"not extracted: {str(e)[-300:]}"
+        log(f"warning: shell.json not written: {e}")
     write_json(out / "atlas.json", stamp(cfg, ad, commit, projects, fw, extra))
     log(f"{atlas_id}: built from {wt}; {ev['tus_in_worktree']}/{ev['tus']} TUs from the worktree, "
         f"0 from the main checkout; board dir {ev.get('board_dir')}")

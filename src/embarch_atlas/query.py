@@ -1,4 +1,4 @@
-"""The twenty-two atlas lookups, as plain functions returning markdown.
+"""The twenty-three atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -25,7 +25,7 @@ from .pdftext import tier2_files
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500, "schematic_text": 2500,
           "register": 1500, "pin_trace": 4000, "net_trace": 4000, "net_find": 4000, "parts": 3000, "mismatch_report": 4000,
-          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500, "decode": 2500, "rc_timing": 2500}
+          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500, "decode": 2500, "rc_timing": 2500, "shell_commands": 3500}
 BUDGET.update({"code": 3000, "states": 4000})
 
 
@@ -1657,12 +1657,43 @@ def rc_timing(a: Atlas, node: str, margin: float | None = None, rail: str | None
     return _cap(_header(src, "derived") + body, "rc_timing", offset)
 
 
+@_stamped
+def shell_commands(a: Atlas, command: str | None = None, build: str | None = None, offset: int = 0) -> str:
+    """The Zephyr shell commands the image has, read from its ELF: one root command's table (every subcommand with
+    mandatory and optional argument counts, help and the source line of the table; a dynamic set's getter and, for
+    the device list, the image's devices), or with no `command` the root commands. A subcommand compiled out by
+    Kconfig is absent. Says STALE when the ELF changed since the inventory was read."""
+    from . import buildq, shellcmds
+    try:
+        src = buildq.source(a, build)
+        if not src.elf or not src.elf.is_file():
+            raise FileNotFoundError(f"no zephyr.elf in this build ({src.elf})")
+        notes = []
+        sj = None if build or not a.atlas else a.atlas / "shell.json"
+        if sj and sj.is_file():
+            rec = common.read_json(sj)
+            checks = [(src.elf, "the atlas's zephyr.elf")]
+            if src.bdir:
+                checks.append((src.bdir / "zephyr" / "zephyr.elf", "the build dir's zephyr.elf"))
+            notes = [m for m in (shellcmds.stale(rec, f, label) for f, label in checks) if m]
+        else:
+            rec = shellcmds.for_build(src.elf, src.tools, src.cache, src.rel, src.dotconfig)
+            if not build:
+                notes = ["this atlas has no shell.json (built before it existed); read from its zephyr.elf now"]
+        extra, body = shellcmds.answer(rec, command)
+    except (LookupError, FileNotFoundError, OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as e:
+        return f"src: none\n\n{e}\n"
+    stale = any(n.startswith("STALE") for n in notes)
+    head = _header(f"{src.label} zephyr.elf", extra=extra + (" STALE" if stale else ""))
+    return _cap(head + "".join(f"{n}\n" for n in notes) + ("\n" if notes else "") + body + "\n", "shell_commands", offset)
+
+
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
     "find_text": find_text, "schematic_text": schematic_text,
     "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "net_find": net_find, "parts": parts, "mismatch_report": mismatch_report,
     "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
-    "applies": applies, "transitions": transitions, "decode": decode, "rc_timing": rc_timing,
+    "applies": applies, "transitions": transitions, "decode": decode, "rc_timing": rc_timing, "shell_commands": shell_commands,
 }
 TOOLS.update({"code": code, "states": states})
 
@@ -1719,6 +1750,9 @@ def register(sub, groups) -> None:
         (["--gate"], {"help": "<ref>-<pin> of the receiving pin, when the node has several"}),
         (["--r-tol"], {"type": float, "dest": "r_tol", "help": "resistor tolerance in percent, used as ASSUMED when bom.json has none"}),
         (["--c-tol"], {"type": float, "dest": "c_tol", "help": "capacitor tolerance in percent, used as ASSUMED when bom.json has none"}),
+        (["--offset"], {"type": int, "default": 0}))
+    add("shell_commands", shell_commands, (["command"], {"nargs": "?", "help": "a root shell command (default: list the roots)"}),
+        (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
         (["--offset"], {"type": int, "default": 0}))
     add("code", code, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
         (["--show"], {"choices": ["all", "def", "refs"], "default": "all"}),

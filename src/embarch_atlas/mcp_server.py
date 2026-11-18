@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's twenty-two lookups as an MCP server over stdio, and the live
+"""`embarch-atlas mcp`: the atlas's twenty-three lookups as an MCP server over stdio, and the live
 module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
@@ -230,6 +230,16 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         not one series R and one C, or a missing tolerance, regulator or threshold fact, is named, never approximated."""
         return query.rc_timing(view(), node, margin, rail, gate, r_tol, c_tol, offset)
 
+    @server.tool(annotations=READ_ONLY)
+    def shell_commands(command: str | None = None, build: str | None = None, offset: int = 0) -> str:
+        """The Zephyr shell commands the image has, read from its zephyr.elf (never the sources, so a subcommand
+        compiled out by Kconfig is absent). `command` names a root command (`i2c`): every subcommand with its
+        mandatory and optional argument counts, help text and the source line of its table; a dynamic set names its
+        getter and, for the device list, the image's devices. Without `command`, the root commands. `build` names a
+        build dir instead of the pinned one. Says STALE when the ELF changed since the inventory was read.
+        Nothing is sent to the board."""
+        return query.shell_commands(view(), command, build, offset)
+
     if live is None:
         live = live_mod.available(atlas_dir) is None
     if live:
@@ -311,6 +321,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's twenty-two lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's twenty-three lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)

@@ -142,6 +142,7 @@ atlases/<target>@<commit12>/
                                 pinctrl `psels` = `NRF_PSEL(fun, port, pin)`, pins `P0.04`); `pin_decoder`
                                 names which, null for any other family, and `checks.md` then says the
                                 pin-level checks had no input
+  shell.json                    the Zephyr shell commands the image has (`shellcmds.py`), read from its ELF
   kconfig.json                  every Kconfig symbol: value, assigning fragment, depends on (met?),
                                 selected/implied by, the default that applies, where defined.
                                 Written by `build` while the workspace's Zephyr is the build's; for an
@@ -554,11 +555,11 @@ rule a configuration value can break. `join` evaluates every one against the pin
   (`update.rm_todo`) just before it renders the MAP, so `update` and a hand-run `build` + `join`
   both list the chapters in use; a worklist left for another atlas is rewritten, not skipped.
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
-  (https://code.claude.com/docs/en/mcp.md), so its twenty-two lookups skip deferred tool search.
+  (https://code.claude.com/docs/en/mcp.md), so its twenty-three lookups skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.
 - A tool declares `readOnlyHint` only when it cannot change the board, because a host (plan
   mode, an auto-approval rule, a permission classifier, a worker's allowlist) trusts the hint.
-  The twenty-two lookups and `live_stacks` carry it. `shell` carries it because it runs only
+  The twenty-three lookups and `live_stacks` carry it. `shell` carries it because it runs only
   commands that match the `[live] read_only` list (default: `device list`, `kernel thread stacks`,
   `kernel uptime`, `i2c read *`, `i2c read_byte *`; `i2c scan` stays out, it addresses every device
   on the bus) and refuses any other, naming `shell_run`. `reg_read` carries it and refuses
@@ -571,7 +572,7 @@ rule a configuration value can break. `join` evaluates every one against the pin
 
 ## Query surface
 
-`query.py` holds the twenty-two lookups as plain functions returning markdown: `part_card` (`board="all"`
+`query.py` holds the twenty-three lookups as plain functions returning markdown: `part_card` (`board="all"`
 adds every board's refs and nets, a label one board's; no tool documents an empty string as a value: a model
 writes `"board": }` for it, and the call never reaches the server. **With no atlas** it still answers a board
 MPN: the MPN-to-document join `pins.json` would hold is made from the netlists and `coverage.py`
@@ -662,6 +663,8 @@ them for free; the server carries what files cannot.
 `decode` (`q decode <DT label> <hex bytes>`, MCP `decode(node, data)`): the reply frame of a command-then-read part, from the bytes the engineer already read (the shell's `i2c direct_read`, say). The label names the device in the join's I2C table (as `reg_read` does), its document's `frame` record gives each status bit by name (an `enum` meaning when the datasheet has one), and the count in decimal; the `transfer` record the node's properties select converts it, its range and unit read from the node (`dt:<property>` parameters), the equation as printed and the pages of both records cited. A count outside `[out_min, out_max]` gives the equation's own value, negative below the minimum, and is said to be below the minimum or above the maximum, never clamped: the case a driver's reading hides. It sends nothing to the board and needs no Core. A part with no `frame` record answers `src: none` and names it; a frame with no `transfer` record, a node property that selects or parameterises it and is not set, or a byte count that is not the frame's `size` answers with exactly what is missing, and the frame's status and count are still printed when the bytes fit. No layout is guessed. Unverified records are marked in the `src:` line.
 
 `rc_timing` (`rctiming.py`; `q rc-timing <board>:<net> [--margin P] [--rail NET] [--gate REF-PIN] [--r-tol P] [--c-tol P]`, MCP `rc_timing`): the worst-case time for a node of one series R and one C to cross the receiving pin's guaranteed level. Charging (the R goes to a rail, the C to ground, the node starts at 0 V) is `t = tau * ln(V / (V - VIH))`; discharging (the R goes to ground, `rail=` names the supply the node starts at) is `t = tau * ln(V / VIL)`. The minimum and maximum are taken over the R and C extremes and both ends of the rail's range. Inputs, each cited in the answer: R and C values and tolerances from `boards/<B>/bom.json` (`bomvals.py`'s fields, no second parser); the rail's range from the `limit` record for VOUT of the part whose datasheet says the rail's pin is a `source` (its min and max, or its nominal with an accuracy record in %); the guaranteed VIH (`min`) or VIL (`max`) from the receiving part's `limit` record, a number of volts or a fraction of the supply (`0.7*VDD`), picked by the pin's name and the supply named in `cond`. **Assumed, and named so in the answer**: a tolerance the caller passes (`r_tol`, `c_tol`) because the BOM has none, and a capacitor's temperature characteristic read from its EIA code (C0G/NP0, X7R, X5R, X7S, X6S, X7T, Y5V, Z5U) in the description, the class table's limits, not a datasheet fact. No margin is added; one passed is printed beside the result. A node that is not one R and one C (naming the parts found), a capacitor to a rail, several receiving pins without `gate=`, or a missing tolerance, regulator fact or threshold is reported as not handled or not computed, naming what is missing: nothing is approximated, no typical value is substituted. Not modelled: resistor temperature coefficient, DC-bias derating, ageing, leakage, the gate's input current; the time is to the *guaranteed* level, the gate may switch earlier. It reads the netlist, the BOM and the records; no atlas build is needed beyond the document join.
+
+`shell_commands` (`shellcmds.py`; `q shell-commands [<root>] [--build DIR]`, MCP `shell_commands(command, build)`, read-only): the Zephyr shell commands the pinned build's image has, read from `zephyr.elf` and never from the sources, so a subcommand guarded by a Kconfig that is off is absent, not listed. `build` writes the inventory as `shell.json` beside `kconfig.json` from the ELF it copies (an atlas without one is answered from its ELF on the spot and says so). Every root command is a `shell_cmd_entry` in the `shell_root_cmds` iterable section, found by section and not by symbol name (so `i2c` and any other digit-bearing name stays); it points at a `shell_static_entry` (syntax, help, subcommand set, handler, mandatory and optional argument counts) and a set is a zero-terminated array of those or, when dynamic, a getter. One call gives a root's table: each subcommand with its mandatory count (the command word included, as Zephyr counts it) and optional count (255 is the raw rest of the line, 254 skips the check), help text, handler symbol and, from `nm -l`, the file and line of the table or getter. A dynamic set is not run: its getter is named and, when the name says `device`, every object of the ELF's `device_area` is listed by the name its `struct device` carries; the getter's own filter and the devices' init state are runtime facts and are not evaluated. A build with no shell compiled in gets an inventory that says so. `shell.json` records the ELF's name, size, modification time and hash; the answer says `STALE` on its `src:` line and in the first line of the body when the atlas's copy, or the build dir's `zephyr.elf` it was copied from, no longer matches. `build=<dir>` reads that build's ELF fresh on every call. The inventory is a source `live.py`'s read-only `shell` allowlist could later read; it does not feed it today, because deriving what runs on a board without the host asking from a build could widen it.
 
 `code` and `states` (`codeq.py`) answer from the C sources a build compiled, the pinned build or the
 build dir `build=` names, so a variant, a scratch Zephyr worktree with west patches applied or a
@@ -849,7 +852,7 @@ scoring each declared interface.
 
 ## Live (`live.py`)
 
-The live module reads the running board. It is not part of the twenty-two lookups: the atlas never
+The live module reads the running board. It is not part of the twenty-three lookups: the atlas never
 touches hardware, so `reg_read` names addresses and decodes the answer, and embarch-core does the
 read (its decision 81) through the `embarch-api mem-read` subcommand, which resolves Core and its
 token the way every suite tool does. Core picks the probe and chip from the role's enrollment,
@@ -1089,12 +1092,12 @@ An atlas id is `<target>@<commit12>`.
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump, one at a time (the bump lock; a second is refused, exit 3), its outcome and reason in `bump/state.json`: stop while a translation is behind its source or the west workspace is not at the manifest's revisions (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
 | `hook install <target>... [--debounce S]` / `hook uninstall` / `hook run <target>...` | `bump` | opt-in bump on HEAD moves (below): write or remove the `post-commit`, `post-checkout`, `post-merge` and `post-rewrite` hooks; `run` is what a hook starts, detached |
-| `q <lookup>` | `query` | the twenty-two lookups (same answers as the MCP tools) |
+| `q <lookup>` | `query` | the twenty-three lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
-| `mcp` | `mcp_server` | the twenty-two lookups as an MCP server over stdio, and `reg_read` when Core answers |
+| `mcp` | `mcp_server` | the twenty-three lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ### When `update` stops
 
