@@ -93,3 +93,20 @@ def test_net_trace_pages_to_the_uncut_answer(atlas_dir, monkeypatch):
 
     a = query.Atlas(atlas_dir)
     assert_exact(monkeypatch, "net_trace", lambda o: query.net_trace(a, "A:V3", offset=o))
+
+
+def test_net_find_substring_glob_board_filter_and_no_match(atlas_dir):
+    a = query.Atlas(atlas_dir)
+    sub = query.net_find(a, "sig")                                   # case-insensitive substring, both boards
+    assert sub.startswith("src: boards/A,B netlist.json")
+    assert "A:SIG1  J3-2\n" in sub and "B:SIG2  J2-3\n" in sub
+    assert sub.index("A:SIG1") < sub.index("A:SIG2") < sub.index("B:SIG1")      # board, then net name
+    glob = query.net_find(a, "V3*")                                  # glob matches the whole name
+    assert "A:V3  " in glob and "A:V3_FILT  FB1-2 R2-1" in glob and "B:V3  J2-1 U5-1" in glob
+    assert "SIG1" not in glob
+    assert "A:V3  " in query.net_find(a, "V?")                       # `?` is one character
+    only_b = query.net_find(a, "V3*", board="B")
+    assert "B:V3  " in only_b and "A:V3" not in only_b
+    miss = query.net_find(a, "NOSUCH*")
+    assert "No net name matches 'NOSUCH*'" in miss and "A:" not in miss.split("matches", 1)[1].split("\n")[0].replace("A,B", "")
+    assert "not found" in query.net_find(a, "V3", board="Z")

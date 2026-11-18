@@ -21,11 +21,12 @@ is supplied but not translated yet is not asked for again: it is listed as waiti
 from __future__ import annotations
 
 import difflib
+import fnmatch
 import re
 from pathlib import Path
 from typing import Any
 
-from .join import Join, load_join, ohms, pin_norm, split_key
+from .join import Join, load_join, ohms, pin_norm, pin_sort_key, split_key
 
 PASSIVE_RE = re.compile(r"(R|C|L|FB)\d+\w*$")
 SERIES_RE = re.compile(r"(R|L|FB)\d+\w*$")
@@ -425,6 +426,37 @@ def answer(J: Join, query: str, board: str | None = None) -> tuple[str, str]:
     if J.answers_error:
         lines += ["", f"inventory/answers.toml ignored: {J.answers_error}"]
     return src, "\n".join(lines)
+
+
+GLOB_CHARS = "*?["
+
+
+def find(J: Join, pattern: str, board: str | None = None) -> tuple[str, str]:
+    """(src header text, body) for net_find: every net whose name matches `pattern`, one line each,
+    `<board>:<net>  <ref-pin> ...` sorted by board then net. A case-insensitive substring, or a glob
+    (matched on the whole name) when the pattern holds `*`, `?` or `[`."""
+    pat = pattern.strip()
+    if not pat:
+        return "", "net_find needs a pattern (a substring, or a glob with `*`, `?` or `[`)."
+    if board and board not in J.boards:
+        return "", f"board {board!r} not found. Boards: {', '.join(sorted(J.boards)) or 'none'}."
+    if any(c in pat for c in GLOB_CHARS):
+        low = pat.lower()
+        hit = lambda n: fnmatch.fnmatchcase(n.lower(), low)         # noqa: E731
+    else:
+        low = pat.lower()
+        hit = lambda n: low in n.lower()                            # noqa: E731
+    boards = [board] if board else sorted(J.boards)
+    src = "boards/" + ",".join(boards) + " netlist.json"
+    lines = []
+    for b in boards:
+        B = J.boards[b]
+        for n in sorted(x for x in B.nets if hit(x)):
+            pins = sorted(B.net_pins(n), key=lambda k: (split_key(k)[0], pin_sort_key(split_key(k)[1])))
+            lines.append(f"{b}:{n}  " + " ".join(pins))
+    if not lines:
+        return src, f"No net name matches {pattern!r} on {', '.join(boards)}."
+    return src, f"{len(lines)} nets match {pattern!r}.\n\n" + "\n".join(lines) + "\n\nTrace one with net_trace <board>:<net>."
 
 
 def walk_stops(J: Join) -> dict[str, int]:

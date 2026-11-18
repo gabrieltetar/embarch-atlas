@@ -218,7 +218,7 @@ def test_mismatch_report_leads_with_passed_checks(atlas_dir):
     assert "[connected-no-dt]" not in query.mismatch_report(query.Atlas(atlas_dir), cls="other")
 
 
-def test_mcp_server_lists_seven_tools_and_answers(atlas_dir):
+def test_mcp_server_lists_every_tool_and_answers(atlas_dir):
     pytest.importorskip("mcp")
     from embarch_atlas.mcp_server import build_server
 
@@ -491,3 +491,12 @@ def _q_flags(verb: str) -> set[str]:
     q = sub.choices["q"]
     (verbs,) = [x for x in q._actions if isinstance(x, argparse._SubParsersAction)]
     return {o for x in verbs.choices[verb.replace("_", "-")]._actions for o in x.option_strings}
+
+
+def test_net_find_is_a_read_only_mcp_tool_and_a_q_verb(atlas_dir):
+    pytest.importorskip("mcp")
+    from embarch_atlas.mcp_server import build_server
+
+    tools = {t.name: t for t in asyncio.run(build_server(atlas_dir, live=False).list_tools())}
+    assert "net_find" in tools and tools["net_find"].annotations.read_only_hint
+    assert len(query.TOOLS) == 19

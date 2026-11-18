@@ -80,6 +80,7 @@ truncation line remains; do not fall back to reading files by hand.
 | Which MCU pin drives X / what is on pin P | `atlases/<id>/pins.md` (or `pin_slice.txt`) |
 | Part on a net, its MPN, DNP | `boards/<label>/nets.md`, `parts.md` |
 | What feeds a rail, what enables it, a net no MCU pin reaches | `net_trace <board:net>` (MCP or `embarch-atlas q net-trace`) |
+| Every net whose name matches a pattern, on every board, with its pins (a bus family, all `*_EN`) | `net_find <pattern>` (substring, or a glob with `*` `?` `[`; `board=` narrows; CLI `q net-find`): `<board>:<net>  <ref-pin> ...`; trace one with `net_trace` |
 | A Kconfig symbol's value and why; several at once instead of a `grep` of `.config` | `config <SYMBOL>`; `symbols=[A, B, USB_*]` (CLI `q config A,B,USB_*`) gives one line each: value, the fragment or select/default that set it, an unmet `depends on`; add `build=<dir>` for a branch build |
 | A devicetree node: properties and where each was set, driver, pins | `dt_node <label or path>`; `build=<dir>` likewise |
 | What two builds differ in, instead of a `diff` of two `.config` or `zephyr.dts` | `config vs=<dir or pinned>` and `dt_node vs=<dir or pinned>`, with `build=<dir>` for the other side: only the differences, both values and where each was set; a symbol list or a node narrows it. A `[not given: ...]` mark says what a build on another Zephyr than the workspace's could not answer |
