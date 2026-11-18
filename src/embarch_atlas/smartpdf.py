@@ -50,7 +50,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import common, pinnames, project
+from . import bomvals, common, pinnames, project
 
 METHOD = "smartpdf-outline"
 SECTIONS = ("Components", "Nets", "Ports")
@@ -714,7 +714,9 @@ def summarize_props(props: dict[str, str]) -> dict[str, Any]:
     if value and value.lower() in DNI_VALUES:
         value = _first({k: v for k, v in props.items() if k != "Value"}, VALUE_KEYS)
     kind = props.get("Component Kind", "")
+    rated = bomvals.from_props(props, _first(props, ("Description",)), _first(props, ("Comment",)))
     return {
+        **rated,
         "mpn": _first(props, MPN_KEYS),
         "manufacturer": _first(props, MFR_KEYS),
         "value": value,
@@ -882,7 +884,9 @@ def parse_all(pdf: Path, board: str, source_file: str | None = None, geometry: b
             components[ref]["dni_evidence"] = ev
         bom.append({
             "ref": ref, "mpn": props.get("mpn"), "value": props.get("value"), "dni": bool(ev),
-            "description": props.get("description"), "datasheet_link": props.get("datasheet_link"),
+            "description": props.get("description"),
+            "tolerance": props.get("tolerance"), "voltage": props.get("voltage"), "power": props.get("power"),
+            "datasheet_link": props.get("datasheet_link"),
             "comment": props.get("comment"), "manufacturer": props.get("manufacturer"),
             "footprint": props.get("footprint"), "in_bom": props.get("in_bom", True) if props else None,
             "pins": len(P["pins"]),
@@ -1005,7 +1009,7 @@ def render_parts_md(nl: dict[str, Any], bom: list[dict[str, Any]]) -> str:
     L = [f"# Parts, board {b}", "",
          f"From `{nl['source']['file']}`: {c['parts']} physical parts ({c['symbol_parts']} symbol parts), "
          f"{c['parts_with_mpn']} with an MPN, {c['parts_dni']} not fitted.",
-         f"Line: `{b}:<ref> <mpn or comment> [<value>] [DNI] [no-BOM] p<page> | <pin>[/<name>]=<net> ...`; "
+         f"Line: `{b}:<ref> <mpn or comment> [<value>] [tol=<tolerance>] [DNI] [no-BOM] p<page> | <pin>[/<name>]=<net> ...`; "
          "`~` = auto-named net, `NC` = no net.", ""]
     for ref, C in comps.items():
         e = by_ref.get(ref, {})
@@ -1013,6 +1017,8 @@ def render_parts_md(nl: dict[str, Any], bom: list[dict[str, Any]]) -> str:
         bits = [f"{b}:{ref}", ident.replace(" ", "_")]
         if C["value"] and C["value"] != ident:
             bits.append(C["value"].replace(" ", ""))
+        if e.get("tolerance"):
+            bits.append("tol=" + e["tolerance"].replace(" ", ""))
         if C["dni"]:
             bits.append("DNI")
         if e.get("in_bom") is False:

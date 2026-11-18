@@ -80,6 +80,7 @@ truncation line remains; do not fall back to reading files by hand.
 | Which MCU pin drives X / what is on pin P | `atlases/<id>/pins.md` (or `pin_slice.txt`) |
 | Part on a net, its MPN, DNP | `boards/<label>/nets.md`, `parts.md` |
 | What feeds a rail, what enables it, a net no MCU pin reaches | `net_trace <board:net>` (MCP or `embarch-atlas q net-trace`) |
+| Tolerance, rating (voltage, power), MPN, value, DNP and pin nets of named parts (a divider, RC filter or sense resistor worst case) | `parts <board> <ref> [<ref> ...]` (CLI `q parts`): one line per ref, `tol=` and `rating=` read `unknown` when neither the schematic nor its description carries them; refs not on the board are named |
 | Every net whose name matches a pattern, on every board, with its pins (a bus family, all `*_EN`) | `net_find <pattern>` (substring, or a glob with `*` `?` `[`; `board=` narrows; CLI `q net-find`): `<board>:<net>  <ref-pin> ...`; trace one with `net_trace` |
 | A Kconfig symbol's value and why; several at once instead of a `grep` of `.config` | `config <SYM> [<SYM> ...]`: several in one call, a `*` pattern too; `symbols=[A, B, USB_*]` (CLI `q config A B USB_*` or `q config A,B,USB_*`) gives one line each: value, the fragment or select/default that set it, an unmet `depends on`; `--vs pinned` lists only the differences; add `build=<dir>` for a branch build |
 | A devicetree node: properties and where each was set, driver, pins | `dt_node <label or path>`; `build=<dir>` likewise |

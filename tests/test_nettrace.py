@@ -1,4 +1,5 @@
 """net_trace over a small synthetic two-board system (invented parts and nets)."""
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -110,3 +111,59 @@ def test_net_find_substring_glob_board_filter_and_no_match(atlas_dir):
     miss = query.net_find(a, "NOSUCH*")
     assert "No net name matches 'NOSUCH*'" in miss and "A:" not in miss.split("matches", 1)[1].split("\n")[0].replace("A,B", "")
     assert "not found" in query.net_find(a, "V3", board="Z")
+
+
+# ---------------------------------------------------------------- parts
+
+def _parts_atlas(atlas_dir):
+    write_json(atlas_dir / "boards" / "A" / "bom.json", [
+        {"ref": "R1", "mpn": "RC0402FR-0786K6L", "value": "86.6K", "dni": False,
+         "description": "RES SMD 86.6K OHM 1% 1/16W 0402", "tolerance": "1%", "voltage": None, "power": "1/16W"},
+        {"ref": "R2", "mpn": None, "value": "10K", "dni": True, "description": "RES 10K OHM", "tolerance": None,
+         "voltage": None, "power": None},
+        {"ref": "C1", "mpn": "CAP1", "value": "0.1uF", "dni": False, "description": "CAP CER 0.1UF 16V X7R 0402"},
+    ])
+    return query.Atlas(atlas_dir)
+
+
+def test_parse_description_reads_passives_and_never_guesses():
+    from embarch_atlas import bomvals
+
+    assert bomvals.parse_description("RES SMD 86.6K OHM 1% 1/16W 0402") == {"tolerance": "1%", "voltage": None, "power": "1/16W"}
+    assert bomvals.parse_description("CAP CER 0.1UF 16V X7R 0402") == {"tolerance": None, "voltage": "16V", "power": None}
+    assert bomvals.parse_description("CAP CER 10PF +/-0.25pF 50V C0G") == {"tolerance": "0.25pF", "voltage": "50V", "power": None}
+    assert bomvals.parse_description("RES 0.1 OHM ±5% 250mW 0603")["power"] == "250mW"
+    assert bomvals.parse_description("RES 10K OHM 0402") == {"tolerance": None, "voltage": None, "power": None}
+    assert bomvals.parse_description(None) == {"tolerance": None, "voltage": None, "power": None}
+    got = bomvals.from_props({"Tolerance": "0.1%"}, "RES 10K 1% 1/10W", None)
+    assert got == {"tolerance": "0.1%", "voltage": None, "power": "1/10W"}        # a dedicated field wins
+
+
+def test_parts_lookup_rows_unknowns_and_references_not_found(atlas_dir):
+    a = _parts_atlas(atlas_dir)
+    out = query.parts(a, "A", ["R1", "R2", "C1", "R99"])
+    assert out.startswith("src: boards/A bom.json + netlist.json")
+    assert "A:R1 mpn=RC0402FR-0786K6L value=86.6K tol=1% rating=1/16W dni=no" in out
+    assert "A:R2 mpn=" in out and " value=10K tol=unknown rating=unknown dni=yes" in out
+    assert "A:C1 mpn=CAP1 value=0.1uF tol=unknown rating=16V dni=no" in out     # an old bom.json: read from the description
+    assert "3 of 4 references found" in out and "Not found on A: R99." in out
+    assert "R1" in query.parts(a, "A", "R1,R2") and "not found" in query.parts(a, "Z", ["R1"])
+
+
+def test_parts_is_a_read_only_mcp_tool_and_a_q_verb(atlas_dir):
+    pytest.importorskip("mcp")
+    from embarch_atlas.mcp_server import build_server
+
+    tools = {t.name: t for t in asyncio.run(build_server(atlas_dir, live=False).list_tools())}
+    assert "parts" in tools and tools["parts"].annotations.read_only_hint
+    assert "parts" in query.TOOLS
+
+
+def test_parts_md_rows_carry_a_known_tolerance():
+    from embarch_atlas import smartpdf
+
+    nl = {"board": "A", "source": {"file": "x.pdf"}, "counts": {"parts": 2, "symbol_parts": 2, "parts_with_mpn": 0, "parts_dni": 0},
+          "components": {r: {"mpn": None, "value": "10K", "dni": False, "pins": {}, "pages": [1]} for r in ("R1", "R2")}, "nets": {}}
+    bom = [{"ref": "R1", "tolerance": "1%"}, {"ref": "R2", "tolerance": None}]
+    md = smartpdf.render_parts_md(nl, bom)
+    assert "A:R1 - 10K tol=1% p1" in md and "A:R2 - 10K p1" in md

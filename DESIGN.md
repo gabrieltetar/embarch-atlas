@@ -550,11 +550,11 @@ rule a configuration value can break. `join` evaluates every one against the pin
   (`update.rm_todo`) just before it renders the MAP, so `update` and a hand-run `build` + `join`
   both list the chapters in use; a worklist left for another atlas is rewritten, not skipped.
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
-  (https://code.claude.com/docs/en/mcp.md), so its nineteen lookups skip deferred tool search.
+  (https://code.claude.com/docs/en/mcp.md), so its twenty lookups skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.
 - A tool declares `readOnlyHint` only when it cannot change the board, because a host (plan
   mode, an auto-approval rule, a permission classifier, a worker's allowlist) trusts the hint.
-  The nineteen lookups and `live_stacks` carry it. `shell` carries it because it runs only
+  The twenty lookups and `live_stacks` carry it. `shell` carries it because it runs only
   commands that match the `[live] read_only` list (default: `device list`, `kernel thread stacks`,
   `kernel uptime`, `i2c read *`, `i2c read_byte *`; `i2c scan` stays out, it addresses every device
   on the bus) and refuses any other, naming `shell_run`. `reg_read` carries it and refuses
@@ -567,7 +567,7 @@ rule a configuration value can break. `join` evaluates every one against the pin
 
 ## Query surface
 
-`query.py` holds the nineteen lookups as plain functions returning markdown: `part_card` (`board="all"`
+`query.py` holds the twenty lookups as plain functions returning markdown: `part_card` (`board="all"`
 adds every board's refs and nets, a label one board's; no tool documents an empty string as a value: a model
 writes `"board": }` for it, and the call never reaches the server. **With no atlas** it still answers a board
 MPN: the MPN-to-document join `pins.json` would hold is made from the netlists and `coverage.py`
@@ -615,7 +615,7 @@ address; it reads the PDF per call and writes no usage row), `register` (MCU `PE
 register tabled as `<REG>_MSB` + `<REG>_LSB` bytes answers to `<REG>` as one 16-bit view; firmware's
 CMSIS struct member (`UCPD1.CFG1`) finds the SVD register at the same address, read from the device header
 that `mcu vote --header` recorded in the RM doc's `vote*.json`: no recorded header, no alias),
-`pin_trace` (MCU pins, from `pins.json`), `net_find` (every net whose name matches a pattern, across all boards: a case-insensitive substring, or a glob when it holds `*`, `?` or `[`; one line per net, `<board>:<net>  <ref-pin> ...`, sorted by board then net, `board=` narrows. It reads the netlists only, so it needs no atlas, and it is a verb of its own because `net_trace` takes one exact name and a bus family was otherwise a script over `boards/<B>/netlist.json`; its pins are the keys `net_trace` accepts), `net_trace` (any net, part pin or part on any board,
+`pin_trace` (MCU pins, from `pins.json`), `parts` (`board`, `refs`: per reference its MPN, value, tolerance, rating as voltage and power, DNP flag and the net on each pin, one line each, then the references not found on that board; `unknown` where neither the schematic's parameter nor the description carries a field. It reads `boards/<B>/bom.json` and `netlist.json` directly and needs no atlas; a `bom.json` written before the fields existed is read from its description. It exists because a worst-case divider or filter calculation needs each part's tolerance, which `parts.md` once dropped and a session then parsed `bom.json` by hand), `net_find` (every net whose name matches a pattern, across all boards: a case-insensitive substring, or a glob when it holds `*`, `?` or `[`; one line per net, `<board>:<net>  <ref-pin> ...`, sorted by board then net, `board=` narrows. It reads the netlists only, so it needs no atlas, and it is a verb of its own because `net_trace` takes one exact name and a bus family was otherwise a script over `boards/<B>/netlist.json`; its pins are the keys `net_trace` accepts), `net_trace` (any net, part pin or part on any board,
 read from the netlists through the join at query time: members across connector mates, then
 what feeds the net from datasheet pin records with `flow` only, the feeding parts' enables and
 their MCU port or pull, and the datasheets still needed; a part the engineer answered with a generic
@@ -833,14 +833,15 @@ across a port, so its `crosscheck` mark on a joined net is the picked name's she
 
 `issues` holds oddities worth an engineer's look (e.g. a printed comment naming a
 different part than the MPN parameter). `bom.json` rows are `{ref, mpn, value, dni,
-description, datasheet_link, comment, manufacturer, footprint, in_bom, pins}`.
+description, tolerance, voltage, power, datasheet_link, comment, manufacturer, footprint, in_bom, pins}`.
+`tolerance`, `voltage` and `power` (`bomvals.py`) are strings or `null`: a dedicated schematic parameter (`Tolerance`, `Voltage`, `Power` and their usual spellings) wins, otherwise they are read out of the description, then the Comment (`RES SMD 86.6K OHM 1% 1/16W 0402` gives `1%`, none, `1/16W`; a capacitor's `16V` is `voltage`). `null` means neither carried it and is never filled from the part kind or footprint. `parts.md` rows show a known tolerance as `tol=<x>`.
 `boards/system.json` holds `interfaces` (engineer-declared, never overwritten; `declare-interface` writes an entry there: a rule or a pin map, `prov`, a note),
 `proposed` (machine, scored), `name_check`, `inputs`, and a `board-to-board-check`
 scoring each declared interface.
 
 ## Live (`live.py`)
 
-The live module reads the running board. It is not part of the nineteen lookups: the atlas never
+The live module reads the running board. It is not part of the twenty lookups: the atlas never
 touches hardware, so `reg_read` names addresses and decodes the answer, and embarch-core does the
 read (its decision 81) through the `embarch-api mem-read` subcommand, which resolves Core and its
 token the way every suite tool does. Core picks the probe and chip from the role's enrollment,
@@ -1078,12 +1079,12 @@ An atlas id is `<target>@<commit12>`.
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump, one at a time (the bump lock; a second is refused, exit 3), its outcome and reason in `bump/state.json`: stop while a translation is behind its source or the west workspace is not at the manifest's revisions (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
 | `hook install <target>... [--debounce S]` / `hook uninstall` / `hook run <target>...` | `bump` | opt-in bump on HEAD moves (below): write or remove the `post-commit`, `post-checkout`, `post-merge` and `post-rewrite` hooks; `run` is what a hook starts, detached |
-| `q <lookup>` | `query` | the nineteen lookups (same answers as the MCP tools) |
+| `q <lookup>` | `query` | the twenty lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
-| `mcp` | `mcp_server` | the nineteen lookups as an MCP server over stdio, and `reg_read` when Core answers |
+| `mcp` | `mcp_server` | the twenty lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ### When `update` stops
 

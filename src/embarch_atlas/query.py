@@ -1,4 +1,4 @@
-"""The nineteen atlas lookups, as plain functions returning markdown.
+"""The twenty atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -24,7 +24,7 @@ from .pdftext import tier2_files
 
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500, "schematic_text": 2500,
-          "register": 1500, "pin_trace": 4000, "net_trace": 4000, "net_find": 4000, "mismatch_report": 4000,
+          "register": 1500, "pin_trace": 4000, "net_trace": 4000, "net_find": 4000, "parts": 3000, "mismatch_report": 4000,
           "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500}
 BUDGET.update({"code": 3000, "states": 4000})
 
@@ -1066,6 +1066,20 @@ def net_trace(a: Atlas, query: str, board: str | None = None, offset: int = 0) -
 
 
 @_stamped
+def parts(a: Atlas, board: str, refs: list[str] | str, offset: int = 0) -> str:
+    """Per reference on a board: MPN, value, tolerance, rating (voltage, power), DNP flag and the net on each pin; names the references not found."""
+    from . import bomvals
+    if not any((a.dir / "boards").glob("*/netlist.json")):
+        return _missing("netlists", "Run atlas-translate-docs on the schematics first.")
+    if isinstance(refs, str):
+        refs = refs.replace(",", " ").split()
+    src, body = bomvals.lookup(a.dir, board, refs, _json)
+    if not src:
+        return f"src: none\n\n{body}\n"
+    return _cap(_header(src, extra=f"board={board}") + body, "parts", offset)
+
+
+@_stamped
 def net_find(a: Atlas, pattern: str, board: str | None = None, offset: int = 0) -> str:
     """Every net whose name matches a pattern (substring, or a glob with `*` `?` `[`) across all boards, with its pins."""
     from . import nettrace
@@ -1551,7 +1565,7 @@ def transitions(a: Atlas, doc: str, state: str | None = None, on: str | None = N
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
     "find_text": find_text, "schematic_text": schematic_text,
-    "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "net_find": net_find, "mismatch_report": mismatch_report,
+    "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "net_find": net_find, "parts": parts, "mismatch_report": mismatch_report,
     "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
     "applies": applies, "transitions": transitions,
 }
@@ -1584,6 +1598,8 @@ def register(sub, groups) -> None:
     add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
     add("net_trace", net_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
     add("net_find", net_find, (["pattern"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))
+    add("parts", parts, (["board"], {}), (["refs"], {"nargs": "+", "help": "references, space- or comma-separated"}),
+        (["--offset"], {"type": int, "default": 0}))
     add("config", config, (["symbol"], {"nargs": "*", "help": "names or `*` patterns, space- or comma-separated"}),
         (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
         (["--vs"], {"help": "list only the differences against this build dir, or `pinned`"}), (["--offset"], {"type": int, "default": 0}))

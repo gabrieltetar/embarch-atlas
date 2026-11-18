@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's nineteen lookups as an MCP server over stdio, and the live
+"""`embarch-atlas mcp`: the atlas's twenty lookups as an MCP server over stdio, and the live
 module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
@@ -117,6 +117,13 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         sorted by board then net. A case-insensitive substring, or a glob when it holds `*`, `?` or `[`;
         `board` narrows to one. Use it to list a bus family (SPI*, *_EN); net_trace follows one net."""
         return query.net_find(view(), pattern, board, offset)
+
+    @server.tool(annotations=READ_ONLY)
+    def parts(board: str, refs: list[str], offset: int = 0) -> str:
+        """Schematic parts by reference on one board: `<board>:<ref> mpn= value= tol= rating= dni= | <pin>=<net> ...`.
+        Tolerance and rating (voltage, power) come from the schematic's parameters or its BOM description and read
+        `unknown` when neither carries them. Names the references not found. Use it for a worst-case divider or filter."""
+        return query.parts(view(), board, refs, offset)
 
     @server.tool(annotations=READ_ONLY)
     def config(symbol: str | None = None, symbols: list[str] | None = None, build: str | None = None,
@@ -282,6 +289,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's nineteen lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's twenty lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)
