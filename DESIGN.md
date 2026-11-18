@@ -788,7 +788,19 @@ overlay for those: `{"board", "pins": {<ref>: {<pin>: {"name", "prov", "note"}}}
 `declare-pin-name`, never by `schematic` (as `system.json`'s `interfaces` are never overwritten). `prov` is
 `engineer-declared`, `engineer-confirmed`, or `llm-unverified` (a name read off a rendered crop, ladder rung 4,
 until the engineer confirms it). `netlist.json` is the merged view every later step reads: each named pin
-carries `name_source`, `pdf-text` or `overlay:<prov>`, so a hand-typed name never looks like a printed one.
+carries `name_source`, `pdf-text`, `text-layer` or `overlay:<prov>`, so a hand-typed name never looks like a printed one.
+**Text-layer recovery.** A module symbol often prints its pad names as rotated words inside the outline, in a
+row beside the pad-number row, so no word sits just past the anchor. After `pin_name_for`, `recover_pad_names`
+reads the page's visible words for each pad of a 3+-pin part still unnamed: a pad on a vertical anchor (top or
+bottom row) takes the rotated words that share the x column of its printed number (its anchor's when the number
+is not printed); a pad on a horizontal anchor takes the upright words on its row, on its side of the outline.
+Words stay inside the symbol's outline (the popup rectangle, else the pad extent), and a number, designator,
+the part's comment, MPN or value, and another pad's number are never names. One candidate is a name, written
+with `name_source: "text-layer"` (a PDF-text name never gets this; an overlay entry still fills what stays blank);
+none or several leave the pad blank and put `<sheet>: pad <ref>-<pin> has no name: <reason>` in `issues` (kind
+`pad-name-unpaired` in `issues.md`). `counts` gains `pins_named_from_text_layer` and `pins_unpaired_text_layer`.
+`pins.md` prints a recovered name as `NAME (text-layer)`, and `pin_trace` carries `pin_name_source`. The
+pairing is by geometry only, so a reader treats it like an overlay name: a drawing's text, not a printed pin name.
 A PDF-text name always wins; an overlay entry for a pin the PDF names is left unused. A re-run of `schematic`
 re-applies the overlay, so its names stay in effect; `join` reads `netlist.json`, so `part_pin_name`,
 `pin_trace` and the pin map see them (`pin_trace` marks an overlay name with `pin_name_source`). `counts`
