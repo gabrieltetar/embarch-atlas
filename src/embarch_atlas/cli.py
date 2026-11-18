@@ -20,6 +20,7 @@ MODULES = [
     "pdftext",
     "pdfpages",
     "fetchtext",
+    "strain",
     "check",
     "render",
     "regparse",

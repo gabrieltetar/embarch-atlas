@@ -24,6 +24,9 @@ For one board and one firmware commit, an atlas under `<fw>/embarch/atlas/` (git
   the join depends on.
 - **Queries** over all of it: `embarch-atlas q ...` and the same twenty-three lookups as an MCP
   server.
+- **Derive helpers** outside the build: `embarch-atlas derive strain-budget <file>` turns a load case, a section and
+  a bridge readout into section modulus, strain, deflection, bridge output and noise-limited resolution, each
+  `(derived)` with its formula; it reads no atlas.
 - **A map for humans** (`graph.json`, drawn by embarch-ui's Atlas tab): app, middleware,
   drivers, SoC pins and every part on every board as a generic schematic symbol, each pin
   labelled with its net and, where the MCU drives it, the firmware's name for it.
