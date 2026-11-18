@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's twenty-one lookups as an MCP server over stdio, and the live
+"""`embarch-atlas mcp`: the atlas's twenty-two lookups as an MCP server over stdio, and the live
 module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
@@ -218,6 +218,18 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         to the board. A part whose frame layout or transfer function is not distilled gets what is missing."""
         return query.decode(view(), node, data, offset)
 
+    @server.tool(annotations=READ_ONLY)
+    def rc_timing(node: str, margin: float | None = None, rail: str | None = None, gate: str | None = None,
+                  r_tol: float | None = None, c_tol: float | None = None, offset: int = 0) -> str:
+        """Worst-case time range for a board node `<board>:<net>` to cross the receiving pin's guaranteed VIH (charging
+        from 0 V through an R to a rail) or VIL (discharging from the rail), `t = tau * ln(V / (V - Vth))`, over the
+        R and C tolerances (bom.json), the capacitor's EIA temperature characteristic and the rail's range from the
+        regulator's datasheet. Every input is cited or named ASSUMED; `(derived)`. `margin` (percent) is printed beside
+        the result, never folded in. `rail` names the supply of a discharging node, `gate` (`<ref>-<pin>`) the receiving
+        pin when several, `r_tol`/`c_tol` (percent) supply a tolerance bom.json lacks, marked assumed. A node that is
+        not one series R and one C, or a missing tolerance, regulator or threshold fact, is named, never approximated."""
+        return query.rc_timing(view(), node, margin, rail, gate, r_tol, c_tol, offset)
+
     if live is None:
         live = live_mod.available(atlas_dir) is None
     if live:
@@ -299,6 +311,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's twenty-one lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's twenty-two lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)

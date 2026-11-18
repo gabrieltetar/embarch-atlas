@@ -499,4 +499,4 @@ def test_net_find_is_a_read_only_mcp_tool_and_a_q_verb(atlas_dir):
 
     tools = {t.name: t for t in asyncio.run(build_server(atlas_dir, live=False).list_tools())}
     assert "net_find" in tools and tools["net_find"].annotations.read_only_hint
-    assert len(query.TOOLS) == 21
+    assert len(query.TOOLS) == 22

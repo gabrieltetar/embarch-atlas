@@ -1,4 +1,4 @@
-"""The twenty-one atlas lookups, as plain functions returning markdown.
+"""The twenty-two atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -25,7 +25,7 @@ from .pdftext import tier2_files
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500, "schematic_text": 2500,
           "register": 1500, "pin_trace": 4000, "net_trace": 4000, "net_find": 4000, "parts": 3000, "mismatch_report": 4000,
-          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500, "decode": 2500}
+          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500, "decode": 2500, "rc_timing": 2500}
 BUDGET.update({"code": 3000, "states": 4000})
 
 
@@ -1644,12 +1644,25 @@ def decode(a: Atlas, node: str, data: str, offset: int = 0) -> str:
     return _cap(_header("; ".join(srcs), prov, head_extra) + "\n".join(out) + "\n", "decode", offset)
 
 
+@_stamped
+def rc_timing(a: Atlas, node: str, margin: float | None = None, rail: str | None = None, gate: str | None = None,
+              r_tol: float | None = None, c_tol: float | None = None, offset: int = 0) -> str:
+    """Worst-case time for a board node (one series R and one C) to cross the receiving pin's guaranteed VIH or VIL, every input cited or named assumed."""
+    from . import rctiming
+    if not any((a.dir / "boards").glob("*/netlist.json")):
+        return _missing("netlists", "Run atlas-translate-docs on the schematics first.")
+    src, body = rctiming.compute(a, node, margin, rail, gate, r_tol, c_tol)
+    if not src:
+        return f"src: none\n\n{body}\n"
+    return _cap(_header(src, "derived") + body, "rc_timing", offset)
+
+
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
     "find_text": find_text, "schematic_text": schematic_text,
     "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "net_find": net_find, "parts": parts, "mismatch_report": mismatch_report,
     "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
-    "applies": applies, "transitions": transitions, "decode": decode,
+    "applies": applies, "transitions": transitions, "decode": decode, "rc_timing": rc_timing,
 }
 TOOLS.update({"code": code, "states": states})
 
@@ -1699,6 +1712,13 @@ def register(sub, groups) -> None:
         (["--machine"], {}), (["--offset"], {"type": int, "default": 0}))
     add("decode", decode, (["node"], {"help": "the part's devicetree label"}),
         (["data"], {"nargs": "+", "help": "the reply bytes, in hex, as read (one token per byte, or one run)"}),
+        (["--offset"], {"type": int, "default": 0}))
+    add("rc_timing", rc_timing, (["node"], {"help": "<board>:<net>"}),
+        (["--margin"], {"type": float, "help": "percent added to the result, printed beside it"}),
+        (["--rail"], {"help": "the supply net, for a node that discharges (its R goes to ground)"}),
+        (["--gate"], {"help": "<ref>-<pin> of the receiving pin, when the node has several"}),
+        (["--r-tol"], {"type": float, "dest": "r_tol", "help": "resistor tolerance in percent, used as ASSUMED when bom.json has none"}),
+        (["--c-tol"], {"type": float, "dest": "c_tol", "help": "capacitor tolerance in percent, used as ASSUMED when bom.json has none"}),
         (["--offset"], {"type": int, "default": 0}))
     add("code", code, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
         (["--show"], {"choices": ["all", "def", "refs"], "default": "all"}),
