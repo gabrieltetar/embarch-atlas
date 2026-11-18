@@ -18,6 +18,7 @@ MODULES = [
     "interfaces",
     "missing",
     "pdftext",
+    "pdfpages",
     "check",
     "render",
     "regparse",
