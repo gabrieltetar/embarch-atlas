@@ -38,6 +38,11 @@ NM = "\n".join([
     "20000300 00000800 b demo_workq_stack\t/w/fw/drivers/demo/demo.c:20",
     "20000b00 00000400 B z_main_stack\t/w/zephyr/kernel/init.c:55",
 ])
+NM_INST = NM + "\n" + "\n".join([
+    "20000f00 00000100 B demo_drv_stack_0\t/w/fw/drivers/demo/drv.c:30",
+    "20001000 00000100 B demo_drv_stack_1\t/w/fw/drivers/demo/drv.c:30",
+    "20001100 00000040 B demo_rx_buf_0\t/w/fw/drivers/demo/drv.c:31",
+])
 
 REL = [("/w/fw", "fw"), ("/w/zephyr", "zephyr")]
 
@@ -100,6 +105,16 @@ def test_stacks_pairs_by_kconfig_dir_then_name_word():
     assert "CONFIG_OTHER_STACK_SIZE=512" in out
     no_kconfig = F.stacks_answer(_img(), dotconfig, None)
     assert "CONFIG_DEMO_WORKQUEUE_STACK_SIZE (same size, name word" in no_kconfig
+
+
+def test_stacks_lists_per_instance_driver_stacks():
+    dotconfig = {"DEMO_DRV_THREAD_STACK_SIZE": "256"}
+    img = _img(OBJDUMP_H.replace("00000c00  20000300", "00001000  20000300"), NM_INST)
+    out = F.stacks_answer(img, dotconfig, None)
+    assert "4 stacks, 3584 B" in out
+    assert "demo_drv_stack_0" in out and "demo_drv_stack_1" in out
+    assert out.count("CONFIG_DEMO_DRV_THREAD_STACK_SIZE (same size, name word") == 2
+    assert "demo_rx_buf_0" not in out
 
 
 @pytest.fixture()

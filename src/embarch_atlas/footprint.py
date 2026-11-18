@@ -29,7 +29,7 @@ from .common import read_json, write_json
 
 SEC_RE = re.compile(r"^\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+2\*\*\d+")
 NM_RE = re.compile(r"^([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+(\w)\s+(\S+)(?:\t(.*):(\d+))?\s*$")
-STACK_NAME = re.compile(r"(^_k_thread_stack_|stacks?$|stack_area|_stk$)", re.I)
+STACK_NAME = re.compile(r"(^_k_thread_stack_|stacks?(_\d+)?$|stack_area|_stk$)", re.I)
 TOP = 25
 
 
@@ -232,7 +232,7 @@ def footprint_answer(img: dict, dt: dict | None, by: str = "dir", vs: dict | Non
 
 
 def _words(s: str) -> set[str]:
-    w = {x for x in re.split(r"[^a-z0-9]+", s.lower()) if x and x not in
+    w = {x for x in re.split(r"[^a-z0-9]+", s.lower()) if x and not x.isdigit() and x not in
          ("k", "thread", "stack", "stacks", "size", "area", "config", "z", "workq", "workqueue", "my", "tid", "g")}
     return w | {x[:3] for x in w if len(x) > 3}          # log / logging, pd / power...
 
