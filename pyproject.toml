@@ -12,7 +12,8 @@ dependencies = [
 [project.optional-dependencies]
 tokens = ["tiktoken>=0.7"]
 mcp = ["mcp>=2.2"]
-dev = ["pytest>=8"]
+cad = ["olefile>=0.47"]
+dev = ["pytest>=8", "olefile>=0.47"]
 
 [project.scripts]
 embarch-atlas = "embarch_atlas.cli:main"

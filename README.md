@@ -64,6 +64,8 @@ into the sources dir (`embarch/hardware/` by default), then in Claude Code:
 
 `embarch-atlas --help` lists every deterministic step the skills call.
 
+`embarch-atlas cad <project dir | .PrjPcb> [--rev <commit>] [--variant <name>]` reads an Altium project's `.SchDoc` sources (components, per-pin nets, a variant's not-fitted parts) without touching the atlas; it needs the optional extra: `uv pip install -e '.[cad]'`.
+
 ## Status
 
 First cut, exercised on one real two-board product: seven datasheets, an MCU reference

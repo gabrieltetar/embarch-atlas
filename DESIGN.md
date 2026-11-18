@@ -764,7 +764,8 @@ from a file `join` or `secondlook` wrote.
 
 First match wins; each rung cross-checks the one above.
 
-1. Native EDA project, when supplied (future adapter).
+1. Native EDA project, when supplied: today only as a read-only cross-check, `cad` (below), which writes no atlas
+   state and does not feed `schematic` or `join`; it is not yet an ingest source.
 2. **Embedded PDF netlist**: Altium Smart PDF bookmarks (`Sheet > Nets > NET >
    Pins > REF-PIN`) and component-parameter JavaScript popups (MPN, value, DNI).
    Invisible anchor words (`PI<ref>0<pin>`, `CO<ref>`, `NL<net>`, `PO<net>`, `_`
@@ -784,6 +785,57 @@ First match wins; each rung cross-checks the one above.
 Multi-part symbols (`U7A`/`U7B`) fold into one physical part. Interfaces between
 boards are **proposed** with a score (net-name agreement k of n under each
 candidate mating rule) and **confirmed** by the engineer.
+
+
+### Native EDA project: `cad` (ladder rung 1, read-only)
+
+`embarch-atlas cad` reads an Altium project's `.SchDoc` sources and prints what `netlist.json` holds for a PDF,
+so `tasks/atlas/083` can compare the two. It is a **cross-check, not an ingest source**: it writes nothing under
+the atlas dir and neither `schematic` nor `join` reads it. CLI only; there is no MCP tool, so the lookup count
+stays 23.
+
+- **Container.** `olefile` (optional extra `cad`, also in `dev`) opens each `.SchDoc` and its `FileHeader` stream;
+  it is imported lazily, and without it the verb exits 2 with one line naming the extra. No compound-file reader
+  is written here.
+- **Sheets** are the `.PrjPcb`'s `[DocumentN] DocumentPath=` entries ending in `.SchDoc`, never a directory glob
+  (a stray `.SchDoc` on disk is not read). **`--rev`** reads every file with `git show <rev>:./<path>` from the
+  project directory; it never checks out, writes or fetches.
+- **Records** (from the issue, run on real files by a throwaway script): 1 component, 2 pin, 17 power port,
+  18 port, 25 net label, 27 wire, 34 designator, 41 parameter. Pins and parameters follow `OWNERINDEX`; only pins
+  whose `OWNERPARTID` equals the component's `CURRENTPARTID` are kept. Records of one designator fold into one
+  physical part (a multi-part symbol is several records), its `unique_ids` and `part_ids` listing each.
+- **Connectivity, per sheet.** Wire vertices join; any point lying on a wire segment joins that wire
+  (T-junctions, and a label or pin end mid-wire); net labels, power ports and ports attach at their location; a
+  pin attaches at either end. A net is named by its power port, else net label, else port, else Altium's
+  `Net<ref>_<pin>`; several names on one net are kept in `issues`. Across sheets `smartpdf.join_board_nets`
+  joins by net name and by port name, so the output is comparable to the PDF's. Hierarchical sheet entries are
+  out of scope (EMB-112).
+- **Variants** live only in the `.PrjPcb`: `[ProjectVariantN]` `VariationN=Designator=..|UniqueId=..|Kind=1`.
+  A variation matches the component whose unique ID equals its `UniqueId`, not its designator; one whose ID is no
+  longer in the schematic is listed as `unknown_unique_ids`; a designator that differs from the matched
+  component's current one goes to `issues`. Other `Kind` values are noted in `issues` and not read.
+
+**Unverified against a real `.SchDoc`** (each is an assumption, marked `ASSUMED` in `cad.py`; the owner-side debt is
+one run on a real project, and a real file may disagree with any of these):
+
+1. The `FileHeader` length prefix: 4 bytes little-endian, high byte a flag (0 text, otherwise binary and skipped),
+   low 24 bits the body length; the body is NUL-terminated Windows-1252. `%UTF8%`-prefixed keys are not read.
+2. The first record (a `HEADER` key) is dropped, and `OWNERINDEX` counts from 0 over the records after it.
+3. Coordinates: `LOCATION.X` in whole units plus `LOCATION.X_FRAC` in 1/100000 of a unit, both integers.
+4. A pin's two ends: `LOCATION` is one end; the other is `PINLENGTH` (whole units) away in the direction the
+   low two bits of `PINCONGLOMERATE` give (0 +x, 1 +y, 2 -x, 3 -y).
+5. A port, net label and power port attach at their `LOCATION` point alone (a port's extent is not used).
+6. Part number and value come from parameter (record 41) `NAME`s: part number from `MPN`, `Manufacturer Part
+   Number`, `Part Number` and close variants; value from `Value`, else `Comment`. A part with neither shows `-`.
+7. The designator is record 34's `TEXT`, and two records of one designator are parts of one physical part.
+8. `.PrjPcb` is an INI file; a variant's name is its `Description=`; `Kind=1` is not fitted; a unique ID may be
+   written as a path, and its last backslash segment compared case-insensitively is the ID.
+9. A wire's crossing of another wire's interior with no vertex there joins it (as the task specifies for any
+   point on a segment); Altium itself may need a junction there.
+
+The tests build a project from a test-only compound-file writer (`tests/schdoc_synth.py`: version 3, no mini
+stream, so every `FileHeader` is padded above the 4096-byte cutoff), with `olefile` opening the result as the
+check on the writer. It proves the reading logic against the assumptions above, not against Altium.
 
 ### `boards/<label>/netlist.json`
 
@@ -1062,6 +1114,7 @@ An atlas id is `<target>@<commit12>`.
 | `init <fw>` | `project` | writes `atlas.toml` with defaults; wires `CLAUDE.local.md` and `.mcp.json` |
 | `status` | `project` | atlases, which is current, which are stale; for an atlas with no build, the outputs absent for that reason and the ones reduced |
 | `inventory` | `inventory` | manifest + per-page hashes + diff vs last |
+| `cad <project dir \| .PrjPcb> [--rev <commit>] [--variant <name>] [--json]` | `cad` | reads an Altium project's `.SchDoc` sources (sheets from the `.PrjPcb`) and prints components (designator, part number, value, unique ID) and per-pin nets; with `--variant` the not-fitted parts, matched by unique ID; `--json` is `netlist.json`-shaped with `method: "altium-schdoc"`; read-only, writes no atlas state; needs the `cad` extra (`olefile`); refuses in one line (exit 2) a missing `olefile`, an unknown variant, a missing or ambiguous project |
 | `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md, issues.md (path printed) |
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
 | `declare-pin-name <board> <ref> <pin> <name> [--prov llm-unverified \| engineer-declared \| engineer-confirmed] [--note <text>]` | `pinnames` | records a name for a pin the schematic PDF left unnamed in `boards/<board>/pin_names.json` and merges it into that board's `netlist.json`, `nets.md` and `parts.md` (default `--prov llm-unverified`); refuses a board with no netlist, a ref the netlist lacks, a pin number the part lacks, and a pin the PDF's text already named; the same board/ref/pin again replaces its entry |
