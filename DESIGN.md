@@ -801,6 +801,15 @@ none or several leave the pad blank and put `<sheet>: pad <ref>-<pin> has no nam
 `pad-name-unpaired` in `issues.md`). `counts` gains `pins_named_from_text_layer` and `pins_unpaired_text_layer`.
 `pins.md` prints a recovered name as `NAME (text-layer)`, and `pin_trace` carries `pin_name_source`. The
 pairing is by geometry only, so a reader treats it like an overlay name: a drawing's text, not a printed pin name.
+**What `checks.md` says about a pad left unnamed.** A pad the netlist gives a net and no pin name is skipped by every
+check that joins through the name (the DT column, the datasheet pin, the far end), and `pins.md` shows it with an empty
+port. `mismatch.run` lists each one as a `pad-without-name` candidate naming the part, pad and net, and counts them in
+the check `MCU pads with a net have a pin name`; a pad named from the text layer or an overlay is named, so it is not
+one. A DT pin (a `uses_by_pin` key) that no row's port matches is a `dt-pin-unresolved`
+candidate naming each DT node and property, counted in `DT pins resolve to a schematic pad` (a build is needed, so it is
+under Not run without one): a pin check that could not run reads as unresolved, never as passing. The two are the
+atlas's own report of what the ingest puts in `issues.md`. Tested on synthetic netlists and PDFs only; whether a
+real board's unnamed pads are the shape `recover_pad_names` handles is for its ingest to say.
 A PDF-text name always wins; an overlay entry for a pin the PDF names is left unused. A re-run of `schematic`
 re-applies the overlay, so its names stay in effect; `join` reads `netlist.json`, so `part_pin_name`,
 `pin_trace` and the pin map see them (`pin_trace` marks an overlay name with `pin_name_source`). `counts`

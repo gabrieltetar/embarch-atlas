@@ -35,7 +35,7 @@ ORDER = [
     "reg-mask-vs-field", "reg-reset-vs-datasheet", "reg-address-unknown", "document-reading-conflict",
     "pinctrl-func-vs-net-name", "polarity-vs-net-name", "open-drain-no-pull", "pull-conflict",
     "pull-to-other-rail", "far-end-level-above-tolerance", "dt-pin-not-connected", "dt-no-binding", "dt-no-driver", "symbol-vs-datasheet",
-    "pin-package-ambiguous", "i2c-identity-unresolved", "reg-comment-vs-datasheet", "dt-limit-needs-formula", "dt-limit-outside-ec",
+    "pin-package-ambiguous", "pad-without-name", "dt-pin-unresolved", "i2c-identity-unresolved", "reg-comment-vs-datasheet", "dt-limit-needs-formula", "dt-limit-outside-ec",
     "exti-line-shared", "pin-shared-in-dt", "connected-no-dt", "dni-on-path",
     "polarity-resolved",
 ]
@@ -60,6 +60,10 @@ SETTLE = {
     "dt-no-driver": "enable the driver (Kconfig) or disable the node: its pinctrl is never applied",
     "symbol-vs-datasheet": "the MCU symbol against the datasheet pinout table",
     "pin-package-ambiguous": "declare the part's package in boards/bindings.json `packages` (the BOM's footprint says which)",
+    "pad-without-name": "the pad's name from the part's datasheet pinout or the schematic page (the netlist has none: the symbol prints "
+                        "it where the reader does not find it); declare it in the netlist overlay",
+    "dt-pin-unresolved": "the DT pin against the MCU symbol: no schematic pad resolves to it, so no pin check ran on it (a pad of the "
+                         "module left without a name, or a pin of another package)",
     "i2c-identity-unresolved": "translate the part's datasheet strap table, or declare it in boards/straps.jsonl",
     "exti-line-shared": "only one port per EXTI line can interrupt (EXTICR selects one): check which one is armed at run time",
     "pin-shared-in-dt": "is the far end a wired-OR (open-drain) line? then sharing is by design",
@@ -83,7 +87,7 @@ NEEDS_BUILD = [
     ("pinctrl function vs net name", _NO_DT), ("GPIO polarity vs net name", _NO_DT),
     ("DT pull vs board pull", _NO_DT), ("DT pin reaches the board", _NO_DT),
     ("connected pin has a DT use", _NO_DT), ("one DT owner per pin", _NO_DT),
-    ("DT node has a binding", _NO_DT),
+    ("DT node has a binding", _NO_DT), ("DT pins resolve to a schematic pad", _NO_DT),
     ("DT node has a driver in the build", "no devicetree, ELF or compile_commands.json: they come from a build"),
     ("one armed port per EXTI line", _NO_DT),
     ("I2C parts per family on the bus vs DT nodes", _NO_DT), ("I2C strap addresses vs DT reg", _NO_DT),
@@ -339,6 +343,33 @@ def run(J, stamp: dict, pins: dict, netlist_only: bool = False, no_build: bool =
             if not ok:
                 R.cand("symbol-vs-datasheet", r["key"], f"{r['key']}: symbol says {r['name']}, datasheet says {r['ds_name']}",
                        [r.get("ds_cite") or ""], "MCU symbol pin name vs datasheet")
+
+    # ---- pads the netlist leaves without a name, and DT pins that therefore reach no pad
+    if mcu:
+        R.check("MCU pads with a net have a pin name", "netlist (pin names, text-layer recovery)")
+        for r in rows:
+            if r["net"] and not r["name"]:
+                R.check("MCU pads with a net have a pin name", "", 1, 0)
+                R.cand("pad-without-name", r["key"], f"{r['key']} is on net {mb}:{r['net']} but the netlist gives the pad no pin name: "
+                       "every check that joins through the name (DT use, datasheet pin, far end) skips it",
+                       [f"schematic {r['key']} net {mb}:{r['net']}", "ingest issues.md: pad-name-unpaired, when the text layer could not pair it"],
+                       "MCU pads with a net have a pin name")
+            elif r["net"]:
+                R.check("MCU pads with a net have a pin name", "", 1, 1)
+        if dt_known:
+            R.check("DT pins resolve to a schematic pad", "DT, netlist")
+            have = {r["port"] for r in rows if r["port"]}
+            lost: dict[str, list[dict]] = collections.defaultdict(list)
+            for pin, uses in J.uses_by_pin.items():
+                R.check("DT pins resolve to a schematic pad", "", 1, int(pin in have))
+                if pin not in have:
+                    lost[pin] += uses
+            for pin, uses in sorted(lost.items()):
+                no_name = [r["key"] for r in rows if r["net"] and not r["name"]]
+                nodes = sorted({f"{u['node']} {u['prop']}" for u in uses})
+                R.cand("dt-pin-unresolved", pin, f"DT uses {pin} ({'; '.join(nodes[:3])}{'; ...' if len(nodes) > 3 else ''}) but no schematic pad "
+                       f"resolves to that port, so no pin check ran on it (unnamed pads with a net: {len(no_name)})",
+                       [f"DT {u['node']} {u['prop']} @ {u.get('loc')}" for u in uses], "DT pins resolve to a schematic pad")
 
     # ---- a part whose pin numbers mean different signals per package, with no package declared
     R.check("pin names per package", "datasheet pin records (`package`), boards/bindings.json packages")

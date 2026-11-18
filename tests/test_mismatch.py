@@ -202,3 +202,26 @@ def test_mcu_port_spellings():
     from embarch_atlas import join
     assert join.mcu_port("PA4-WKUP") == "PA4" and join.mcu_port("P0.4") == "P0.04" and join.mcu_port("P1.10/AIN3") == "P1.10"
     assert join.mcu_port("VDD") is None and join.mcu_port(None) is None
+
+
+def test_a_pad_with_a_net_and_no_name_is_a_finding_and_its_dt_pin_reads_unresolved(tmp_path):
+    ad, atlas = make_project(tmp_path)
+    run_join(ad, atlas)
+    by = _classes(read_json(atlas / "mismatches.json"))
+    assert "pad-without-name" not in by and "dt-pin-unresolved" not in by      # the baseline names every pad
+    nlp = ad / "boards" / "M" / "netlist.json"
+    nl = read_json(nlp)
+    nl["components"]["U1"]["pins"]["2"]["name"] = None                          # PB7, which the I2C pinctrl uses
+    nl["components"]["U1"]["pins"]["12"].update({"name": "PF2-NRST", "name_source": "text-layer"})
+    write_json(nlp, nl)
+    run_join(ad, atlas)
+    rep = read_json(atlas / "mismatches.json")
+    by = _classes(rep)
+    assert [c["key"] for c in by["pad-without-name"]] == ["M:U1-2"]              # the text-layer pad 12 is not one
+    assert "BUS0_SDA" in by["pad-without-name"][0]["summary"]
+    assert [c["key"] for c in by["dt-pin-unresolved"]] == ["PB7"]
+    assert "/soc/i2c@40005400 pinctrl-0" in by["dt-pin-unresolved"][0]["summary"]
+    checks = {c["check"]: c for c in rep["checks"]}
+    assert checks["DT pins resolve to a schematic pad"]["passed"] < checks["DT pins resolve to a schematic pad"]["ran"]
+    text = (atlas / "checks.md").read_text()
+    assert "pad-without-name" in text and "dt-pin-unresolved" in text

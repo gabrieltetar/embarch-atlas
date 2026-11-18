@@ -78,3 +78,35 @@ def test_pins_md_marks_a_recovered_name(tmp_path):
     md = (atlas / "pins.md").read_text()
     assert "| PF2 (text-layer) |" in md
     assert "| PB7 |" in md
+
+
+SIDE = {str(i): (100 + 15 * i, name) for i, name in enumerate(("GND", "P0.01", "P0.02", "P0.03", "P0.04", "P0.05"), 1)}
+
+
+def build_side_range_pdf(path: Path) -> Path:
+    """A contiguous range of six pads down the left side of a module, every name printed upright beside its pad
+    inside the outline (the shape EMB-188 describes)."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=300, height=300)
+    for pin, (y, name) in SIDE.items():
+        anchor(page, 85, y, sp.pin_token('U91', pin))
+        visible(page, 92, y, pin)
+        visible(page, 112, y, name)
+    anchor(page, 105, 85, "CO" + sp.enc("U91"))
+    visible(page, 140, 85, "U91")
+    add_popups(doc, page, [((80, 90, 185, 215), {"Comment": "MOD-Y", "Manufacturer Part Number 1": "MOD-Y100",
+                                                  "Component Kind": "Standard"})])
+    pins = [f"U91-{n}" for n in SIDE]
+    doc.set_toc(outline({"Mod": {"page": 1, "components": {"U91": pins},
+                                 "nets": {f"N{i}": {"pins": [p]} for i, p in enumerate(pins, 1)}}}))
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def test_a_contiguous_range_of_named_pads_on_one_side_is_named(tmp_path):
+    nl, _ = sp.parse(build_side_range_pdf(tmp_path / "side.pdf"), "T", "side.pdf")
+    pins = nl["components"]["U91"]["pins"]
+    assert {p: v["name"] for p, v in pins.items()} == {p: n for p, (_, n) in SIDE.items()}
+    assert not [i for i in nl["issues"] if "has no name" in i]
+    assert {v.get("name_source") for v in pins.values()} == {"text-layer"}     # beyond the anchor's reach: the recovery named them
