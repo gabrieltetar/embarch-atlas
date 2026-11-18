@@ -2,12 +2,15 @@
 
 Read from the build's own `zephyr.elf`, never from the sources: a subcommand guarded by a Kconfig
 that is off is in the source and not in the image, and only the image says which it is. The ELF
-holds the shell's tables as data (Zephyr's `shell.h`): every root command is a `struct
-shell_cmd_entry` in the `shell_root_cmds` iterable section; it points at a `struct
-shell_static_entry` (syntax, help, subcommand set, handler, then the mandatory and optional
-argument counts as two bytes) and a subcommand set is either a pointer to an array of those
-entries ending in an all-zero one, or, when `is_dynamic` is set, a getter function called at run
-time. The tables are read with the stdlib ELF reader of `dt.py`; the source file and line of each
+holds the shell's tables as data, in the layout of Zephyr 4.3 `include/zephyr/shell/shell.h`: every root command is a
+`union shell_cmd_entry` in the `shell_root_cmds` iterable section, and that union is one pointer;
+for a root it points at a `struct shell_static_entry` (syntax, help, subcommand set, handler, then
+the mandatory and optional argument counts as two bytes, then `Z_SHELL_STATIC_ENTRY_PADDING`, 24
+bytes on a 64-bit x86 image and 0 elsewhere). A subcommand set is a pointer to such a union, and
+which kind it is decides the section the union sits in, as Zephyr's `is_dynamic_cmd` does: in
+`shell_subcmds` the pointer is an array of static entries ending in an all-zero one, in
+`shell_dynamic_subcmds` it is a getter function called at run time. The older layout, a bool
+before the union, is not read. The tables are read with the stdlib ELF reader of `dt.py`; the source file and line of each
 table or getter come from `nm -l` through `footprint.image`, which `stacks` already uses.
 
 A dynamic set is not run. Its getter is named, and when it is the one that walks the device list
@@ -15,8 +18,8 @@ A dynamic set is not run. Its getter is named, and when it is the one that walks
 section, by the name its `struct device` carries. The getter's own filter and the devices'
 init state are runtime facts and are not evaluated.
 
-`mandatory` counts the command word itself, as Zephyr does. An optional count of 255 is the raw
-rest of the line and 254 skips argument checking (`SHELL_OPT_ARG_RAW`, `SHELL_OPT_ARG_CHECK_SKIP`).
+`mandatory` counts the command word itself, as Zephyr does. An optional count of 254 is the raw
+rest of the line (`SHELL_OPT_ARG_RAW`) and 255 is not limited, unchecked (`SHELL_OPT_ARG_CHECK_SKIP`).
 
 The record carries the ELF's size and modification time. A build directory rebuilt after the
 atlas was made changes the answer, and `stale()` says so by comparing them with the file now.
@@ -36,9 +39,12 @@ SCHEMA = 1
 MAX_DEPTH = 6
 MAX_STR = 1024
 MAX_ENTRIES = 4096
-OPT_RAW = 255
-OPT_SKIP_CHECK = 254
+OPT_RAW = 0xFE
+OPT_SKIP_CHECK = 0xFF
+EM_X86_64 = 62
+X86_64_ENTRY_PADDING = 24       # Z_SHELL_STATIC_ENTRY_PADDING on a 64-bit x86 image
 ROOT_SECTION = "shell_root_cmds"
+DYNAMIC_SECTION = "shell_dynamic_subcmds"
 DEVICE_SECTION = "device_area"
 SHT_PROGBITS = 1
 SHF_ALLOC = 2
@@ -64,10 +70,6 @@ class _Image:
         b = self.read(addr, self.p)
         return struct.unpack(self.e + ("Q" if self.p == 8 else "I"), b)[0] if b else None
 
-    def u8(self, addr: int) -> int | None:
-        b = self.read(addr, 1)
-        return b[0] if b else None
-
     def cstr(self, addr: int | None) -> str | None:
         if not addr:
             return None
@@ -81,8 +83,20 @@ class _Image:
 
     @property
     def entry_size(self) -> int:
-        """sizeof(struct shell_static_entry): four pointers and two bytes, padded to a pointer."""
-        return (4 * self.p + 2 + self.p - 1) // self.p * self.p
+        """sizeof(struct shell_static_entry): four pointers, two count bytes, `Z_SHELL_STATIC_ENTRY_PADDING`, then
+        the struct's own tail padding to a pointer."""
+        pad = X86_64_ENTRY_PADDING if self.elf.is64 and self.machine == EM_X86_64 else 0
+        return (4 * self.p + 2 + pad + self.p - 1) // self.p * self.p
+
+    @property
+    def machine(self) -> int:
+        return struct.unpack_from(self.e + "H", self.elf.data, 18)[0]
+
+    def section_name(self, addr: int) -> str:
+        for s in self.elf.sections:
+            if s["flags"] & SHF_ALLOC and s["size"] and s["addr"] <= addr < s["addr"] + s["size"]:
+                return str(s.get("name", ""))
+        return ""
 
 
 def _where(lines: dict[int, tuple[str, int]], addr: int | None) -> str | None:
@@ -94,14 +108,13 @@ def _where(lines: dict[int, tuple[str, int]], addr: int | None) -> str | None:
 
 def _walk(im: _Image, funcs: dict[int, str], lines: dict[int, tuple[str, int]], devices: list[str],
           cmd_entry: int | None, depth: int, seen: set[int]) -> tuple[list[dict] | None, dict | None]:
-    """A `struct shell_cmd_entry` at `cmd_entry` -> (static subcommands, or None) and (dynamic info, or None)."""
+    """A `union shell_cmd_entry` at `cmd_entry` -> (static subcommands, or None) and (dynamic info, or None)."""
     if not cmd_entry:
         return None, None
-    dyn = im.u8(cmd_entry)
-    target = im.ptr(cmd_entry + im.p)       # after the bool, padded to a pointer
-    if dyn is None or not target:
+    target = im.ptr(cmd_entry)
+    if not target:
         return None, None
-    if dyn:
+    if im.section_name(cmd_entry).startswith(DYNAMIC_SECTION):
         name = funcs.get(target & ~1) or f"0x{target:x}"
         info: dict[str, Any] = {"getter": name, "at": _where(lines, target)}
         if "device" in name.lower():
@@ -140,7 +153,7 @@ def _entry(im: _Image, funcs: dict[int, str], lines: dict[int, tuple[str, int]],
     subs, dyn = _walk(im, funcs, lines, devices, sub, depth + 1, seen)
     if subs is not None:
         out["subcommands"] = subs
-        out["at"] = _where(lines, im.ptr(sub + p))
+        out["at"] = _where(lines, im.ptr(sub))
     if dyn is not None:
         out["dynamic"] = dyn
         out["at"] = dyn["at"]
@@ -171,9 +184,7 @@ def inventory(elf: Path, lines: dict[int, tuple[str, int]] | None = None, config
     out: dict[str, Any] = {"schema": SCHEMA, "elf": elf_stamp(elf), "commands": {},
                            "config": {"SHELL": shell_cfg if shell_cfg is not None else "unknown"}}
     for addr in roots:
-        entry = im.ptr(addr + im.p)
-        if im.u8(addr):                    # roots are static entries; a dynamic root is not a command table
-            continue
+        entry = im.ptr(addr)
         root = _entry(im, funcs, lines, devices, entry, 0, {entry}) if entry else None
         if root is None:
             continue
