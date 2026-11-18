@@ -15,6 +15,7 @@ MODULES = [
     "inventory",
     "smartpdf",
     "cad",
+    "boarddiff",
     "pinnames",
     "interfaces",
     "missing",

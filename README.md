@@ -66,6 +66,8 @@ into the sources dir (`embarch/hardware/` by default), then in Claude Code:
 
 `embarch-atlas cad <project dir | .PrjPcb> [--rev <commit>] [--variant <name>]` reads an Altium project's `.SchDoc` sources (components, per-pin nets, a variant's not-fitted parts) without touching the atlas; it needs the optional extra: `uv pip install -e '.[cad]'`.
 
+`embarch-atlas board-diff --cad <project dir | .PrjPcb> --board <label> [--rev <commit>] [--variant <name>] [--json]` compares that read with the `boards/<label>/netlist.json` of an atlas built from the same project's PDF: parts on one side only, part number or value differences, pins on one side only, pins on a different net, and a net renamed after release (same pins, new name) as a name-only difference. A net the PDF left auto-named that the CAD names is not a difference. Exit 0 when nothing differs, 1 when something does, 2 on a refusal; it writes no atlas state.
+
 ## Status
 
 First cut, exercised on one real two-board product: seven datasheets, an MCU reference

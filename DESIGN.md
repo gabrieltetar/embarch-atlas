@@ -837,6 +837,22 @@ The tests build a project from a test-only compound-file writer (`tests/schdoc_s
 stream, so every `FileHeader` is padded above the 4096-byte cutoff), with `olefile` opening the result as the
 check on the writer. It proves the reading logic against the assumptions above, not against Altium.
 
+### `board-diff`: the CAD read against the PDF netlist (CLI only)
+
+`embarch-atlas board-diff --cad <project> --board <label> [--rev] [--variant] [--json]` (`boarddiff.py`) compares
+`cad.read_project` with `<atlas>/boards/<label>/netlist.json`, through the joined board nets (a name matches when it
+equals the other side's or is among either side's `aliases`), never per sheet. It writes nothing and is not a
+lookup, so the lookup count stays 23. Exit 0 / 1 / 2 (clean / differs / refused).
+
+- Parts: present on one side only; `mpn` or `value` differing (case and whitespace ignored; a side that has none is
+  not a difference). Pins: on one side only, for parts both sides list.
+- A PDF net and a CAD net holding the same pins (restricted to pins both sides list) under different names are
+  one **name-only** difference, not pins moving. If the PDF's is auto-named and the CAD's is not, it is reported as
+  named by the CAD and is not a difference; if the CAD's is auto-named and the PDF's is not, it is one.
+  Remaining pins whose nets differ are reported per pin.
+- `--variant`: the CAD's not-fitted parts that the PDF shows as fitted are listed on one line and **do not**
+  count toward the exit code, since a PDF never shows variants.
+
 ### `boards/<label>/netlist.json`
 
 ```json
@@ -1115,6 +1131,7 @@ An atlas id is `<target>@<commit12>`.
 | `status` | `project` | atlases, which is current, which are stale; for an atlas with no build, the outputs absent for that reason and the ones reduced |
 | `inventory` | `inventory` | manifest + per-page hashes + diff vs last |
 | `cad <project dir \| .PrjPcb> [--rev <commit>] [--variant <name>] [--json]` | `cad` | reads an Altium project's `.SchDoc` sources (sheets from the `.PrjPcb`) and prints components (designator, part number, value, unique ID) and per-pin nets; with `--variant` the not-fitted parts, matched by unique ID; `--json` is `netlist.json`-shaped with `method: "altium-schdoc"`; read-only, writes no atlas state; needs the `cad` extra (`olefile`); refuses in one line (exit 2) a missing `olefile`, an unknown variant, a missing or ambiguous project |
+| `board-diff --cad <project dir \| .PrjPcb> --board <label> [--rev <commit>] [--variant <name>] [--json]` | `boarddiff` | diffs `cad`'s read of an Altium project against `boards/<label>/netlist.json`: parts on one side only, part number or value differing, pins on one side only, pins on another net, a renamed net as a name-only difference; a PDF-auto-named net the CAD names is not a difference; `--variant` lists the parts it does not fit, against the PDF's all-fitted view, uncounted; exit 0 clean, 1 differs, 2 refused; writes no atlas state |
 | `schematic [<pdf>] --board <label>` | `smartpdf` | netlist.json, bom.json, nets.md, parts.md, issues.md (path printed) |
 | `interfaces` | `interfaces` | propose board-to-board mating rules with scores |
 | `declare-pin-name <board> <ref> <pin> <name> [--prov llm-unverified \| engineer-declared \| engineer-confirmed] [--note <text>]` | `pinnames` | records a name for a pin the schematic PDF left unnamed in `boards/<board>/pin_names.json` and merges it into that board's `netlist.json`, `nets.md` and `parts.md` (default `--prov llm-unverified`); refuses a board with no netlist, a ref the netlist lacks, a pin number the part lacks, and a pin the PDF's text already named; the same board/ref/pin again replaces its entry |
