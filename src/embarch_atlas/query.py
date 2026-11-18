@@ -1,4 +1,4 @@
-"""The seventeen atlas lookups, as plain functions returning markdown.
+"""The eighteen atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -23,7 +23,7 @@ from . import common, stale
 from .pdftext import tier2_files
 
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
-BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500,
+BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500, "schematic_text": 2500,
           "register": 1500, "pin_trace": 4000, "net_trace": 4000, "mismatch_report": 4000,
           "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500}
 BUDGET.update({"code": 3000, "states": 4000})
@@ -226,7 +226,7 @@ def _missing(what: str, hint: str) -> str:
     return f"src: none\n\n{what} not found. {hint}\n"
 
 
-# --------------------------------------------------------------------------- the seventeen
+# --------------------------------------------------------------------------- the eighteen
 
 @_stamped
 def part_card(a: Atlas, part: str, board: str | None = None, offset: int = 0) -> str:
@@ -607,6 +607,64 @@ def find_text(a: Atlas, doc: str, pattern: str, section: str | None = None, cont
     end = int(m.group(1)) if m else 10**12
     _log_usage(a, d.name, [mt for mt, s in zip(meta, starts) if offset <= s < end])
     return res
+
+
+@_stamped
+def schematic_text(a: Atlas, pattern: str, board: str | None = None, context: int = 2, offset: int = 0) -> str:
+    """Search the text of every schematic PDF page (`pdftotext -layout` of the board's PDF named in atlas.toml)
+    for plain words or a regex (case-insensitive): one block per hit: board, file, page, the sheet(s) the netlist
+    puts on that page, the line and `context` lines around it. `board` limits the search to one board."""
+    from . import project
+    if not (pattern or "").strip():
+        return _missing("pattern", "Give a pin name, a net or a refdes, e.g. `VBUS_DET` or `U3`.")
+    try:
+        rx = re.compile(pattern, re.I)
+    except re.error:
+        rx = re.compile(re.escape(pattern), re.I)
+    try:
+        cfg = project.load_config(a.dir)
+    except FileNotFoundError:
+        return _missing("atlas.toml", "The schematic PDFs are named by its [[boards]].")
+    boards = [b for b in project.board_entries(cfg) if b.get("pdf")]
+    if board:
+        boards = [b for b in boards if str(b["label"]).lower() == board.lower()]
+        if not boards:
+            return _missing(f"board {board!r}", "Boards: " + (", ".join(str(b["label"]) for b in project.board_entries(cfg)) or "none") + ".")
+    if not boards:
+        return _missing("schematic PDFs", "Add a [[boards]] entry with `pdf` to atlas.toml.")
+    context = max(0, int(context))
+    blocks, searched, skipped = [], [], []
+    for b in boards:
+        lab, pdf = str(b["label"]), project.board_pdf(a.dir, cfg, b["pdf"])
+        if not pdf.is_file():
+            skipped.append(f"{lab} ({pdf.name} not found)")
+            continue
+        try:
+            from .pdftext import layout_pages
+            import pymupdf
+            with pymupdf.open(pdf) as doc:
+                n_pages = doc.page_count
+            pages = layout_pages(pdf, n_pages)
+        except Exception as e:   # unreadable PDF, no pdftotext: say so rather than answer "no match"
+            skipped.append(f"{lab} ({pdf.name}: {type(e).__name__})")
+            continue
+        sheets = ((_json(a.dir / "boards" / lab / "netlist.json", {}) or {}).get("sheets")) or {}
+        searched.append(f"{lab}={pdf.name} ({len(pages)} pages)")
+        for n, text in enumerate(pages, 1):
+            lines = [x.rstrip() for x in text.splitlines()]
+            on = ", ".join(sorted((k for k, v in sheets.items() if isinstance(v, dict) and v.get("page") == n),
+                                  key=lambda k: (len(k), k)))
+            for i in (i for i, x in enumerate(lines) if rx.search(x)):
+                body = [("> " if j == i else "  ") + lines[j].strip()[:FIND_TEXT_LINE]
+                        for j in range(max(0, i - context), min(len(lines), i + context + 1)) if lines[j].strip()]
+                blocks.append(f"board {lab} {pdf.name} p{n}" + (f" sheet {on}" if on else "") + "\n" + "\n".join(body) + "\n")
+    if not searched:
+        return _missing("a readable schematic PDF", "Skipped: " + "; ".join(skipped) + ".")
+    out = _header("schematic text-layer, " + ", ".join(searched),
+                  extra=f"hits={len(blocks)}" + (f" skipped={'; '.join(skipped)}" if skipped else "")).rstrip(" \n") + "\n\n"
+    if not blocks:
+        return out + f"No line matches {pattern!r}. A pin name drawn as a graphic has no text; `pin_trace` and `net_trace` read the netlist.\n"
+    return _cap(out + "\n".join(blocks), "schematic_text", offset)
 
 
 PROSE_TABLE_START = re.compile(r"^<!--\s*atlas:table\b")
@@ -1479,7 +1537,7 @@ def transitions(a: Atlas, doc: str, state: str | None = None, on: str | None = N
 
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
-    "find_text": find_text,
+    "find_text": find_text, "schematic_text": schematic_text,
     "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "mismatch_report": mismatch_report,
     "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
     "applies": applies, "transitions": transitions,
@@ -1506,6 +1564,8 @@ def register(sub, groups) -> None:
         (["--tier"], {"choices": ["distilled", "text"], "default": "distilled"}), (["--offset"], {"type": int, "default": 0}))
     add("find_fact", find_fact, (["query"], {"nargs": "+"}), (["--part"], {}), (["--kind"], {}), (["--limit"], {"type": int}), (["--offset"], {"type": int, "default": 0}))
     add("find_text", find_text, (["doc"], {}), (["pattern"], {}), (["--section"], {}),
+        (["--context"], {"type": int, "default": 2}), (["--offset"], {"type": int, "default": 0}))
+    add("schematic_text", schematic_text, (["pattern"], {}), (["--board"], {}),
         (["--context"], {"type": int, "default": 2}), (["--offset"], {"type": int, "default": 0}))
     add("register", register_lookup, (["target"], {}), (["--field"], {}), (["--offset"], {"type": int, "default": 0}))
     add("pin_trace", pin_trace, (["query"], {}), (["--board"], {}), (["--offset"], {"type": int, "default": 0}))

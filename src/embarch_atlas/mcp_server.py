@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's seventeen lookups as an MCP server over stdio, and the live
+"""`embarch-atlas mcp`: the atlas's eighteen lookups as an MCP server over stdio, and the live
 module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
@@ -83,6 +83,13 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         lines around it. The step after find_fact, for a term it reports as unmatched or a section with no
         distillation. `section` limits the search to one section's pages. Long answers end with next=<offset>."""
         return query.find_text(view(), doc, pattern, section, context, offset)
+
+    @server.tool(annotations=READ_ONLY)
+    def schematic_text(pattern: str, board: str | None = None, context: int = 2, offset: int = 0) -> str:
+        """Search the text of every schematic PDF page for plain words or a regex (case-insensitive): a pin name, a
+        net, a refdes. One block per hit with the board, the PDF file, the page, the sheet and the line with
+        `context` lines around it. `board` limits it to one board. Long answers end with next=<offset>."""
+        return query.schematic_text(view(), pattern, board, context, offset)
 
     @server.tool(annotations=READ_ONLY)  # appends to the atlas's usage log; changes no answer
     def register(target: str, field: str | None = None, offset: int = 0) -> str:
@@ -268,6 +275,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's seventeen lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's eighteen lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)
