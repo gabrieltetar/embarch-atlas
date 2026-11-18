@@ -1,4 +1,4 @@
-"""`embarch-atlas mcp`: the atlas's twenty lookups as an MCP server over stdio, and the live
+"""`embarch-atlas mcp`: the atlas's twenty-one lookups as an MCP server over stdio, and the live
 module's `reg_read` when embarch-core answers.
 
 Thin on purpose: every tool is a function in `query.py`, which the `q` CLI verbs call
@@ -208,6 +208,16 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         share asks for it. Neither: each machine and its states. A miss lists the nearest names."""
         return query.transitions(view(), doc, state, on, machine, offset)
 
+    @server.tool(annotations=READ_ONLY)
+    def decode(node: str, data: str, offset: int = 0) -> str:
+        """Decode the reply frame of a command-then-read part, one with no register map, from bytes you already
+        read (e.g. with the shell's `i2c direct_read`). `node`: the part's devicetree label. `data`: the bytes in hex.
+        Prints each status bit by name, the count in decimal and the physical value from the datasheet's transfer
+        function, range and unit from the node's properties, pages cited. A count outside the range gives the
+        equation's own (negative or over-range) value and is said to be out of range, never clamped. Sends nothing
+        to the board. A part whose frame layout or transfer function is not distilled gets what is missing."""
+        return query.decode(view(), node, data, offset)
+
     if live is None:
         live = live_mod.available(atlas_dir) is None
     if live:
@@ -289,6 +299,6 @@ def _cmd_mcp(args) -> int:
 
 
 def register(sub, groups) -> None:
-    p = sub.add_parser("mcp", help="serve the atlas's twenty lookups as an MCP server over stdio")
+    p = sub.add_parser("mcp", help="serve the atlas's twenty-one lookups as an MCP server over stdio")
     p.add_argument("--atlas", help="atlas id (default: the one matching HEAD, else the newest)")
     p.set_defaults(func=_cmd_mcp)

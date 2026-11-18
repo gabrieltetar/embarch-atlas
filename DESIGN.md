@@ -337,6 +337,8 @@ Kinds and their own fields:
 | `applicability` | `item` (a sequence or message name, as printed), `item_kind` (sequence, message), `role` (the column, as printed), `cond` (the condition the table attaches to the cell or its column, as printed; absent: unconditional), `as` (initiator, responder, when the table splits the role), `level` (the cell as printed: Normative, Recommended, Optional, Shall Not, N/A), `table`. One record per table cell; `q` is the row (check L: the item and the level are in it), a column heading or a footnote the cell depends on a second `q` part |
 | `state` | `machine` (named the same on each of its state, transition and figure records), `name` (as printed), `entry` (one action each, as printed: a message sent, a timer started or stopped, a counter reset). From the section that describes the state; a datasheet's or reference manual's state machine takes the same kinds |
 | `transition` | `machine`, `from`, `to` (state names, as printed: check E wants both to be `state` records of `machine`), `event` (the event or condition that takes the exit, as printed), `trigger` (the message or timer that fires it; absent for a condition alone) |
+| `frame` | `name` (the frame as the datasheet names it), `size` (bytes), `fields` (each `name`, `role` status or count, `byte` as an index or `[first, last]` for a count spanning bytes, big-endian, bits `[hi, lo]` within the byte or absent for the whole byte, `desc`, `enum`; exactly one count). The reply a command-then-read part returns, no register map: the bytes in the order they arrive, byte 0 first, bit 7 the most significant. `q` is the layout table or sentence |
+| `transfer` | `frame` (a frame record's `name`), `form` (`linear`: `(count - out_min) * (phys_max - phys_min) / (out_max - out_min) + phys_min`), `equation` (as printed), `params` (`out_min`, `out_max`, `phys_min`, `phys_max`, `unit`: a number, or `dt:<property>` for what the board's devicetree node sets: a range or unit the board chooses), `variant` and `when` (`{prop, value}`: the node property that selects this variant, when the datasheet gives several). One per variant; `src: equation` |
 
 `prov` classes: `deterministic`, `deterministic+crosschecked`, `llm-verified`,
 `llm-unverified`, `engineer-declared`, `engineer-confirmed`, `measured`.
@@ -424,6 +426,8 @@ MAP.md lists it under "Other documents".
   record per exit, plus the state diagram as a `figure` record with `machine` and `states`, so the
   `transitions` lookup answers a state's entry actions, exits and predecessors, and which states react to a
   message or a timer.
+  A part with no register map (firmware sends a command, waits, reads a fixed frame) is one `frame` record for
+  the reply's layout and one `transfer` record per variant of the count's conversion, so `q decode` can answer.
 - **Check W**: a requirement's `modality` agrees with the normative keyword in its quote (`shall-not`
   needs "shall not" or "must not"; `shall` a "shall" or "must" not followed by "not"). A quote
   without one fails W unless `note` says where the force comes from (a table heading). W runs on a
@@ -550,11 +554,11 @@ rule a configuration value can break. `join` evaluates every one against the pin
   (`update.rm_todo`) just before it renders the MAP, so `update` and a hand-run `build` + `join`
   both list the chapters in use; a worklist left for another atlas is rewritten, not skipped.
 - **The MCP server** is registered in a project `.mcp.json` with `alwaysLoad: true`
-  (https://code.claude.com/docs/en/mcp.md), so its twenty lookups skip deferred tool search.
+  (https://code.claude.com/docs/en/mcp.md), so its twenty-one lookups skip deferred tool search.
   Claude Code asks the engineer to approve a project server on first use.
 - A tool declares `readOnlyHint` only when it cannot change the board, because a host (plan
   mode, an auto-approval rule, a permission classifier, a worker's allowlist) trusts the hint.
-  The twenty lookups and `live_stacks` carry it. `shell` carries it because it runs only
+  The twenty-one lookups and `live_stacks` carry it. `shell` carries it because it runs only
   commands that match the `[live] read_only` list (default: `device list`, `kernel thread stacks`,
   `kernel uptime`, `i2c read *`, `i2c read_byte *`; `i2c scan` stays out, it addresses every device
   on the bus) and refuses any other, naming `shell_run`. `reg_read` carries it and refuses
@@ -567,7 +571,7 @@ rule a configuration value can break. `join` evaluates every one against the pin
 
 ## Query surface
 
-`query.py` holds the twenty lookups as plain functions returning markdown: `part_card` (`board="all"`
+`query.py` holds the twenty-one lookups as plain functions returning markdown: `part_card` (`board="all"`
 adds every board's refs and nets, a label one board's; no tool documents an empty string as a value: a model
 writes `"board": }` for it, and the call never reaches the server. **With no atlas** it still answers a board
 MPN: the MPN-to-document join `pins.json` would hold is made from the netlists and `coverage.py`
@@ -654,6 +658,8 @@ Two doors call the
 same functions: `embarch-atlas q <verb>` and `embarch-atlas mcp` (stdio, `mcp>=2.2`,
 optional extra). Files stay the primary door: an agent's own `Read`/`Grep` reach
 them for free; the server carries what files cannot.
+
+`decode` (`q decode <DT label> <hex bytes>`, MCP `decode(node, data)`): the reply frame of a command-then-read part, from the bytes the engineer already read (the shell's `i2c direct_read`, say). The label names the device in the join's I2C table (as `reg_read` does), its document's `frame` record gives each status bit by name (an `enum` meaning when the datasheet has one), and the count in decimal; the `transfer` record the node's properties select converts it, its range and unit read from the node (`dt:<property>` parameters), the equation as printed and the pages of both records cited. A count outside `[out_min, out_max]` gives the equation's own value, negative below the minimum, and is said to be below the minimum or above the maximum, never clamped: the case a driver's reading hides. It sends nothing to the board and needs no Core. A part with no `frame` record answers `src: none` and names it; a frame with no `transfer` record, a node property that selects or parameterises it and is not set, or a byte count that is not the frame's `size` answers with exactly what is missing, and the frame's status and count are still printed when the bytes fit. No layout is guessed. Unverified records are marked in the `src:` line.
 
 `code` and `states` (`codeq.py`) answer from the C sources a build compiled, the pinned build or the
 build dir `build=` names, so a variant, a scratch Zephyr worktree with west patches applied or a
@@ -841,7 +847,7 @@ scoring each declared interface.
 
 ## Live (`live.py`)
 
-The live module reads the running board. It is not part of the twenty lookups: the atlas never
+The live module reads the running board. It is not part of the twenty-one lookups: the atlas never
 touches hardware, so `reg_read` names addresses and decodes the answer, and embarch-core does the
 read (its decision 81) through the `embarch-api mem-read` subcommand, which resolves Core and its
 token the way every suite tool does. Core picks the probe and chip from the role's enrollment,
@@ -1081,12 +1087,12 @@ An atlas id is `<target>@<commit12>`.
 | `diff <atlas> <atlas>` | `diff` | what changed between two atlases |
 | `update <target> [commit]` | `update` | bump, one at a time (the bump lock; a second is refused, exit 3), its outcome and reason in `bump/state.json`: stop while a translation is behind its source or the west workspace is not at the manifest's revisions (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
 | `hook install <target>... [--debounce S]` / `hook uninstall` / `hook run <target>...` | `bump` | opt-in bump on HEAD moves (below): write or remove the `post-commit`, `post-checkout`, `post-merge` and `post-rewrite` hooks; `run` is what a hook starts, detached |
-| `q <lookup>` | `query` | the twenty lookups (same answers as the MCP tools) |
+| `q <lookup>` | `query` | the twenty-one lookups (same answers as the MCP tools) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
-| `mcp` | `mcp_server` | the twenty lookups as an MCP server over stdio, and `reg_read` when Core answers |
+| `mcp` | `mcp_server` | the twenty-one lookups as an MCP server over stdio, and `reg_read` when Core answers |
 
 ### When `update` stops
 

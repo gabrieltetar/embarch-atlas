@@ -36,7 +36,9 @@
         "variant",
         "applicability",
         "state",
-        "transition"
+        "transition",
+        "frame",
+        "transfer"
       ]
     },
     "doc": {
@@ -418,6 +420,36 @@
       },
       "then": {
         "$ref": "#/$defs/transition"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "frame"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/frame"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "transfer"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/transfer"
       }
     }
   ],
@@ -1675,6 +1707,160 @@
           "to",
           "event",
           "trigger"
+        ]
+      }
+    },
+    "frame": {
+      "description": "the reply frame of a command-then-read part that has no register map (`<doc>.frame.<name-slug>`): the bytes a read returns, in the order they arrive, split into named status bits and one count. `embarch-atlas q decode` reads it; bytes are numbered from 0 as received, bits within a byte from 7 (most significant) to 0",
+      "properties": {
+        "name": {
+          "description": "the frame, as the datasheet names it (\"Read data\")",
+          "type": "string",
+          "minLength": 1
+        },
+        "size": {
+          "description": "the frame's length in bytes",
+          "type": "integer",
+          "minimum": 1
+        },
+        "fields": {
+          "description": "the frame's fields, as printed; exactly one has role `count`",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "role": {
+                "enum": [
+                  "status",
+                  "count"
+                ]
+              },
+              "byte": {
+                "description": "the byte index, or [first, last] for a count that spans bytes (big-endian)",
+                "type": [
+                  "integer",
+                  "array"
+                ],
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "bits": {
+                "description": "[hi, lo] within the byte; absent: the whole byte or bytes",
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "desc": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "enum": {
+                "description": "value -> meaning, as printed",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "role",
+              "byte"
+            ]
+          }
+        }
+      },
+      "required": [
+        "name",
+        "size",
+        "fields"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "name",
+          "size",
+          "fields"
+        ]
+      }
+    },
+    "transfer": {
+      "description": "the transfer function from a frame's count to the physical value (`<doc>.transfer.<frame-slug>[.<variant-slug>]`). `params` take a number or `dt:<property>`, read from the part's devicetree node (a range or unit the board chooses); the datasheet supplies the form. `q` is the equation as printed",
+      "properties": {
+        "frame": {
+          "description": "the `name` of the frame whose count it converts",
+          "type": "string",
+          "minLength": 1
+        },
+        "form": {
+          "description": "linear: (count - out_min) * (phys_max - phys_min) / (out_max - out_min) + phys_min",
+          "enum": [
+            "linear"
+          ]
+        },
+        "equation": {
+          "description": "the equation, as printed",
+          "type": "string",
+          "minLength": 1
+        },
+        "variant": {
+          "description": "the variant of the function, as the datasheet names it (\"A\", \"10 % to 90 %\")",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "when": {
+          "description": "selects this variant: the node's property and the value it must have, e.g. {\"prop\": \"transfer-function\", \"value\": \"A\"}; absent: the only variant",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "params": {
+          "description": "out_min, out_max, phys_min, phys_max (numbers or `dt:<property>`) and unit (a string or `dt:<property>`)",
+          "type": "object"
+        }
+      },
+      "required": [
+        "frame",
+        "form",
+        "equation",
+        "params"
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "frame",
+          "form",
+          "equation",
+          "variant",
+          "when",
+          "params"
         ]
       }
     }

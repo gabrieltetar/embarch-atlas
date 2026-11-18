@@ -422,12 +422,32 @@ def t_transition(recs, ctx):
                                                             fmt(r.get("trigger")), note_cell(r), cite_cell(r)] for r in recs])
 
 
+def t_frame(recs, ctx):
+    rows = []
+    for r in recs:
+        for f in r.get("fields") or []:
+            b = f.get("byte")
+            where = ("%s-%s" % (b[0], b[-1]) if isinstance(b, list) and len(b) > 1 else str(b[0] if isinstance(b, list) else b))
+            bits = f":{max(f['bits'])}:{min(f['bits'])}" if f.get("bits") else ""
+            rows.append([fmt(r.get("name")), f"{where}{bits}", fmt(f.get("name")), fmt(f.get("role")), fmt(f.get("desc")),
+                         note_cell(r), cite_cell(r)])
+    return _table(["Frame", "Byte[:bits]", "Field", "Role", "Meaning", "Note", "p"], rows)
+
+
+def t_transfer(recs, ctx):
+    return _table(["Frame", "Variant", "Equation", "Parameters", "Note", "p"],
+                  [[fmt(r.get("frame")), fmt(r.get("variant")), fmt(r.get("equation")),
+                    "; ".join(f"{k}={v}" for k, v in (r.get("params") or {}).items()), note_cell(r), cite_cell(r)]
+                   for r in recs])
+
+
 RENDERERS: dict[str, Callable[[list[dict], dict], list[str]]] = {
     "limit": t_limit, "timing": t_limit, "pin": t_pin, "rule": t_rule, "register": t_register, "field": t_field,
     "quirk": t_quirk, "figure": t_figure, "strap": t_strap, "passthrough": t_passthrough, "bus": t_bus,
     "variant": t_variant,
     "requirement": t_requirement, "conflict": t_conflict, "check": t_check,
     "applicability": t_applicability, "state": t_state, "transition": t_transition,
+    "frame": t_frame, "transfer": t_transfer,
 }
 
 

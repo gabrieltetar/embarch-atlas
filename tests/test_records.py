@@ -46,7 +46,16 @@ GOOD = [
     {"id": "demo-link.trans.hub.Idle.Ready", "kind": "transition", "doc": "demo-link@1", "p": 6, "src": "text", "q": "x",
      "machine": "Demo Hub", "from": "Idle", "to": "Ready", "event": "the link comes up", "trigger": None},
     {"id": "demo-reg.variant.demo-reg-33", "kind": "variant", "doc": "demo-reg@A", "p": 1, "src": "table",
-     "q": "DEMO-REG-33 3.3 V SOT-23-5", "mpn": "DEMO-REG-33", "options": {"vout": "3.3 V", "package": "SOT-23-5"}}
+     "q": "DEMO-REG-33 3.3 V SOT-23-5", "mpn": "DEMO-REG-33", "options": {"vout": "3.3 V", "package": "SOT-23-5"}},
+    {"id": "demo-psense.frame.read-data", "kind": "frame", "doc": "demo-psense@A", "p": 8, "src": "table",
+     "q": "Byte 0 status Bytes 1-3 count", "name": "Read data", "size": 4,
+     "fields": [{"name": "POWER", "role": "status", "byte": 0, "bits": [6, 6]},
+                {"name": "OUTPUT", "role": "count", "byte": [1, 3]}]},
+    {"id": "demo-psense.transfer.read-data.a", "kind": "transfer", "doc": "demo-psense@A", "p": 9, "src": "equation",
+     "q": "Output = (count - Output_min) x (Pmax - Pmin) / (Output_max - Output_min) + Pmin", "frame": "Read data",
+     "form": "linear", "variant": "A", "when": {"prop": "transfer-function", "value": "A"},
+     "equation": "Output = (count - Output_min) x (Pmax - Pmin) / (Output_max - Output_min) + Pmin",
+     "params": {"out_min": 1677722, "out_max": "dt:output-max", "phys_min": "dt:pressure-min", "phys_max": 6, "unit": "dt:unit"}}
 ]
 
 
@@ -130,7 +139,7 @@ def test_schema_batch_1_conventions():
 
 def test_variant_validates_renders_and_refuses_a_bare_record():
     from embarch_atlas import render
-    v = GOOD[-1]
+    v = next(r for r in GOOD if r["kind"] == "variant")
     assert v["kind"] == "variant" and R.validate(v) == []
     assert any("options" in e for e in R.validate({k: x for k, x in v.items() if k != "options"}))
     assert any("mpn" in e for e in R.validate({k: x for k, x in v.items() if k != "mpn"}))

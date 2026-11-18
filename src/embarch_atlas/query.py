@@ -1,4 +1,4 @@
-"""The twenty atlas lookups, as plain functions returning markdown.
+"""The twenty-one atlas lookups, as plain functions returning markdown.
 
 One implementation behind three doors: the `embarch-atlas q <verb>` CLI, the MCP
 server (`mcp_server.py`), and later the UI. Each answer starts with one cite header
@@ -25,7 +25,7 @@ from .pdftext import tier2_files
 CHARS_PER_TOKEN = 4  # o200k proxy; real Claude counts run ~1.4x, budgets below allow for it
 BUDGET = {"part_card": 1500, "doc_toc": 2500, "doc_section": 6000, "find_fact": 2000, "find_text": 2500, "schematic_text": 2500,
           "register": 1500, "pin_trace": 4000, "net_trace": 4000, "net_find": 4000, "parts": 3000, "mismatch_report": 4000,
-          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500}
+          "config": 1500, "dt_node": 2500, "footprint": 2500, "stacks": 1500, "applies": 2500, "transitions": 2500, "decode": 2500}
 BUDGET.update({"code": 3000, "states": 4000})
 
 
@@ -1562,12 +1562,94 @@ def transitions(a: Atlas, doc: str, state: str | None = None, on: str | None = N
     return _cap(head + "\n".join(out) + "\n", "transitions", offset)
 
 
+
+def _frame_rows(frame_rec: dict, data: list[int]) -> tuple[list[str], int]:
+    from . import decode as D
+    rows, count = [], 0
+    for f in frame_rec["fields"]:
+        v = D.field_value(data, f)
+        if f["role"] == "count":
+            count = v
+            continue
+        lo, hi = D._span(f)
+        where = f"byte {lo}" + (f"-{hi}" if hi != lo else "") + (f" bits {max(f['bits'])}:{min(f['bits'])}" if f.get("bits") else "")
+        meaning = (f.get("enum") or {}).get(str(v)) or (f.get("enum") or {}).get(f"{v}h")
+        rows.append(f"- {f['name']} = {v} ({where})" + (f": {meaning}" if meaning else ""))
+    return rows, count
+
+
+@_stamped
+def decode(a: Atlas, node: str, data: str, offset: int = 0) -> str:
+    """Decode the reply frame of a command-then-read part (no register map): each status bit, the count, and the physical value."""
+    from . import decode as D, live
+    try:
+        raw = D.parse_bytes(data)
+    except ValueError as e:
+        return f"src: none\n\nCannot read the bytes {data!r}: {e}. Give hex, e.g. `0x48 0x1A 0x2B 0x3C`.\n"
+    inst, why = live._instance(a.dir, node)
+    if inst is None:
+        return f"src: none\n\n{why}. `decode` takes the part's devicetree label.\n"
+    label = (inst["labels"] or [inst["name"]])[0]
+    nodes = (_json(a.atlas / "dt.json", {}) or {}).get("nodes") if a.atlas else {}
+    props = ((nodes or {}).get(inst["node"]) or {}).get("props") or {}
+    docs = [d for d in a.docs if d.name in inst["docs"]]
+    cands = [(d, r) for d in docs for r in _records(d) if r.get("kind") == "frame"]
+    if not cands:
+        where = ", ".join(d.name for d in docs) or "no document joined to it"
+        return _missing(f"a reply frame layout for {label}",
+                        f"{where} has no `frame` record, so the layout is not distilled: find the read-data table with "
+                        f"`doc_toc` and `find_text` and write one before decoding.")
+    if len(cands) > 1:
+        names = ", ".join(f"{d.name}: {r.get('name')}" for d, r in cands)
+        return _missing(f"one reply frame for {label}", f"the records give several ({names}); none is guessed.")
+    d, frame = cands[0]
+    bad = D.frame_problem(frame, frame.get("size", 0))
+    if bad:
+        return _missing(f"a usable frame layout for {label}", f"the `frame` record {frame.get('id')} is unusable: {bad}.")
+    if len(raw) != frame["size"]:
+        return (f"src: {d.name} frame {_pp(frame)}\n\nThe frame {frame.get('name')!r} of {d.name} is {frame['size']} bytes; "
+                f"{len(raw)} given. Nothing decoded.\n")
+    transfers = [r for r in _records(d) if r.get("kind") == "transfer"]
+    rows, count = _frame_rows(frame, raw)
+    tr, tr_why = D.select_transfer(frame, transfers, props)
+    srcs = [f"{d.name} frame {_pp(frame)}"]
+    provs = {frame.get("prov") or "llm-unverified"}
+    head_extra = f"{label} = {inst['node']}"
+    out = [f"bytes: {' '.join('%02X' % b for b in raw)}  ({len(raw)} bytes, frame {frame.get('name')!r})", "", "status:"]
+    out += rows or ["- (the frame has no status bits)"]
+    out += ["", f"count = {count} (0x{count:X})", ""]
+    if tr is None:
+        out += [f"value: not computed: {tr_why}."]
+    else:
+        pr, miss = D.resolve_params(tr, props)
+        if not miss and pr["out_max"] == pr["out_min"]:
+            miss = ["out_max: equals out_min, the equation divides by zero"]
+        srcs.append(f"transfer {_pp(tr)}")
+        provs.add(tr.get("prov") or "llm-unverified")
+        if miss:
+            out += ["value: not computed: the transfer function needs"] + [f"- {m}" for m in miss]
+            out += [f"  (equation, as printed: {tr.get('equation')})"]
+        else:
+            val, side = D.convert(count, pr)
+            unit = f" {pr['unit']}" if pr.get("unit") else ""
+            out += [f"value = {D._fmt(val)}{unit}"]
+            if side:
+                out += [f"{side}: count {count} is outside [{D._fmt(pr['out_min'])}, {D._fmt(pr['out_max'])}]; "
+                        f"the equation's own result is shown, not clamped to the range"]
+            out += [f"equation (as printed): {tr.get('equation')}",
+                    f"  = ({count} - {D._fmt(pr['out_min'])}) * ({D._fmt(pr['phys_max'])} - {D._fmt(pr['phys_min'])}) / "
+                    f"({D._fmt(pr['out_max'])} - {D._fmt(pr['out_min'])}) + {D._fmt(pr['phys_min'])}"
+                    + (f"  [variant {tr.get('variant')}]" if tr.get("variant") else "")]
+    prov = "/".join(sorted(provs)) if provs - {"llm-unverified"} else "llm-unverified"
+    return _cap(_header("; ".join(srcs), prov, head_extra) + "\n".join(out) + "\n", "decode", offset)
+
+
 TOOLS = {
     "part_card": part_card, "doc_toc": doc_toc, "doc_section": doc_section, "find_fact": find_fact,
     "find_text": find_text, "schematic_text": schematic_text,
     "register": register_lookup, "pin_trace": pin_trace, "net_trace": net_trace, "net_find": net_find, "parts": parts, "mismatch_report": mismatch_report,
     "config": config, "dt_node": dt_node, "footprint": footprint, "stacks": stacks,
-    "applies": applies, "transitions": transitions,
+    "applies": applies, "transitions": transitions, "decode": decode,
 }
 TOOLS.update({"code": code, "states": states})
 
@@ -1615,6 +1697,9 @@ def register(sub, groups) -> None:
         (["--offset"], {"type": int, "default": 0}))
     add("transitions", transitions, (["doc"], {}), (["--state"], {}), (["--on"], {"help": "a message or timer name"}),
         (["--machine"], {}), (["--offset"], {"type": int, "default": 0}))
+    add("decode", decode, (["node"], {"help": "the part's devicetree label"}),
+        (["data"], {"nargs": "+", "help": "the reply bytes, in hex, as read (one token per byte, or one run)"}),
+        (["--offset"], {"type": int, "default": 0}))
     add("code", code, (["symbol"], {}), (["--build"], {"help": "a build dir (default: the atlas's pinned build)"}),
         (["--show"], {"choices": ["all", "def", "refs"], "default": "all"}),
         (["--match"], {"help": "a regex or words: only the matching lines of each body or file"}),
@@ -1627,6 +1712,8 @@ def _run(ns, fn) -> int:
     a = Atlas(common.atlas_dir(ns.atlas_dir), getattr(ns, "atlas", None))
     kwargs = {k: v for k, v in vars(ns).items()
               if k not in ("func", "verb", "q_verb", "atlas", "atlas_dir") and v is not None}
+    if isinstance(kwargs.get("data"), list):
+        kwargs["data"] = " ".join(kwargs["data"])
     if isinstance(kwargs.get("query"), list):
         kwargs["query"] = " ".join(kwargs["query"])
     print(fn(a, **kwargs), end="")

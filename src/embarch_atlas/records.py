@@ -22,7 +22,7 @@ from . import common
 
 KINDS = ("limit", "timing", "pin", "rule", "register", "field", "quirk", "figure", "strap",
          "passthrough", "requirement", "conflict", "check", "bus", "variant",
-         "applicability", "state", "transition")
+         "applicability", "state", "transition", "frame", "transfer")
 PROV = ("deterministic", "deterministic+crosschecked", "llm-verified", "llm-unverified",
         "engineer-declared", "engineer-confirmed", "measured")
 DETERMINISTIC = ("deterministic", "deterministic+crosschecked")
@@ -49,6 +49,8 @@ FACT_KEYS = {
     "applicability": ("item", "item_kind", "role", "as", "cond", "level", "table"),
     "state": ("machine", "name", "entry"),
     "transition": ("machine", "from", "to", "event", "trigger"),
+    "frame": ("name", "size", "fields"),
+    "transfer": ("frame", "form", "variant", "when", "equation", "params"),
 }
 _SKIP_IN_FACTS = {"id", "kind", "doc", "p", "q", "prov", "fn", "note", "src"}
 
