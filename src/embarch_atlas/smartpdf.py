@@ -66,6 +66,8 @@ RED_MIN_WIDTH = 1.0      # pt; Altium's not-fitted cross is ~2 pt, a no-ERC mark
 PIN_NAME_GAP = 6.0       # pt past the anchor's body end where a pin name may start
 PIN_NAME_AXIS = 3.2      # pt off the pin axis a pin-name word may sit
 RECT_SLACK = 3.0         # pt of slack when testing a point against a popup rectangle
+TEXT_LAYER = "text-layer"  # name_source of a pad name paired from rotated or off-axis words (recover_pad_names)
+PAD_NUMBER_REACH = 20.0  # pt (|dx|+|dy|) from a pad's anchor where its printed number is looked for
 MIN_NAMED_PINS = 3       # parts with fewer pins get no pin names (their text is values, not names)
 BIG_NET = 40             # nets.md lists only 3+-pin parts' pins for nets at least this big
 
@@ -593,6 +595,69 @@ def pin_name_for(box: tuple, words: list[tuple], body: tuple[float, float] | Non
     return cands[0][1] if cands else None
 
 
+def _pad_number_word(box: tuple, words: list[tuple], pin: str) -> tuple | None:
+    """The visible word equal to the pad's number nearest its anchor, within PAD_NUMBER_REACH, or None."""
+    cx, cy = centre(box)
+    best = None
+    for w in words:
+        if w[4] != pin:
+            continue
+        wx, wy = centre(w[:4])
+        d = abs(wx - cx) + abs(wy - cy)
+        if d <= PAD_NUMBER_REACH and (best is None or d < best[0]):
+            best = (d, w)
+    return best[1] if best else None
+
+
+def recover_pad_names(pins: list[tuple[str, tuple]], words: list[tuple], region: tuple | None,
+                      exclude: set[str]) -> tuple[dict[str, str], dict[str, str]]:
+    """({pin: name}, {pin: why not}) for pads `pin_name_for` left unnamed, from the page's text layer.
+
+    A module symbol prints its pad names inside the outline, often as rotated text in a row beside the row of
+    pad numbers, so the name is not the word just past the anchor. A pad on a vertical anchor (top or bottom
+    row) takes the rotated words in its column, the column being its pad number's x (its anchor's when the
+    number is not printed); a pad on a horizontal anchor (side column) takes the upright words on its row, on
+    the pad's side of the outline. Both stay inside `region` (the symbol's outline), and a number, a designator,
+    the part's own comment, MPN or value, and another pad's number are never a name. Exactly one candidate is a
+    name; none or several leave the pad out, with the reason.
+    """
+    got: dict[str, str] = {}
+    why: dict[str, str] = {}
+    if region is None:
+        return got, {p: "no symbol outline to read inside" for p, _ in pins}
+    rx0, ry0, rx1, ry1 = region
+    skip = exclude | {p for p, _ in pins}
+    for pin, box in pins:
+        x0, y0, x1, y1 = box
+        vertical = (x1 - x0) < (y1 - y0)
+        num = _pad_number_word(box, words, pin)
+        cx, cy = centre(num[:4]) if num else centre(box)
+        bx, by = centre(box)
+        mid = ((rx0 + rx1) / 2, (ry0 + ry1) / 2)
+        cands = []
+        for w in words:
+            t = w[4]
+            if t in skip or t.isdigit():
+                continue
+            wx, wy = centre(w[:4])
+            if not (rx0 - RECT_SLACK <= wx <= rx1 + RECT_SLACK and ry0 - RECT_SLACK <= wy <= ry1 + RECT_SLACK):
+                continue
+            rotated = abs(w[6][1]) > abs(w[6][0])
+            if vertical:
+                if rotated and abs(wx - cx) <= PIN_NAME_AXIS:
+                    cands.append(t)
+            elif not rotated and abs(wy - cy) <= PIN_NAME_AXIS and (wx - mid[0]) * (bx - mid[0]) > 0:
+                cands.append(t)
+        cands = sorted(set(cands))
+        if len(cands) == 1:
+            got[pin] = cands[0]
+        else:
+            where = f"column x={cx:.1f}" if vertical else f"row y={cy:.1f}"
+            why[pin] = (f"no word in its {where}" if not cands
+                        else f"{len(cands)} candidate words in its {where}: {', '.join(cands)}")
+    return got, why
+
+
 def _is_grey(rgb: tuple) -> bool:
     return len(rgb) == 3 and all(0.55 <= c <= 0.85 for c in rgb) and max(rgb) - min(rgb) <= 0.05
 
@@ -727,6 +792,8 @@ def parse_all(pdf: Path, board: str, source_file: str | None = None, geometry: b
     props_of: dict[tuple[str, str], dict[str, Any]] = {}
     body_of: dict[tuple[str, str], tuple] = {}
     names_of: dict[tuple[str, str, str], str] = {}
+    recovered: set[tuple[str, str]] = set()
+    unpaired: dict[tuple[str, str], str] = {}
     dni_of: dict[tuple[str, str], list[str]] = {}
     popups_total = popups_matched = 0
     for sname in sorted(sheets, key=natural_key):
@@ -763,8 +830,22 @@ def parse_all(pdf: Path, board: str, source_file: str | None = None, geometry: b
                     nm = pin_name_for(b, words, body, pin, exclude)
                     if nm:
                         names_of[(ph, pin, sref)] = nm
+            if total_pins >= MIN_NAMED_PINS:
+                open_pads = [(pin, pin_boxes[(sref, pin)]) for _, pin in pins
+                             if (sref, pin) in pin_boxes and not any(k[1] == pin and k[2] == sref for k in names_of)]
+                if open_pads:
+                    region = rect or (None if len(mine) < 2 else (min(b[0] for b in mine), min(b[1] for b in mine),
+                                                                  max(b[2] for b in mine), max(b[3] for b in mine)))
+                    found, why = recover_pad_names(open_pads, words, region, exclude)
+                    for pin, nm in found.items():
+                        names_of[(pref, pin, sref)] = nm
+                        recovered.add((pref, pin))
+                    for pin, reason in why.items():
+                        unpaired[(pref, pin)] = f"{sname}: pad {pref}-{pin} has no name: {reason}"
             dni_of[(sname, sref)] = drawn_dni(sref, rect, co_boxes.get(sref), words, reds)
 
+    issues += [msg for key, msg in sorted(unpaired.items(), key=lambda kv: natural_key(kv[0][0] + "-" + kv[0][1]))
+               if (key[0], key[1]) not in recovered]
     # fold parameters and evidence onto physical parts
     components: dict[str, Any] = {}
     bom: list[dict[str, Any]] = []
@@ -784,6 +865,8 @@ def parse_all(pdf: Path, board: str, source_file: str | None = None, geometry: b
         for (ph, pin, _sref), nm in names_of.items():
             if ph == ref and pin in P["pins"]:
                 P["pins"][pin]["name"] = nm
+                if (ref, pin) in recovered:
+                    P["pins"][pin]["name_source"] = TEXT_LAYER
         props = props or {}
         ev = sorted(set(ev))
         components[ref] = {
@@ -830,6 +913,8 @@ def parse_all(pdf: Path, board: str, source_file: str | None = None, geometry: b
         "parts_dni": sum(1 for c in components.values() if c["dni"]),
         "pins_named": sum(1 for r, p in all_pins if components[r]["pins"][p]["name"]),
         "pins_on_3plus_pin_parts": sum(1 for r, p in all_pins if len(components[r]["pins"]) >= MIN_NAMED_PINS),
+        "pins_named_from_text_layer": len(recovered),
+        "pins_unpaired_text_layer": sum(1 for k in unpaired if k not in recovered),
         "popups": len(funcs),
         "popups_on_pages": popups_total,
         "popups_matched": popups_matched,
@@ -946,6 +1031,7 @@ _ISSUE_PATTERNS = (   # (kind, regex with optional net / sheets / page groups), 
     ("label-only-join", re.compile(r"^net (?P<net>.+?) reaches sheet\(s\) (?P<sheets>.+?) only through a net label")),
     ("pin-on-two-nets", re.compile(r"^pin .+? is on two nets: (?P<net>.+)$")),
     ("pin-without-part", re.compile(r"^net (?P<net>.+?) lists pin ")),
+    ("pad-name-unpaired", re.compile(r"^(?P<sheets>.+?): pad \S+ has no name: ")),
     ("pin-bookmark-designators", re.compile(r"^.+? on (?P<sheets>.+?): pin bookmarks name several designators")),
 )
 
@@ -1048,7 +1134,7 @@ def _cmd(args) -> int:
           f"({c['pins_on_net']} on a net), {c['nets']} nets ({c['nets_auto_named']} auto-named), "
           f"{c['parts_with_mpn']} with MPN, {c['parts_dni']} DNI, popups {c['popups_matched']}/{c['popups_on_pages']}, "
           f"{c['pins_named']}/{c['pins_on_3plus_pin_parts']} pin names "
-          f"({c['pins_named_from_overlay']} from pin_names.json, {c['pins_unnamed_on_3plus_pin_parts']} still unnamed "
+          f"({c['pins_named_from_overlay']} from pin_names.json, {c['pins_named_from_text_layer']} from the text layer, {c['pins_unnamed_on_3plus_pin_parts']} still unnamed "
           f"on 3+-pin parts); {xc}{len(nl['issues'])} issues "
           f"({adir / 'boards' / args.board / 'issues.md'}) -> {adir / 'boards' / args.board} in {time.time() - t0:.1f} s")
     return 0

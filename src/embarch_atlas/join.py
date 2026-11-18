@@ -561,7 +561,7 @@ class Join:
                 continue
             it = {**base, "kind": "part-pin", "part": ref, "pin_name": self.part_pin_name(board, p), "mpn": B.mpn(ref),
                   "dni": B.dni(ref)}
-            if B.pin_name_source.get(p, "").startswith("overlay:"):
+            if B.pin_name_source.get(p, "").startswith("overlay:") or B.pin_name_source.get(p) == "text-layer":
                 it["pin_name_source"] = B.pin_name_source[p]
             if re.fullmatch(r"(D|Q|LED)\d+\w*", ref):
                 others = [q for q in B.pins(ref) if q != p]
@@ -715,7 +715,7 @@ def build_pin_map(J: Join) -> list[dict]:
         uses = [J.dt_use(u) for u in J.uses_by_pin.get(port, [])] if port else []
         reach = any(f["kind"] in ("part-pin", "connector", "board-to-board") for f in far)
         rows.append({
-            "num": num, "key": f"{mb}:{key}", "port": port, "name": name,
+            "num": num, "key": f"{mb}:{key}", "port": port, "name": name, "name_source": B.pin_name_source.get(key),
             "ds_name": ds[1].get("name") if ds else None, "io": (ds[1].get("type") or ds[1].get("io")) if ds else None,
             "ds_cite": cite(ds[1], ds[0]) if ds else None,
             "net": net, "rail": rail, "far": far, "dt": uses,
@@ -1101,7 +1101,10 @@ def render_pins_md(stamp: dict, mcu: tuple[str, str] | None, mpn: str | None, ro
           "| # | port | io | net | far end | DT |", "|---|---|---|---|---|---|"]
     for r in rows:
         far = f"(rail {r['net']})" if r["rail"] else far_str(r["far"])
-        L.append(f"| {r['num']} | {r['port'] or r['name'] or ''} | {r['io'] or ''} | {r['net'] or '(unconnected)'} | "
+        label = r['port'] or r['name'] or ''
+        if label and r.get("name_source") == "text-layer":     # a name paired from the drawing's text, not a printed pin name
+            label += " (text-layer)"
+        L.append(f"| {r['num']} | {label} | {r['io'] or ''} | {r['net'] or '(unconnected)'} | "
                  f"{far.replace('|', '/')} | {dt_str(r['dt']).replace('|', '/')} |")
     L += ["", "## I2C devices: part by address strap, signals by net", "",
           "| DT node | reg | part | address evidence | signals (prop: DT pin vs part pin -> MCU) |", "|---|---|---|---|---|"]
