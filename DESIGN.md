@@ -12,8 +12,9 @@ PRD), joined to the **firmware** (a Zephyr build), without reading any of them
 whole. Scripts do every deterministic step. The LLM steps run in Claude Code
 sessions, driven by skills. Every fact carries a citation and a provenance class.
 
-It is fully local. **The tool never fetches a document**: the engineer supplies
-every file, and a missing one becomes a question. A shared datasheet library (owner decision,
+It is fully local. **The tool never fetches a document it distils**: the engineer supplies
+every file, and a missing one becomes a question. The one exception is `fetch-text`, a standalone
+research verb outside the document pipeline whose output is never an atlas or library input. A shared datasheet library (owner decision,
 2026-11-17) keeps that true: it is a folder the engineer fills, read beside the
 sources folder ("Where documents come from").
 
@@ -1310,10 +1311,12 @@ document is a row of `missing.md`.
 - **Versions and answers stay keyed by content.** A new revision dropped into the library is a new sha256 and
   comes in as any changed document does: the inventory diff, a confirmed file going back to proposed,
   `mark_supersession` for an older revision. `answers.toml` needs no new key.
-- **Still no fetching.** The library is filled by the engineer, never by a download, and a part with no
+- **Still no fetching, inside the pipeline.** The library is filled by the engineer, never by a download, and a part with no
   document in either folder is still a `missing.md` question. Chosen over an opt-in fetcher (alone, or filling
   the library), which would put network access and a licensing question inside a tool that is fully local, and
   over today's rule alone, which has every project supply the same datasheets again by hand.
+  `fetch-text` does not reopen this: it is a standalone research verb outside the pipeline, and nothing it
+  fetches is distilled or enters the library, which is all the 2026-11-17 rejection of an in-pipeline fetcher covered.
 
 What was built, and the readings taken where the decision left room:
 
@@ -1341,7 +1344,7 @@ What was built, and the readings taken where the decision left room:
   against the atlas directory. This holds with no library set: the copy guards a replaced sources file too.
   `inventory` copies the file of a document prepped before this, when the manifest's file still has the
   sha256 `doc.json` records. A board PDF is found in the sources folder, else the library (`project.board_pdf`).
-- **Never**: no download, no network call, no write into the library folder (a test runs `inventory`,
+- **Never**, in the document pipeline (`inventory`, `missing`, `doc prep`): no download, no network call, no write into the library folder (a test runs `inventory`,
   `missing` and `doc prep` against a read-only library with sockets disabled).
 - **Not wired**: a schematic ingest's `source_file` still names the original path; only the copy is kept.
 
