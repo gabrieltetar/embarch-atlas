@@ -19,6 +19,7 @@ MODULES = [
     "missing",
     "pdftext",
     "pdfpages",
+    "fetchtext",
     "check",
     "render",
     "regparse",
