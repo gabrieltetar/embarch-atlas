@@ -56,9 +56,10 @@ CURRENT_MA_UNIT = 10    # a fixed or variable PDO's current, an SPR AVS APDO's c
 BATTERY_MW_UNIT = 250   # a battery PDO's power: 250 mW
 APDO_MV_UNIT = 100      # a PPS or AVS APDO's voltages: 100 mV
 PPS_MA_UNIT = 50        # a PPS APDO's current: 50 mA
+VSAFE5V_MV = 5000       # a fixed PDO at this voltage carries the vSafe5V flag fields; above it they are reserved
 WORD_MASK = 0xFFFFFFFF
 
-PDO_FIELDS = ("word", "type", "mv", "min_mv", "max_mv", "ma", "mw", "pdp_w", "ma_15v", "ma_20v", "peak", "drp",
+PDO_FIELDS = ("word", "type", "mv", "min_mv", "max_mv", "ma", "mw", "pdp_w", "max_w", "ma_9_15v", "ma_15_20v", "peak", "drp",
               "usb_suspend", "higher_cap", "unconstrained", "usb_comm", "drd", "unchunked", "epr", "frs", "limited")
 
 
@@ -79,9 +80,9 @@ class PDO:
         elif t == "battery":
             body = f" {self.min_mv}-{self.max_mv} mV {self.mw} mW"
         elif t == "epr-avs":
-            body = f" {self.min_mv}-{self.max_mv} mV {self.pdp_w} W"
+            body = f" {self.min_mv}-{self.max_mv} mV {self.pdp_w if self.pdp_w is not None else self.max_w} W"
         elif t == "spr-avs":
-            body = f" {self.ma_15v} mA at 15 V, {self.ma_20v} mA at 20 V"
+            body = f" {self.ma_9_15v} mA for 9-15 V, {self.ma_15_20v} mA for 15-20 V"
         else:
             body = f" {self.word:#010x}"
         return f"{t}{body}"
@@ -100,15 +101,21 @@ def _flag(w: int, bit: int) -> bool:
 def _pdo(word: Any, sink: bool) -> PDO:
     """A 32-bit PDO or APDO word by the public USB PD layout: B31..30 the supply type (fixed, battery, variable,
     augmented); an APDO's B29..28 its kind (SPR PPS, EPR AVS, SPR AVS). Voltages in mV, currents in mA, a
-    battery PDO's power in mW, an EPR AVS APDO's PDP in W; `peak` and `frs` are the raw 2-bit codes."""
+    battery PDO's power in mW, an EPR AVS source APDO's PDP in W (a sink's Maximum Power in `max_w`); `peak` and
+    `frs` are the raw 2-bit codes. Checked field by field against USB PD R3.2 V1.2. A reserved field is not decoded,
+    and a field the word's type or role does not carry is None: a fixed PDO above 5 V carries only `peak` (source),
+    `mv` and `ma`, so its vSafe5V flag fields are None."""
     w = int(word) & WORD_MASK
     kind = _bits(w, 31, 30)
     if kind == 0:
-        common = dict(word=w, type="fixed", mv=_bits(w, 19, 10) * FIXED_MV_UNIT, ma=_bits(w, 9, 0) * CURRENT_MA_UNIT,
-                      drp=_flag(w, 29), unconstrained=_flag(w, 27), usb_comm=_flag(w, 26), drd=_flag(w, 25))
+        fixed = dict(word=w, type="fixed", mv=_bits(w, 19, 10) * FIXED_MV_UNIT, ma=_bits(w, 9, 0) * CURRENT_MA_UNIT,
+                     peak=None if sink else _bits(w, 21, 20))
+        if fixed["mv"] != VSAFE5V_MV:
+            return PDO(**fixed)
+        fixed.update(drp=_flag(w, 29), unconstrained=_flag(w, 27), usb_comm=_flag(w, 26), drd=_flag(w, 25))
         if sink:
-            return PDO(**common, higher_cap=_flag(w, 28), frs=_bits(w, 24, 23))
-        return PDO(**common, usb_suspend=_flag(w, 28), unchunked=_flag(w, 24), epr=_flag(w, 23), peak=_bits(w, 21, 20))
+            return PDO(**fixed, higher_cap=_flag(w, 28), frs=_bits(w, 24, 23))
+        return PDO(**fixed, usb_suspend=_flag(w, 28), unchunked=_flag(w, 24), epr=_flag(w, 23))
     if kind in (1, 2):
         rng = dict(word=w, max_mv=_bits(w, 29, 20) * FIXED_MV_UNIT, min_mv=_bits(w, 19, 10) * FIXED_MV_UNIT)
         if kind == 1:
@@ -120,10 +127,11 @@ def _pdo(word: Any, sink: bool) -> PDO:
                    ma=_bits(w, 6, 0) * PPS_MA_UNIT, limited=None if sink else _flag(w, 27))
     if apdo == 1:
         return PDO(word=w, type="epr-avs", peak=None if sink else _bits(w, 27, 26),
-                   max_mv=_bits(w, 25, 17) * APDO_MV_UNIT, min_mv=_bits(w, 15, 8) * APDO_MV_UNIT, pdp_w=_bits(w, 7, 0))
+                   max_mv=_bits(w, 25, 17) * APDO_MV_UNIT, min_mv=_bits(w, 15, 8) * APDO_MV_UNIT, pdp_w=None if sink else _bits(w, 7, 0),
+                   max_w=_bits(w, 7, 0) if sink else None)
     if apdo == 2:
         return PDO(word=w, type="spr-avs", peak=None if sink else _bits(w, 27, 26),
-                   ma_15v=_bits(w, 19, 10) * CURRENT_MA_UNIT, ma_20v=_bits(w, 9, 0) * CURRENT_MA_UNIT)
+                   ma_9_15v=_bits(w, 19, 10) * CURRENT_MA_UNIT, ma_15_20v=_bits(w, 9, 0) * CURRENT_MA_UNIT)
     return PDO(word=w, type="reserved")
 
 

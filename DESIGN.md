@@ -494,8 +494,10 @@ rule a configuration value can break. `join` evaluates every one against the pin
   complies, whatever the requirement's modality. The helpers are per standard and carry its prefix. USB PD's are
   `pd_pdo` (a Source_Capabilities PDO or APDO word) and `pd_sink_pdo` (a Sink_Capabilities one), decoded by the
   public PDO layout into `type` (fixed, battery, variable, pps, epr-avs, spr-avs, reserved), `mv`, `min_mv`,
-  `max_mv`, `ma`, `mw` (battery), `pdp_w` (EPR AVS), `ma_15v`, `ma_20v` (SPR AVS), the flag bits and the raw
-  `peak` and `frs` codes. A field its type does not carry is `None`.
+  `max_mv`, `ma`, `mw` (battery), `pdp_w` (EPR AVS source), `max_w` (EPR AVS sink), `ma_9_15v`, `ma_15_20v` (SPR AVS), the flag bits and the
+  raw `peak` and `frs` codes. A field its type or role does not carry is `None`, and a reserved field is never
+  decoded: a fixed PDO above 5 V keeps only `mv`, `ma` and (source) `peak`, its vSafe5V flags are `None`. The
+  decode was checked field by field against USB PD R3.2 V1.2 and pinned by known words in `tests/test_fwcheck.py`.
 - **Where it runs**: a `dt` selector matching several okay nodes runs the rule once per node (each port of a
   two-port product); a rule whose `dt` inputs all read one node runs on that node; any other rule runs once.
 - **Engineer-declared values** (`[standards."<doc_id>"]`, "atlas.toml" below) are the values a rule reads that

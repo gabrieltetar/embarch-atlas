@@ -64,8 +64,8 @@ def test_pdo_words_decode_by_type():
     e = fwcheck.pd_pdo(epr_avs(14300, 23100, 77))
     assert (e.type, e.min_mv, e.max_mv, e.pdp_w) == ("epr-avs", 14300, 23100, 77)
     s = fwcheck.pd_pdo(spr_avs(1330, 990))
-    assert (s.type, s.ma_15v, s.ma_20v) == ("spr-avs", 1330, 990)
-    assert str(s) == "spr-avs 1330 mA at 15 V, 990 mA at 20 V"
+    assert (s.type, s.ma_9_15v, s.ma_15_20v) == ("spr-avs", 1330, 990)
+    assert str(s) == "spr-avs 1330 mA for 9-15 V, 990 mA for 15-20 V"
     sink = fwcheck.pd_sink_pdo(fixed(5000, 470, 28) | (0b10 << 23))
     assert (sink.higher_cap, sink.frs, sink.usb_suspend) == (True, 2, None)
     assert fwcheck.pd_pdo((0b11 << 30) | (0b11 << 28)).type == "reserved"
@@ -316,3 +316,40 @@ def test_the_procedures_worked_example_is_a_valid_fw_check():
         for e in (fc["expr"], fc.get("applies_when")):
             if e:
                 ast.parse(e, mode="eval")
+
+
+def test_pdo_known_words_pin_every_type_source_and_sink():
+    # Fixed 5 V source: DRP, suspend, unconstrained, USB comm, DRD, unchunked, EPR, peak 2, 5 V, 3 A
+    src = fwcheck.pd_pdo((0b11111 << 25) | (0b11 << 23) | (0b10 << 20) | (100 << 10) | 300)
+    assert (src.mv, src.ma, src.peak) == (5000, 3000, 2)
+    assert (src.drp, src.usb_suspend, src.unconstrained, src.usb_comm, src.drd, src.unchunked, src.epr) == (True,) * 7
+    assert (src.higher_cap, src.frs) == (None, None)
+    snk = fwcheck.pd_sink_pdo((1 << 29) | (1 << 28) | (1 << 26) | (0b11 << 23) | (100 << 10) | 300)
+    assert (snk.mv, snk.ma, snk.drp, snk.higher_cap, snk.unconstrained, snk.usb_comm, snk.drd, snk.frs) == \
+           (5000, 3000, True, True, False, True, False, 3)
+    assert (snk.usb_suspend, snk.unchunked, snk.epr, snk.peak) == (None,) * 4
+    nine = fwcheck.pd_pdo((1 << 29) | (1 << 25) | (0b01 << 20) | (180 << 10) | 300)   # reserved bits set: not decoded
+    assert (nine.mv, nine.ma, nine.peak, nine.drp, nine.drd, nine.epr) == (9000, 3000, 1, None, None, None)
+    nine_snk = fwcheck.pd_sink_pdo((1 << 29) | (0b01 << 20) | (180 << 10) | 300)
+    assert (nine_snk.mv, nine_snk.peak, nine_snk.drp, nine_snk.frs) == (9000, None, None, None)
+    # PPS: PPS Power Limited, max 11 V, min 3.3 V, 3 A
+    pp = (0b11 << 30) | (1 << 27) | (110 << 17) | (33 << 8) | 60
+    s_ = fwcheck.pd_pdo(pp)
+    assert (s_.type, s_.limited, s_.max_mv, s_.min_mv, s_.ma) == ("pps", True, 11000, 3300, 3000)
+    k = fwcheck.pd_sink_pdo(pp)
+    assert (k.limited, k.max_mv, k.min_mv, k.ma) == (None, 11000, 3300, 3000)
+    # SPR AVS source peak 3; sink peak not carried
+    av = (0b11 << 30) | (0b10 << 28) | (0b11 << 26) | (300 << 10) | 200
+    assert fwcheck.pd_pdo(av).peak == 3 and fwcheck.pd_sink_pdo(av).peak is None
+    assert (fwcheck.pd_pdo(av).ma_9_15v, fwcheck.pd_pdo(av).ma_15_20v) == (3000, 2000)
+    # EPR AVS: source PDP, sink Maximum Power
+    ea = (0b11 << 30) | (0b01 << 28) | (0b10 << 26) | (480 << 17) | (150 << 8) | 140
+    e = fwcheck.pd_pdo(ea)
+    assert (e.peak, e.max_mv, e.min_mv, e.pdp_w, e.max_w) == (2, 48000, 15000, 140, None)
+    e = fwcheck.pd_sink_pdo(ea)
+    assert (e.peak, e.max_mv, e.min_mv, e.pdp_w, e.max_w) == (None, 48000, 15000, None, 140)
+    assert str(e) == "epr-avs 15000-48000 mV 140 W"
+    # Battery and Variable: max 21 V (420), min 5 V (100), then 60 W (240 x 250 mW) or 3 A
+    assert fwcheck.pd_pdo((0b01 << 30) | (420 << 20) | (100 << 10) | 240).mw == 60000
+    var = fwcheck.pd_pdo((0b10 << 30) | (420 << 20) | (100 << 10) | 300)
+    assert (var.max_mv, var.min_mv, var.ma) == (21000, 5000, 3000)
