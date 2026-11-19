@@ -28,6 +28,9 @@ Templates
   tables (`180h nName 0x0000`); D15..D0 bit diagrams, read from word x-positions under the header row
   and the cell boundaries PyMuPDF `page.get_drawings()` returns. Registers are 16-bit words. The
   document prints no per-field reset, so field resets are derived from the register reset and say so.
+  A second heading form, `Name Register (0xNN)`, takes its default from a summary table (ADDRESS ..
+  DEFAULT header words, rows `0xNN NAME ... R/W 0xVVVV`, `—` for none); a heading with no row and a row
+  with no heading are each written as a conflict.
 
 A template that finds no register makes the verb exit 1 with the patterns it tried and the lines that
 almost matched, so a template mismatch never looks like success.
@@ -823,6 +826,10 @@ class Maxim(Template):
     name = "maxim"
     needs_pdf = True
     PAIR = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*(?:Register\s*)?\(([0-9A-Fa-f]{2,3})h\)")
+    # the other Maxim heading: `STATUS Register (0x1A)`, a 0x byte address (the word Register is required)
+    PAIR_X = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s+Register\s*\(0x([0-9A-Fa-f]{1,4})\)")
+    # a summary-table row: `0x0C CONFIG <LSb> <description> R/W 0x971C`, the default `—` when it has none
+    XROW = re.compile(r"^\s*0x([0-9A-Fa-f]{1,4})\s+([A-Za-z][A-Za-z0-9_]*)\b.*?\b(R/W|R|W)\s+(0x[0-9A-Fa-f]{1,4}|—|–|-)\s*$")
     LBL_TYPE = re.compile(r"^Register\s+type\s*:\s*(?P<v>.*)$", re.I)
     LBL_NV = re.compile(r"^Nonvolatile\s+(?P<k>Backup\s+and\s+Restore(?:\s+From)?|Backup|Restore)\b[^:]*:\s*(?P<v>.*)$", re.I)
     LBL_INIT = re.compile(r"^(?P<k>Alternate\s+)?Initial\s+Value\s*:\s*(?P<v>.*)$", re.I)
@@ -837,11 +844,12 @@ class Maxim(Template):
     FUNC_END = {"if", "and", "or", "to", "from", "of", "the", "a", "an", "for", "with", "is", "be", "="}
 
     def patterns(self) -> list[tuple[str, str]]:
-        return [("register heading (bold, >= 10 pt)", "<Name> Register (<NNN>h) | <Name> (<NNN>h)/<Name> (<NNN>h) Registers"),
+        return [("register heading (bold, >= 10 pt)", "<Name> Register (<NNN>h) | <Name> (<NNN>h)/<Name> (<NNN>h) Registers | <Name> Register (0x<NN>)"),
                 ("section lines", "Register Type: ... | Nonvolatile Backup|Restore: ... | [Alternate] Initial Value: ..."),
                 ("memory map", "WORD <00x>h <01x>h ... rows <N>h"),
                 ("bit diagram", "a D15 .. D0 header row with drawn cell boundaries, captioned Figure N. <Name> (<NNN>h) Format"),
-                ("factory-default table", "<NNN>h <Name> 0x<VVVV>")]
+                ("factory-default table", "<NNN>h <Name> 0x<VVVV>"),
+                ("summary table (ADDRESS .. DEFAULT)", "0x<NN> <NAME> ... R/W|R|W 0x<VVVV>|—")]
 
     def near_misses(self, pages, pdf=None, limit=8):
         if pdf is None:
@@ -851,7 +859,7 @@ class Maxim(Template):
         with pymupdf.open(pdf) as doc:
             for i, page in enumerate(doc):
                 for ln in _page_lines(page, i + 1):
-                    if self.PAIR.search(ln.text) and "register" in ln.text.lower() and not self.LEADER.search(ln.text) \
+                    if (self.PAIR.search(ln.text) or self.PAIR_X.search(ln.text)) and "register" in ln.text.lower() and not self.LEADER.search(ln.text) \
                             and not ln.text.startswith("Figure"):
                         out.append((i + 1, f"{ln.text[:140]}  [{'bold' if ln.bold else 'regular'} {ln.size:.1f} pt]"))
                 if len(out) >= limit:
@@ -964,6 +972,21 @@ class Maxim(Template):
                                             "p": pno, "q": _ws(ln)}
         return out
 
+    def _xtable(self, pno, words) -> dict[int, dict]:
+        """The summary table of the heading layout: a page with ADDRESS and DEFAULT header words, rows by address."""
+        heads = {w[4].upper() for w in words}
+        if not {"ADDRESS", "DEFAULT"} <= heads:
+            return {}
+        out = {}
+        for row in _group_lines(words):
+            text = " ".join(w[4] for w in row)
+            m = self.XROW.match(text)
+            if m:
+                out[int(m.group(1), 16)] = {"name": m.group(2), "access": ACCESS[m.group(3)],
+                                            "reset": int(m.group(4), 16) if m.group(4).startswith("0x") else None,
+                                            "p": pno, "q": _ws(text)}
+        return out
+
     def _sections(self, stream: list[_Line]) -> list[dict]:
         heads = []
         i = 0
@@ -979,15 +1002,16 @@ class Maxim(Template):
                     else:
                         break
                 pairs = [(n, int(a, 16)) for n, a in self.PAIR.findall(text)]
-                if pairs and re.search(r"\bRegisters?\b", text):
-                    heads.append((i, j, text, pairs, bool(re.search(r"\)\s*to\s+", text))))
+                xpairs = [(n, int(a, 16)) for n, a in self.PAIR_X.findall(text)] if not pairs else []
+                if (pairs or xpairs) and re.search(r"\bRegisters?\b", text):
+                    heads.append((i, j, text, pairs or xpairs, bool(re.search(r"\)\s*to\s+", text)), bool(xpairs)))
                 i = j + 1
                 continue
             i += 1
         secs = []
-        for k, (i, j, text, pairs, rng) in enumerate(heads):
+        for k, (i, j, text, pairs, rng, hexa) in enumerate(heads):
             end = heads[k + 1][0] if k + 1 < len(heads) else len(stream)
-            sec = {"pairs": pairs, "range": rng, "p": stream[i].p, "q": _ws(text), "type": None, "nv": None, "init": None}
+            sec = {"pairs": pairs, "range": rng, "p": stream[i].p, "q": _ws(text), "hex": hexa, "type": None, "nv": None, "init": None}
             body = stream[j + 1:end]
             n = 0
             while n < len(body):
@@ -1032,6 +1056,7 @@ class Maxim(Template):
         diagrams: list[_Diagram] = []
         grid: dict[int, dict] = {}
         defaults: dict[int, dict] = {}
+        xtable: dict[int, dict] = {}
         with pymupdf.open(pdf) as doc:
             for i, page in enumerate(doc):
                 pno = i + 1
@@ -1048,16 +1073,21 @@ class Maxim(Template):
                             diagrams.append(d)
                 grid.update(self._grids(pno, words))
                 defaults.update(self._defaults(pno, pages.get(pno, "")))
+                xtable.update(self._xtable(pno, words))
         secs = self._sections(stream)
-        regs = self._assemble(secs, diagrams, grid, defaults, notes, issues)
+        regs = self._assemble(secs, diagrams, grid, defaults, notes, issues, xtable)
         summary = {}
         for a in set(grid) | set(defaults):
             g, d = grid.get(a), defaults.get(a)
             summary[a] = {"name": (g or d)["name"], "access": None, "reset": d["reset"] if d else None, "size": None,
                           "p": (g or d)["p"], "q": (g or d)["q"]}
+        for a, x in xtable.items():
+            summary[a] = {"name": x["name"], "access": x["access"], "reset": x["reset"], "size": None, "p": x["p"], "q": x["q"]}
         return Parse(registers=regs, summary=summary, notes=notes, issues=issues)
 
-    def _assemble(self, secs, diagrams, grid, defaults, notes, issues) -> list[RawReg]:
+    def _assemble(self, secs, diagrams, grid, defaults, notes, issues, xtable=None) -> list[RawReg]:
+        xtable = xtable or {}
+        xaddr = {a for s in secs if s["hex"] for _, a in s["pairs"]}
         # every (address, name) the document prints, best source first
         names: dict[int, list[tuple[int, str, str, int, str]]] = {}
 
@@ -1114,7 +1144,7 @@ class Maxim(Template):
                 if e[4] and e[4] not in qs:
                     qs.append(e[4])
             rr = RawReg(name=nm, addrs=[a], resets=[], p=ps[0] if len(ps) == 1 else ps,
-                        q=qs[0] if len(qs) == 1 else qs, width=16, addr_digits=3)
+                        q=qs[0] if len(qs) == 1 else qs, width=16, addr_digits=2 if a in xaddr and a <= 0xFF else 3)
             others = sorted({(e[1], e[2], e[3]) for e in es if e[1] != nm})
             for o, how, p in others:
                 rr.notes.append(f"{how} p{p} prints it {o}")
@@ -1208,6 +1238,23 @@ class Maxim(Template):
             r = regs.get(alias.get(a, a))
             if r is not None and g["reset"] is not None:
                 value(r, 2, g["reset"], f"factory default, p{g['p']}", g["p"], g["q"])
+        for a, x in xtable.items():
+            r = regs.get(a)
+            if r is None:
+                continue            # no heading: to_records reports the row as having no register section
+            if x["name"].lower() != r.name.lower():
+                issues.append(Issue(f"{_reg_slug(r.name)}.table_name", r, None, [f"heading p{r.p if isinstance(r.p, int) else r.p[0]}",
+                                                                                   f"summary table p{x['p']}"],
+                                    f"{r.name} at 0x{a:02X} is named {x['name']} in the summary table", x["p"], x["q"]))
+            if x["reset"] is not None:
+                value(r, 2, x["reset"], f"summary table default, p{x['p']}", x["p"], x["q"])
+        if xtable:
+            for s in secs:
+                for nm, a in s["pairs"]:
+                    if s["hex"] and a not in xtable:
+                        issues.append(Issue(f"{_reg_slug(nm)}.no_summary_row", regs.get(a), None, [f"heading p{s['p']}"],
+                                            f"{nm} at 0x{a:02X} has a register heading but no row in the summary table",
+                                            s["p"], s["q"]))
         for r in regs.values():
             vs = sorted(values.get(id(r), []), key=lambda v: v[0])
             if not vs:

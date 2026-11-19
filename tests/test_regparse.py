@@ -96,7 +96,7 @@ def _schema_valid(rec):
 def synth(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("regsynth")
     out = {}
-    for did, tpl in (("syn700@A", "ti"), ("syn257@A", "ti"), ("syn880@A", "ti"), ("mxsyn@1", "maxim")):
+    for did, tpl in (("syn700@A", "ti"), ("syn257@A", "ti"), ("syn880@A", "ti"), ("mxsyn@1", "maxim"), ("mxhx@1", "maxim")):
         atlas, docdir = rsyn.make(tmp, did)
         out[did] = (atlas, docdir, regparse.run(docdir, tpl), _recs(docdir))
     return out
@@ -275,3 +275,22 @@ def test_maxim_needs_the_pdf(synth, tmp_path):
     shutil.copytree(docdir, copy)
     with pytest.raises(ValueError, match="source PDF"):
         regparse.run(copy, "maxim")
+
+
+def test_maxim_hex_headings_take_their_default_from_the_summary_table(synth):
+    _, _, st, recs = synth["mxhx@1"]
+    regs = {r["name"]: r for r in recs.values() if r["kind"] == "register"}
+    assert sorted(regs) == ["CmdReg", "LimitA", "OrphanH", "StatReg"]
+    assert [(regs[n]["addr"], regs[n].get("reset")) for n in ("StatReg", "LimitA", "CmdReg")] == \
+        [("0x1A", "0x0100"), ("0x14", "0xFF00"), ("0xFE", None)]            # an em dash default is no reset
+    assert regs["StatReg"]["width"] == 16 and regs["StatReg"]["summary"]["access"] == "rw"
+    assert "factory" not in (regs["StatReg"].get("note") or "") and "summary table default" in regs["StatReg"]["note"]
+    assert st["fields"] == 0
+
+
+def test_maxim_hex_layout_reports_a_row_without_heading_and_a_heading_without_row(synth):
+    _, _, _, recs = synth["mxhx@1"]
+    row = recs["mxhx.conflict.summary.CfgReg"]                              # 0x0C is in the table, no heading
+    assert "no register section" in row["text"] and row["refs"] == []
+    head = recs["mxhx.conflict.OrphanH.no_summary_row"]
+    assert "no row in the summary table" in head["text"] and head["refs"] == ["mxhx.reg.OrphanH"]

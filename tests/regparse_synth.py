@@ -331,7 +331,40 @@ def build_mxsyn(path: Path) -> Path:
     return path
 
 
-BUILDERS = {"syn700@A": build_syn700, "syn257@A": build_syn257, "syn880@A": build_syn880, "mxsyn@1": build_mxsyn}
+def build_mxhx(path: Path) -> Path:
+    """The Maxim heading layout: `Name Register (0x..)` headings, one summary table with a DEFAULT column."""
+    doc = pymupdf.open()
+    p = doc.new_page(width=612, height=792)
+    y = 90
+    for text, font in [("Register Descriptions", BODY), ("StatReg Register (0x1A)", BOLD),
+                       ("The StatReg register holds status bits.", BODY), ("", BODY),
+                       ("LimitA Register (0x14)", BOLD), ("The LimitA register sets a limit.", BODY), ("", BODY),
+                       ("CmdReg Register (0xFE)", BOLD), ("The CmdReg register takes commands.", BODY), ("", BODY),
+                       ("OrphanH Register (0x30)", BOLD), ("A heading the summary table never lists.", BODY)]:
+        if text:
+            p.insert_text((54, y), text, **font)
+        y += 14
+    p = doc.new_page(width=612, height=792)
+    p.insert_text((54, 80), "Table 1. Register Summary", **BODY)
+    for x, t in ((54, "ADDRESS"), (110, "REGISTER"), (200, "16-BIT LSb"), (270, "DESCRIPTION"), (420, "READ/WRITE"),
+                 (500, "DEFAULT")):
+        p.insert_text((x, 100), t, **CELL)
+    p.insert_text((110, 109), "NAME", **CELL)
+    rows = [("0x0C", "CfgReg", "\u2014", "Compensation to optimize", "R/W", "0x971C"),
+            ("0x14", "LimitA", "20 mV", "Voltage limit, two-line", "R/W", "0xFF00"),
+            ("0x1A", "StatReg", "\u2014", "Status flags", "R/W", "0x0100"),
+            ("0xFE", "CmdReg", "\u2014", "Command register", "W", "\u2014")]
+    for i, (a, n, lsb, d, rw, df) in enumerate(rows):
+        y = 130 + 16 * i
+        for x, t in ((54, a), (110, n), (200, lsb), (270, d), (420, rw), (500, df)):
+            p.insert_text((x, y), t, fontname="helv", fontsize=8)
+    doc.set_metadata({"title": "MXHX Synthetic Gauge", "keywords": "MXHX"})
+    doc.save(path)
+    return path
+
+
+BUILDERS = {"syn700@A": build_syn700, "syn257@A": build_syn257, "syn880@A": build_syn880, "mxsyn@1": build_mxsyn,
+            "mxhx@1": build_mxhx}
 
 
 def make(tmp: Path, doc_id: str) -> tuple[Path, Path]:
