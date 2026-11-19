@@ -363,8 +363,57 @@ def build_mxhx(path: Path) -> Path:
     return path
 
 
+def build_mxbit(path: Path, grid: bool = True) -> Path:
+    """The Maxim bit-column layout: one register-map table (REGISTER, B7..B0, REG ADDR, POR STATE, R/W), a row
+    per register with no heading, names and fields wrapped over two lines, multi-bit fields drawn over their
+    columns, and one field whose printed [m:n] disagrees with its drawn span."""
+    doc = pymupdf.open()
+    p = doc.new_page(width=612, height=792)
+    p.insert_text((54, 80), "Table 2. Register Map", **BODY)
+    cx = {b: 170 + 30 * (7 - b) for b in range(8)}                   # column centres, B7 .. B0
+    xl, xr = cx[7] - 15, cx[0] + 15
+    for x, t in ((54, "REGISTER"), (405, "REG ADDR"), (462, "POR STATE"), (535, "R/W")):
+        p.insert_text((x, 106), t, **CELL)
+    for b in range(8):
+        _center(p, f"B{b}", cx[b], 106, **CELL)
+    rows = [("Event\nStatus 1", [(7, 7, "FIFO_HI"), (6, 6, "SMP_\nRDY"), (5, 5, "LVL_OVR"), (0, 0, "PWR_OK")],
+             "0x00", "0X01", "R"),
+            ("FIFO\nSetup", [(7, 5, "SMP_AVE[2:0]"), (4, 4, "ROLL"), (3, 0, "FIFO_LVL[3:0]")], "0x08", "0X1F", "R/W"),
+            ("Mode\nSetup", [(7, 7, "SHDN"), (6, 6, "RST"), (2, 1, "MODE[2:0]")], "0x09", "0x00", "R/W")]
+    top, h = 116.0, 40.0
+    p.draw_line((54, top), (xr, top), width=0.5)
+    for i, (name, cells, addr, por, rw) in enumerate(rows):
+        y0 = top + h * i
+        p.draw_line((54, y0 + h), (560, y0 + h), width=0.5)
+        merged = {b for hi, lo, _ in cells for b in range(lo, hi)}        # a rule between b+1 and b is absent
+        for b in range(7, -1, -1):
+            if grid and b not in merged:
+                x = cx[b] - 15
+                p.draw_line((x, y0), (x, y0 + h), width=0.5)
+        if grid:
+            p.draw_line((xr, y0), (xr, y0 + h), width=0.5)
+        parts = name.split("\n")
+        for k, part in enumerate(parts):
+            p.insert_text((54, y0 + 24 + (k - (len(parts) - 1) / 2) * 10), part, **CELL)
+        for hi, lo, text in cells:
+            c = (cx[hi] + cx[lo]) / 2
+            fp = text.split("\n")
+            for k, part in enumerate(fp):
+                _center(p, part, c, y0 + 24 + (k - (len(fp) - 1) / 2) * 9, **CELL)
+        for x, t in ((410, addr), (470, por), (540, rw)):
+            p.insert_text((x, y0 + 24), t, **CELL)
+    doc.set_metadata({"title": "MXBIT Synthetic Optical Sensor", "keywords": "MXBIT"})
+    doc.save(path)
+    return path
+
+
+def build_mxbn(path: Path) -> Path:
+    """The same table with no vertical rules drawn: widths come from the [m:n] suffixes."""
+    return build_mxbit(path, grid=False)
+
+
 BUILDERS = {"syn700@A": build_syn700, "syn257@A": build_syn257, "syn880@A": build_syn880, "mxsyn@1": build_mxsyn,
-            "mxhx@1": build_mxhx}
+            "mxhx@1": build_mxhx, "mxbit@1": build_mxbit, "mxbn@1": build_mxbn}
 
 
 def make(tmp: Path, doc_id: str) -> tuple[Path, Path]:

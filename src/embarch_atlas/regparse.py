@@ -31,6 +31,8 @@ Templates
   A second heading form, `Name Register (0xNN)`, takes its default from a summary table (ADDRESS ..
   DEFAULT header words, rows `0xNN NAME ... R/W 0xVVVV`, `—` for none); a heading with no row and a row
   with no heading are each written as a conflict.
+  A third layout is one 8-bit register map with no headings (B7..B0, ADDR, POR header words, a row per
+  register); its field widths come from drawn cell rules, `NAME[m:n]` giving a width that is checked.
 
 A template that finds no register makes the verb exit 1 with the patterns it tried and the lines that
 almost matched, so a template mismatch never looks like success.
@@ -849,7 +851,8 @@ class Maxim(Template):
                 ("memory map", "WORD <00x>h <01x>h ... rows <N>h"),
                 ("bit diagram", "a D15 .. D0 header row with drawn cell boundaries, captioned Figure N. <Name> (<NNN>h) Format"),
                 ("factory-default table", "<NNN>h <Name> 0x<VVVV>"),
-                ("summary table (ADDRESS .. DEFAULT)", "0x<NN> <NAME> ... R/W|R|W 0x<VVVV>|—")]
+                ("summary table (ADDRESS .. DEFAULT)", "0x<NN> <NAME> ... R/W|R|W 0x<VVVV>|—"),
+                ("bit-column register map (B7 .. B0)", "<Register name> <field per bit column> 0x<NN> 0x<NN> R/W|R|W, one row per register")]
 
     def near_misses(self, pages, pdf=None, limit=8):
         if pdf is None:
@@ -987,6 +990,159 @@ class Maxim(Template):
                                             "p": pno, "q": _ws(text)}
         return out
 
+    BCOL = re.compile(r"^B([0-7])$")
+    BROW = re.compile(r"^(0[xX][0-9A-Fa-f]{1,2})\s+(0[xX][0-9A-Fa-f]{1,2}|\S+)\s+(R/W|RW|R|W)$")
+    FSUFFIX = re.compile(r"\[(\d+)(?::(\d+))?\]$")
+
+    def _bitrows(self, pno, words, segs, notes) -> list[dict]:
+        """The bit-column register map: a header row with B7..B0, REG ADDR, POR STATE and R/W words, then one
+        table row per register. Each row's words are split into the name (left of the bit columns), the field
+        cells (inside them) and the address, POR state and access (right of them). Whether neighbouring bit
+        columns are one cell is read from the drawn vertical rules; with none drawn, a field is one column
+        unless its name carries a [m:n] suffix."""
+        out = []
+        upper = {w[4].upper() for w in words}
+        if not {"ADDR", "POR"} <= upper:
+            return out
+        for hrow in _group_lines([w for w in words if self.BCOL.match(w[4])]):
+            bits = {int(w[4][1:]): w for w in hrow}
+            if len(bits) != 8 or len(hrow) != 8:
+                continue
+            cx = {b: (w[0] + w[2]) / 2 for b, w in bits.items()}
+            if not all(cx[b] < cx[b - 1] for b in range(7, 0, -1)):
+                continue
+            pitch = (cx[0] - cx[7]) / 7
+            left, right = cx[7] - pitch / 2, cx[0] + pitch / 2
+            hy1 = max(w[3] for w in hrow)
+            below = [w for w in words if w[1] > hy1 - 1]
+            addr_ws = [w for w in below if w[0] >= right - 2 and re.fullmatch(r"0[xX][0-9A-Fa-f]{1,2}", w[4])]
+            # the address is the first 0x word right of the bit columns on each row
+            anchors = []
+            for r in _group_lines(addr_ws):
+                anchors.append(r[0])
+            anchors = [w for k, w in enumerate(anchors) if k == 0 or w[1] - anchors[k - 1][1] > 4]
+            if not anchors:
+                continue
+            ys = [(w[1] + w[3]) / 2 for w in anchors]
+            hs, vs = segs
+            wide = [y for x0, x1, y in _merge_h(hs) if min(x1, right) - max(x0, left) >= 0.8 * (right - left) and y > hy1]
+            edges = []
+            for i, y in enumerate(ys):
+                lo = max([e for e in wide if e < y], default=None)
+                hi = min([e for e in wide if e > y], default=None)
+                edges.append((lo, hi))
+            if any(lo is None or hi is None for lo, hi in edges) or len({e for e in edges}) != len(edges):
+                edges = []
+                for i, y in enumerate(ys):
+                    lo = hy1 if i == 0 else (ys[i - 1] + y) / 2
+                    hi = (y + ys[i + 1]) / 2 if i + 1 < len(ys) else y + (y - ys[i - 1]) / 2 if i else y + 12
+                    edges.append((lo, hi))
+            for (lo, hi), aw in zip(edges, anchors):
+                band = [w for w in words if lo < (w[1] + w[3]) / 2 < hi]
+                nm = [w for w in band if (w[0] + w[2]) / 2 < left]
+                cells = [w for w in band if left <= (w[0] + w[2]) / 2 <= right]
+                tail = sorted([w for w in band if (w[0] + w[2]) / 2 > right], key=lambda w: (round(w[1] / 3), w[0]))
+                m = self.BROW.match(" ".join(w[4] for w in tail))
+                name = _join_wrapped([" ".join(w[4] for w in r) for r in _group_lines(nm)], space=True)
+                if not m or not name:
+                    notes.append(f"p{pno}: a row at address {aw[4]} of a B7..B0 table is not 'ADDR POR R/W'; not read")
+                    continue
+                # a column pair is one cell when no vertical rule between them crosses the row
+                joined = []
+                for b in range(7, 0, -1):
+                    bx = (cx[b] + cx[b - 1]) / 2
+                    cut = any(abs(x - bx) <= pitch * 0.3 and min(y1, hi) - max(y0, lo) >= 0.5 * (hi - lo) for x, y0, y1 in vs)
+                    joined.append(not cut)
+                drawn = any(x for x, y0, y1 in vs if left - pitch * 0.3 <= x <= right + pitch * 0.3
+                            and min(y1, hi) - max(y0, lo) >= 0.5 * (hi - lo))
+                out.append({"p": pno, "name": _ws(name), "addr": int(m.group(1), 16), "por": m.group(2), "access": m.group(3),
+                            "q": _ws(" ".join(w[4] for w in sorted(band, key=lambda w: (round(w[1] / 3), w[0])))),
+                            "cx": cx, "pitch": pitch, "joined": joined if drawn else None,
+                            "cells": [(b, w) for w in cells for b in [min(cx, key=lambda k: abs(cx[k] - (w[0] + w[2]) / 2))]]})
+        return out
+
+    def _bitmap_regs(self, rows, have, notes, issues) -> list[RawReg]:
+        """8-bit registers from the bit-column rows (an address another layout already read is left to it)."""
+        regs = []
+        for row in rows:
+            a = row["addr"]
+            if a in have:
+                notes.append(f"p{row['p']}: {row['name']} at 0x{a:02X} is also read from a register heading; the heading wins")
+                continue
+            have.add(a)
+            por = row["por"]
+            reset = int(por, 16) if re.fullmatch(r"0[xX][0-9A-Fa-f]{1,2}", por) else None
+            rr = RawReg(name=row["name"], addrs=[a], resets=[], p=row["p"], q=row["q"], width=8, reset=reset, addr_digits=2)
+            rr.extra["access"] = ACCESS[row["access"]]
+            rr.notes.append(f"8-bit register read from the bit-column register map, p{row['p']}")
+            if reset is not None:
+                rr.notes.insert(0, f"reset: POR state, p{row['p']}")
+            joined = row["joined"]
+            by_col: dict[int, list] = {}
+            for b, w in row["cells"]:
+                by_col.setdefault(b, []).append(w)
+            # cell groups: columns bound together by a missing rule, hi -> lo
+            groups, cur = [], [7]
+            for k, b in enumerate(range(7, 0, -1)):
+                if joined is not None and joined[k]:
+                    cur.append(b - 1)
+                else:
+                    groups.append(cur)
+                    cur = [b - 1]
+            groups.append(cur)
+            fields: list[RawField] = []
+            for g in groups:
+                ws = [w for b in g for w in by_col.get(b, [])]
+                parts = [" ".join(w[4] for w in r) for r in _group_lines(ws)]
+                text = ""
+                for part in parts:
+                    text = part if not text else (text + part if text.endswith("_") else text + " " + part)
+                text = re.sub(r"\s+\[", "[", _ws(text))
+                if not re.search(r"[A-Za-z]", text):
+                    continue
+                hi, lo = max(g), min(g)
+                m = self.FSUFFIX.search(text)
+                note = "bits from the register map's column span"
+                span_issue = None
+                if m:
+                    # `NAME[2:0]` is the field's own bit numbering, so it gives the width, not the position
+                    text = text[:m.start()].rstrip()
+                    sh, sl = int(m.group(1)), int(m.group(2) if m.group(2) is not None else m.group(1))
+                    width = abs(sh - sl) + 1
+                    if joined is not None:
+                        if width != hi - lo + 1:
+                            span_issue = (f"{_reg_slug(rr.name)}.{_field_slug(text)}.span",
+                                          f"{rr.name}: {text} is printed [{sh}:{sl}] ({width} bits) but its cell spans bits "
+                                          f"{hi}:{lo} ({hi - lo + 1} bits)")
+                    else:
+                        c = 7 - ((min(w[0] for w in ws) + max(w[2] for w in ws)) / 2 - row["cx"][7]) / row["pitch"]
+                        lo = max(0, min(8 - width, round(c - (width - 1) / 2)))
+                        hi = lo + width - 1
+                        note = "bits from the text's position and the width its [m:n] suffix gives (no cell rules drawn)"
+                fld = RawField(text, hi, lo, None, None, None, "", row["p"], row["q"], note=note)
+                fields.append(fld)
+                if span_issue:
+                    issues.append(Issue(span_issue[0], rr, fld, [f"register map p{row['p']}"], span_issue[1], row["p"], row["q"]))
+            taken = {b for f in fields for b in range(f.lo, f.hi + 1)}
+            gap: list[int] = []
+            for b in list(range(7, -1, -1)) + [-1]:
+                if b >= 0 and b not in taken:
+                    gap.append(b)
+                elif gap:
+                    fields.append(RawField("RESERVED", max(gap), min(gap), None, None, None, "", row["p"], row["q"],
+                                           note="no field name in these columns of the bit-column register map"))
+                    gap = []
+            fields.sort(key=lambda f: -f.hi)
+            rr.fields = fields
+            for f in rr.fields:
+                if rr.reset is not None and not _is_reserved(f.name):
+                    f.reset = (rr.reset >> f.lo) & ((1 << (f.hi - f.lo + 1)) - 1)
+                    f.reset_width = f.hi - f.lo + 1
+                    f.derived = True
+                    f.note = "; ".join(x for x in (f.note, "reset derived from register reset") if x)
+            regs.append(rr)
+        return regs
+
     def _sections(self, stream: list[_Line]) -> list[dict]:
         heads = []
         i = 0
@@ -1057,6 +1213,7 @@ class Maxim(Template):
         grid: dict[int, dict] = {}
         defaults: dict[int, dict] = {}
         xtable: dict[int, dict] = {}
+        bitrows: list[dict] = []
         with pymupdf.open(pdf) as doc:
             for i, page in enumerate(doc):
                 pno = i + 1
@@ -1065,6 +1222,7 @@ class Maxim(Template):
                 mid = page.rect.width / 2
                 stream += sorted(lines, key=lambda ln: (0 if ln.x0 < mid - 10 else 1, ln.y0))
                 hdrs = self._bit_headers(words)
+                segs = None
                 if hdrs:
                     segs = _segments(page)
                     for bits in hdrs:
@@ -1074,8 +1232,10 @@ class Maxim(Template):
                 grid.update(self._grids(pno, words))
                 defaults.update(self._defaults(pno, pages.get(pno, "")))
                 xtable.update(self._xtable(pno, words))
+                bitrows += self._bitrows(pno, words, segs or _segments(page), notes)
         secs = self._sections(stream)
         regs = self._assemble(secs, diagrams, grid, defaults, notes, issues, xtable)
+        regs += self._bitmap_regs(bitrows, {r.addrs[0] for r in regs}, notes, issues)
         summary = {}
         for a in set(grid) | set(defaults):
             g, d = grid.get(a), defaults.get(a)
@@ -1512,6 +1672,8 @@ def to_records(parse: Parse, doc_id: str, part: str, template: str) -> list[dict
                    "width": r["width"], "reset": _reset_str(rv, r["width"]),
                    "access": "rw" if accs[j] and accs[j] <= {"rw"} else ("ro" if accs[j] and accs[j] <= {"ro", "rclr"} else None),
                    "note": note}
+            if reg["access"] is None and rr.extra.get("access"):
+                reg["access"] = rr.extra["access"]
             if rr.extra.get("reg_type"):
                 reg["reg_type"] = rr.extra["reg_type"]
             sm = parse.summary.get(r["addr"])

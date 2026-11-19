@@ -96,7 +96,7 @@ def _schema_valid(rec):
 def synth(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("regsynth")
     out = {}
-    for did, tpl in (("syn700@A", "ti"), ("syn257@A", "ti"), ("syn880@A", "ti"), ("mxsyn@1", "maxim"), ("mxhx@1", "maxim")):
+    for did, tpl in (("syn700@A", "ti"), ("syn257@A", "ti"), ("syn880@A", "ti"), ("mxsyn@1", "maxim"), ("mxhx@1", "maxim"), ("mxbit@1", "maxim"), ("mxbn@1", "maxim")):
         atlas, docdir = rsyn.make(tmp, did)
         out[did] = (atlas, docdir, regparse.run(docdir, tpl), _recs(docdir))
     return out
@@ -294,3 +294,35 @@ def test_maxim_hex_layout_reports_a_row_without_heading_and_a_heading_without_ro
     assert "no register section" in row["text"] and row["refs"] == []
     head = recs["mxhx.conflict.OrphanH.no_summary_row"]
     assert "no row in the summary table" in head["text"] and head["refs"] == ["mxhx.reg.OrphanH"]
+
+
+def test_maxim_bit_column_map_reads_one_8bit_register_per_row(synth):
+    _, _, st, recs = synth["mxbit@1"]
+    regs = {r["name"]: r for r in recs.values() if r["kind"] == "register"}
+    assert sorted(regs) == ["Event Status 1", "FIFO Setup", "Mode Setup"] and st["registers"] == 3
+    ev = regs["Event Status 1"]                                             # a register name wrapped over two lines
+    assert (ev["addr"], ev["width"], ev["reset"], ev["access"]) == ("0x00", 8, "0b00000001", "ro")
+    assert recs["mxbit.reg.EventStatus1.SMP_RDY"]["bits"] == [6, 6]         # a field name wrapped over two lines
+    assert recs["mxbit.reg.EventStatus1.PWR_OK"]["reset"] == "0b1"
+    assert recs["mxbit.reg.EventStatus1.RESERVED_4_1"]["bits"] == [4, 1]    # empty cells between fields
+    fifo = regs["FIFO Setup"]
+    assert (fifo["addr"], fifo["reset"], fifo["access"]) == ("0x08", "0b00011111", "rw")
+    assert recs["mxbit.reg.FIFOSetup.SMP_AVE"]["bits"] == [7, 5]
+    assert recs["mxbit.reg.FIFOSetup.FIFO_LVL"]["bits"] == [3, 0] and recs["mxbit.reg.FIFOSetup.FIFO_LVL"]["reset"] == "0b1111"
+    assert recs["mxbit.reg.FIFOSetup.ROLL"]["bits"] == [4, 4]
+    assert all(_schema_valid(r) == [] for r in recs.values())
+
+
+def test_maxim_bit_column_span_disagreeing_with_suffix_is_reported(synth):
+    _, _, _, recs = synth["mxbit@1"]
+    c = recs["mxbit.conflict.ModeSetup.MODE.span"]
+    assert "[2:0] (3 bits)" in c["text"] and "spans bits 2:1 (2 bits)" in c["text"]
+    assert c["refs"] == ["mxbit.reg.ModeSetup.MODE"] and recs["mxbit.reg.ModeSetup.MODE"]["bits"] == [2, 1]
+    assert not [k for k in recs if k.startswith("mxbit.conflict.") and "FIFOSetup" in k]
+
+
+def test_maxim_bit_column_map_without_drawn_rules_takes_widths_from_the_suffix(synth):
+    _, _, _, recs = synth["mxbn@1"]
+    assert recs["mxbn.reg.FIFOSetup.SMP_AVE"]["bits"] == [7, 5] and recs["mxbn.reg.FIFOSetup.FIFO_LVL"]["bits"] == [3, 0]
+    assert recs["mxbn.reg.EventStatus1.PWR_OK"]["bits"] == [0, 0]
+    assert not [k for k in recs if ".conflict." in k]
