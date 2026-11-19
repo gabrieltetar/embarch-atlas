@@ -46,6 +46,9 @@ NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\s+(.*)$")
 TABFIG_RE = re.compile(r"^(Table|Figure)\s+\d+", re.I)
 REG_CONTAINER_RE = re.compile(r"\bregisters\s*$|\bregister map\s*$", re.I)
 REG_NAME_RE = re.compile(r"\(([A-Za-z][A-Za-z0-9_]*_[A-Za-z0-9_]*)\)(?:\s*\(\s*[a-z]\s*=[^()]*\))?\s*$")
+# A register heading that is only the register name (`TASKS_CONSTLAT`, `EVENTS_DONE[n]`), as a
+# product specification prints it under a `Registers` container. All caps, so prose headings never match.
+BARE_REG_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*(?:\[[A-Za-z0-9]+\])?$")
 
 
 def tokens(text: str) -> int:
@@ -184,6 +187,24 @@ def vertical_fraction(page) -> float:
     return round(v / (h + v), 3) if h + v else 0.0
 
 
+def unroot_toc(toc: list) -> tuple[list, str | None]:
+    """A single-root outline -> (the outline without its root, the root's title).
+
+    Some manuals put every chapter under one level-1 bookmark, the file name, so the chapters sit
+    at level 2 and the sections below them. The root is dropped and every level moves up one when
+    the outline has exactly one level-1 entry, first in the list, whose title carries no section
+    number (a numbered one is a real chapter whose children are its sections, as in an ST manual
+    with one chapter) and at least two level-2 entries sit under it. Otherwise the outline is
+    returned as it is.
+    """
+    if not toc or toc[0][0] != 1 or sum(1 for t in toc if t[0] == 1) != 1:
+        return toc, None
+    title = " ".join(str(toc[0][1]).split())
+    if NUM_RE.match(title) or TABFIG_RE.match(title) or sum(1 for t in toc if t[0] == 2) < 2:
+        return toc, None
+    return [[lvl - 1, t, pg] for lvl, t, pg in toc[1:]], title
+
+
 def build_outline(toc: list, plain_tokens: list[int], layout: TextLayer | None, doc_id: str,
                   n_pages: int, meta: dict | None = None, doc_no: str | None = None,
                   vertical: list[float] | None = None) -> dict:
@@ -195,6 +216,8 @@ def build_outline(toc: list, plain_tokens: list[int], layout: TextLayer | None, 
     page from its text direction.
     """
     doc_no = doc_no or doc_number(doc_id)
+    toc_entries = len(toc)
+    toc, root_title = unroot_toc(toc)
     entries: list[dict] = []
     tables: list[dict] = []
     seen: dict[str, int] = {}
@@ -248,8 +271,12 @@ def build_outline(toc: list, plain_tokens: list[int], layout: TextLayer | None, 
         m = REG_NAME_RE.search(e["title"])
         if m:
             e["regname"] = m.group(1)
+        bare = [k for k in kids.get(e["id"], []) if BARE_REG_RE.match(k["title"])] \
+            if REG_CONTAINER_RE.search(e["title"]) else []
+        for k in bare:
+            k.setdefault("regname", k["title"])
         if REG_CONTAINER_RE.search(e["title"]) and (
-                e["level"] == 2 or any(REG_NAME_RE.search(k["title"]) for k in kids.get(e["id"], []))):
+                e["level"] == 2 or bare or any(REG_NAME_RE.search(k["title"]) for k in kids.get(e["id"], []))):
             e["register"] = True
     by_id = {e["id"]: e for e in entries}
     for e in entries:
@@ -262,7 +289,8 @@ def build_outline(toc: list, plain_tokens: list[int], layout: TextLayer | None, 
         if e["level"] == 1:
             e["abbrevs"] = _abbrevs(e["title"])
     return {
-        "doc": doc_id, "pages": n_pages, "toc_entries": len(toc), "entries": entries, "tables": tables,
+        "doc": doc_id, "pages": n_pages, "toc_entries": toc_entries, "entries": entries, "tables": tables,
+        **({"root": root_title} if root_title else {}),
         "doc_no": doc_no, "total_tokens": sum(plain_tokens), "page_tokens": plain_tokens,
         "token_method": "o200k over PyMuPDF plain text" if count_tokens("x") is not None else "chars/4 estimate",
         **({"vertical": list(vertical)} if vertical is not None else {}),

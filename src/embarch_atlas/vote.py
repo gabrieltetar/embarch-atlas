@@ -81,6 +81,68 @@ def _param_names(name: str, hi: int, lo: int, text: str) -> list[str] | None:
     return [base[:-1] + str(first + k) for k in range(hi - lo + 1)]
 
 
+BITNUM_RE = re.compile(r"^\s*Bit number\b")
+NORDIC_FIELD_RE = re.compile(
+    r"^\s{0,6}([A-Za-z]{1,2})\s+(RW|R|W|RO|WO)\s+([A-Za-z][A-Za-z0-9_]*(?:\[\d+(?::\d+)?\])?)\b\s*(.*)$")
+
+
+def parse_nordic_fields(lines: list[tuple[int, str]]) -> tuple[list[dict], int, str | None]:
+    """The product-specification register layout -> (fields, width, reset text).
+
+    A `Bit number 31 30 ... 0` row, an `ID` row putting each field's letter under its bits (the
+    letter's column picks the nearest bit number), a `Reset 0x...` row, then a table headed
+    `ID R/W Field Value ID Value Description` with one row per field keyed by its letter and the
+    enumerated values on the rows beneath it. Bits no letter covers become `Reserved` fields, as in
+    the other layout, so the self-check counts them. Fields come with `access` and the lines of text
+    that follow their row; width is the count of bit numbers.
+    """
+    bi = next(k for k, (_, ln) in enumerate(lines) if BITNUM_RE.match(ln))
+    cols = [(int(m.group()), (m.start() + m.end()) / 2) for m in re.finditer(r"\d+", lines[bi][1].split("Bit number", 1)[1],
+                                                                        re.S)]
+    off = lines[bi][1].index("Bit number") + len("Bit number")
+    cols = [(b, c + off) for b, c in cols]
+    width = max((b for b, _ in cols), default=31) + 1
+    by_letter: dict[str, list[int]] = {}
+    reset_text = None
+    hdr = None
+    for k in range(bi + 1, len(lines)):
+        ln = lines[k][1]
+        if reset_text is None and (m := re.match(r"^\s*Reset\s+(0x[0-9A-Fa-f]+)", ln)):
+            reset_text = m.group(1)
+        if not by_letter and re.match(r"^\s*ID\s", ln) and not re.search(r"R/W|Field|Acce", ln):
+            for t in re.finditer(r"\S+", ln[ln.index("ID") + 2:]):
+                at = (t.start() + t.end()) / 2 + ln.index("ID") + 2
+                bit = min(cols, key=lambda bc: abs(bc[1] - at))[0]
+                by_letter.setdefault(t.group(), []).append(bit)
+        elif by_letter and re.match(r"^\s*ID\s", ln) and re.search(r"R/W|Field|Acce", ln):
+            hdr = k
+            break
+    fields: list[dict] = []
+    cur = None
+    for p, ln in lines[(hdr + 1) if hdr is not None else len(lines):]:
+        m = NORDIC_FIELD_RE.match(ln)
+        if m and m.group(1) in by_letter:
+            bits = by_letter[m.group(1)]
+            cur = {"name": m.group(3), "hi": max(bits), "lo": min(bits), "page": p, "q": " ".join(ln.split()),
+                   "access": m.group(2).lower(), "lines": [(p, m.group(4).strip())] if m.group(4).strip() else []}
+            fields.append(cur)
+        elif cur is not None and ln.strip():
+            cur["lines"].append((p, ln.strip()))
+    covered = {b for f in fields for b in range(f["lo"], f["hi"] + 1)}
+    page0 = lines[bi][0]
+    b = width - 1
+    while b >= 0:
+        if b in covered:
+            b -= 1
+            continue
+        hi = b
+        while b >= 0 and b not in covered:
+            b -= 1
+        fields.append({"name": "Reserved", "hi": hi, "lo": b + 1, "page": page0, "q": "Reserved", "access": None, "lines": []})
+    fields.sort(key=lambda f: -f["hi"])
+    return fields, width, reset_text
+
+
 def parse_register_section(rm: RmDoc, e: dict) -> tuple[dict, list[tuple[int, str]]]:
     """One RM register section -> (offset, reset, per-bit names and access, self-check; its (page, line)s)."""
     nxt = rm.next_after(e)
@@ -88,6 +150,10 @@ def parse_register_section(rm: RmDoc, e: dict) -> tuple[dict, list[tuple[int, st
     txt = "\n".join(ln for _, ln in lines)
     off = re.search(r"Address offset:\s*(.+)", txt, re.I)
     rsts = re.findall(r"(?:Power-on )?[Rr]eset value:\s*(.+)", txt)
+    nordic = any(BITNUM_RE.match(ln) for _, ln in lines)
+    if nordic:
+        nfields, nwidth, nreset = parse_nordic_fields(lines)
+        rsts = [nreset] if nreset else []
     r: dict = {"name": e["regname"], "section": e["id"], "title": e["title"], "page": e["start"],
                "pages": sorted({p for p, _ in lines}), "offset_text": off.group(1).strip() if off else None,
                "reset_text": rsts[0].strip() if rsts else None, "fields": [], "access_tokens": []}
@@ -118,10 +184,10 @@ def parse_register_section(rm: RmDoc, e: dict) -> tuple[dict, list[tuple[int, st
         if len(rsts) > 1:
             r["reset_ambiguous"] = True
     cur = None
-    stop = next((k for k, (_, ln) in enumerate(lines) if re.search(r"\bregister map\b", ln, re.I) and k > 0), None)
+    stop = None if nordic else next((k for k, (_, ln) in enumerate(lines) if re.search(r"\bregister map\b", ln, re.I) and k > 0), None)
     if stop is not None:
         lines = lines[:stop]
-    for p, ln in lines:
+    for p, ln in ([] if nordic else lines):
         m = BIT_RE.match(ln)
         if m:
             hi = int(m.group(1))
@@ -131,8 +197,10 @@ def parse_register_section(rm: RmDoc, e: dict) -> tuple[dict, list[tuple[int, st
             r["fields"].append(cur)
         elif cur is not None and ln.strip():
             cur["lines"].append((p, ln.strip()))
+    if nordic:
+        r["fields"] = nfields
     first_bit = next((k for k, (_, ln) in enumerate(lines) if re.match(r"^\s*Bits? \d", ln)), len(lines))
-    for _, ln in lines[:first_bit]:
+    for _, ln in ([] if nordic else lines[:first_bit]):
         toks = ln.split()
         if toks and all(t in ACC_TOKENS for t in toks):
             r["access_tokens"].append(toks)
@@ -153,7 +221,7 @@ def parse_register_section(rm: RmDoc, e: dict) -> tuple[dict, list[tuple[int, st
     # width: a 16-bit register shows only the 15..0 diagram row and a 4-digit reset
     hi_bit = max((f["hi"] for f in r["fields"]), default=31)
     digits = len(re.sub(r"[^0-9A-Fa-fXx]", "", (r["reset_text"] or "").split("(")[0])[2:]) if r["reset_text"] else 8
-    r["width"] = 16 if hi_bit <= 15 and (digits <= 4 or len(r["access_tokens"]) <= 1) else 32
+    r["width"] = nwidth if nordic else 16 if hi_bit <= 15 and (digits <= 4 or len(r["access_tokens"]) <= 1) else 32
     w = r["width"]
     acc: list[str | None] = [None] * 32
     toks = r["access_tokens"]
@@ -165,7 +233,13 @@ def parse_register_section(rm: RmDoc, e: dict) -> tuple[dict, list[tuple[int, st
         elif not bot and len(top) == len(toks[0]):
             toks = [toks[0], []]
     ok = len(toks) == 2
-    if ok:
+    if nordic:
+        ok = True
+        for f in r["fields"]:
+            if f["access"]:
+                for b in range(f["lo"], f["hi"] + 1):
+                    acc[b] = f["access"]
+    elif ok:
         for (hi, lo), row in zip(((31, 16), (15, 0)), toks):
             bits = nonres(hi, lo)
             if len(bits) != len(row):

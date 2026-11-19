@@ -1452,6 +1452,34 @@ reference-manual question becomes a row of the table: `<file> serves as the refe
 the document's kind through the override and rewrites the manifest; its doc_id does not move. When `[mcu] ref`
 names a module whose MPN differs from the SoC, the module's own datasheet question stays open.
 
+### Reference-manual layouts read
+
+`mcu rm-outline` and `mcu vote` read two layouts. Each has its own detector, and a manual that fits neither
+yields no chapters or no register sections rather than a guess.
+
+- **ST-style.** Chapters are the level-1 bookmarks. A register section is a heading ending in its name in
+  parentheses (`1.1.1 PORT mode register (PORTx_MODER)`), matched by `REG_NAME_RE`; its page prints
+  `Address offset:`, `Reset value:` and one `Bits 7:0 NAME: ...` line per field, with the access letters in a row
+  above them.
+- **Product-specification (Nordic-style).** One level-1 bookmark, the file name, holds every chapter at level 2.
+  `unroot_toc` drops that root and moves each level up one, so the level-2 entries are the chapters
+  (`outline.json` keeps the root title as `root`). The guard that keeps an ST manual unchanged: the root fires only
+  when it is the only level-1 entry and first in the list, its title has no section number (an ST one-chapter
+  outline reads `1 Port block`, a real chapter whose children are its sections), and at least two level-2 entries
+  sit under it. A register section is a numbered child, titled with only the bare upper-case register name
+  (`5.1.1.2 CTRL`, `EVENTS_DONE[n]`, `BARE_REG_RE`), of a container titled `...Registers`. The container is
+  flagged as a register section too; headings with spaces never match, so an ST container is unaffected. The page
+  prints `Address offset:`, a `Bit number 31 30 ... 0` row, an `ID` row with each field's letter under its bits,
+  a `Reset 0x...` row, and a field table headed `ID R/W Field Value ID Value Description` with enumerated values
+  on the rows beneath each field. `parse_nordic_fields` takes each letter's bit range from the `ID` row's column
+  (the nearest bit number), the access and name from the table row, and fills uncovered bits with `Reserved`,
+  yielding the same register record as the other layout. A field row is accepted only when its letter appeared in
+  the `ID` row and it follows the table header.
+
+**Verified only on synthetic pages** in the shape the issue described; the owner-side debt is one `mcu rm-outline`
+and `mcu vote` run on the real nRF54L-series datasheet, where column alignment of the `ID` row in the real text
+layer is the likeliest place to differ.
+
 ### Documents nothing uses
 
 `missing.md` closes with `## Supplied documents nothing uses`: documents covering no BOM part (passives included)
