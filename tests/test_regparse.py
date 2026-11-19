@@ -96,7 +96,7 @@ def _schema_valid(rec):
 def synth(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("regsynth")
     out = {}
-    for did, tpl in (("syn700@A", "ti"), ("syn257@A", "ti"), ("mxsyn@1", "maxim")):
+    for did, tpl in (("syn700@A", "ti"), ("syn257@A", "ti"), ("syn880@A", "ti"), ("mxsyn@1", "maxim")):
         atlas, docdir = rsyn.make(tmp, did)
         out[did] = (atlas, docdir, regparse.run(docdir, tpl), _recs(docdir))
     return out
@@ -165,6 +165,30 @@ def test_ti_variant_resets(synth):
     assert "reset" not in thr and "reset varies" in thr["note"]
     cap = recs["syn257.conflict.FloorGuard.caption_reset"]
     assert "Figure 5-6" in cap["text"] and set(cap["refs"]) == {lsb["id"], msb["id"]}
+
+
+def test_ti_width_prefixed_binary_resets(synth):
+    _, _, st, recs = synth["syn880@A"]
+    ok = recs["syn880.reg.MODE_CFG"]                                       # `Offset = 0x1 ... [Reset = 0x11]`
+    assert (ok["addr"], ok["reset"]) == ("0x01", "0b00010001")
+    assert recs["syn880.reg.MODE_CFG.EN_MODE_1_0"]["reset"] == "0b00"
+    assert recs["syn880.reg.MODE_CFG.FAST"]["reset"] == "0b1"
+    assert recs["syn880.reg.CHG_LIM.LIM_SEL_1_0"]["reset"] == "0b10"       # `2b10` decodes to 2
+    assert not [c for c in recs if c.startswith("syn880.conflict.MODE_CFG")]  # heading, table and diagram agree
+    c = recs["syn880.conflict.CHG_LIM.reset"]                              # heading 0x21, fields compose to 0x20
+    assert "compose to 00100000" in c["text"] and "00100001" in c["text"]
+    stat = recs["syn880.reg.STAT"]                                         # `[Reset = X]`, `R X`: unknown
+    assert "reset" not in stat and "unknown" in stat["note"]
+    assert all("reset" not in recs[f"syn880.reg.STAT.{n}"] for n in ("CHG_STAT_3_0", "FAULT_3_0"))
+    assert not [c for c in recs if c.startswith("syn880.conflict.STAT")]
+
+
+def test_ti_width_prefixed_digit_count_must_match_width(synth):
+    _, _, _, recs = synth["syn880@A"]
+    assert "reset" not in recs["syn880.reg.BAD_W.TRIM_1_0"]
+    assert "1 digits" in recs["syn880.conflict.BAD_W.TRIM_1_0.reset_width"]["text"]
+    assert regparse._bits_value("2b10") == (2, 2) and regparse._bits_value("2b1") == (None, None)
+    assert regparse._heading_reset("0x11", 1) == (0x11, None)
 
 
 def _pair_pages(order_header: str | None) -> dict[int, str]:

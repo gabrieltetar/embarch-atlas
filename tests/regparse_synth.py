@@ -9,6 +9,9 @@ parts SYN700, SYN257 and MXSYN are invented, and so is every register, field and
   bits 15-8), names with spaces, commas and a wrap, per-bit value rows, a register with no reset bracket
   and unnamed fields, variant resets, a figure caption that disagrees with its heading, and a
   `Long Name (Other)` heading the summary table names by its long name.
+- SYN880 (TI layout, 8-bit registers, `Offset = 0x..` headings with a capital-R `[Reset = ..]`): resets
+  printed as width-prefixed binary (`2b10`), one register consistent, one whose heading disagrees with its
+  fields, a status register with `[Reset = X]`, and a field whose digit count disagrees with its width.
 - MXSYN (Maxim layout): a two-column register-description page with bold headings, Register Type /
   Nonvolatile Backup / Restore / Initial Value lines and drawn D15..D0 bit diagrams (plus one with no
   drawn grid); a grid memory map (row Nh x column 0Mxh); a factory-default table.
@@ -185,6 +188,49 @@ def build_syn257(path: Path) -> Path:
     return path
 
 
+def _wp_reg(sec: str, name: str, off: str, head_reset: str, tokens: str, rows: list[tuple]) -> list[str]:
+    """One register in the width-prefixed layout: `Offset = 0x..` heading with a capital-R `[Reset = ..]`,
+    a bit diagram of `<access>-<width>b<bits>` tokens, and a `Bit Field Type Reset Description` table."""
+    return [f"{sec} {name} Register (Offset = {off}) [Reset = {head_reset}]",
+            f"            Figure 7-{sec.rsplit('.', 1)[1]}. {name} Register",
+            "      7      6      5      4      3      2      1      0",
+            "   " + "  ".join(n for _, n, *_ in rows),
+            "   " + tokens,
+            f"            Table 7-{sec.rsplit('.', 1)[1]}. {name} Register Field Descriptions",
+            HDR] + [row(*r) for r in rows] + [""]
+
+
+def build_syn880(path: Path) -> Path:
+    """SYN880 (TI layout, width-prefixed binary resets): MODE_CFG printed consistently, CHG_LIM whose
+    heading says 0x21 while its fields compose to 0x20, STAT with `[Reset = X]` and `R X`, and BAD_W whose
+    field prints `2b0` (a width of 2, one digit)."""
+    doc = pymupdf.open()
+    p = doc.new_page(width=612, height=792)
+    lines = ["7.5 Register Maps"]
+    lines += _wp_reg("7.5.1.1", "MODE_CFG", "0x1", "0x11", "R/W-1b0  R/W-2b00  R/W-1b1  R-3b000  R/W-1b1", [
+        ("7", "REG_RST", "R/W", "1b0", "Software Reset"),
+        ("6-5", "EN_MODE_1:0", "R/W", "2b00", "Mode select."),
+        ("4", "FAST", "R/W", "1b1", "Fast mode."),
+        ("3-1", "RESERVED", "R", "3b000", "Reserved."),
+        ("0", "EN", "R/W", "1b1", "Enable.")])
+    lines += _wp_reg("7.5.1.2", "CHG_LIM", "0x2", "0x21", "R/W-2b00  R/W-2b10  R/W-4b0000", [
+        ("7-6", "RESERVED", "R/W", "2b00", "Reserved."),
+        ("5-4", "LIM_SEL_1:0", "R/W", "2b10", "Limit select."),
+        ("3-0", "LIM_TRIM_3:0", "R/W", "4b0000", "Trim.")])
+    _lines(p, lines, y0=50, step=11)
+    p = doc.new_page(width=612, height=792)
+    lines = _wp_reg("7.5.1.3", "STAT", "0x3", "X", "R-X  R-X", [
+        ("7-4", "CHG_STAT_3:0", "R", "X", "Charge state."),
+        ("3-0", "FAULT_3:0", "R", "X", "Fault flags.")])
+    lines += _wp_reg("7.5.1.4", "BAD_W", "0x4", "0x00", "R/W-2b0  R/W-6b000000", [
+        ("7-6", "TRIM_1:0", "R/W", "2b0", "Trim."),
+        ("5-0", "SPARE_5:0", "R/W", "6b000000", "Spare.")])
+    _lines(p, lines, y0=50, step=11)
+    doc.set_metadata({"title": "SYN880 Synthetic Charger", "keywords": "SYN880"})
+    doc.save(path)
+    return path
+
+
 # ---------------------------------------------------------------- Maxim layout
 
 BODY = dict(fontname="helv", fontsize=9.5)
@@ -285,7 +331,7 @@ def build_mxsyn(path: Path) -> Path:
     return path
 
 
-BUILDERS = {"syn700@A": build_syn700, "syn257@A": build_syn257, "mxsyn@1": build_mxsyn}
+BUILDERS = {"syn700@A": build_syn700, "syn257@A": build_syn257, "syn880@A": build_syn880, "mxsyn@1": build_mxsyn}
 
 
 def make(tmp: Path, doc_id: str) -> tuple[Path, Path]:

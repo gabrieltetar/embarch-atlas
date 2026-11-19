@@ -16,6 +16,10 @@ Templates
   `[reset = ...]`; per-register field tables (`Bit Field Type Reset Description`), also one table per
   bus address; bit diagrams with `R/W-0101b` tokens; summary tables (`00h NAME R/W 11010010`,
   `0h ACRONYM Long Name 16 Go`, `01/00h Name() R/W desc`). A register printed with several addresses is
+  `[Reset = 0x11]` (capital R, `0x` hex) and `[Reset = X]` (unknown: no reset, no conflict) are read too;
+  resets and bit-diagram tokens print as width-prefixed binary (`2b10`: width, `b`, exactly that many
+  digits; a cell whose digit count disagrees is read as unknown and written as an `Issue`).
+  A register printed with several addresses is
   split into bus bytes, NAME_LSB / NAME_MSB. In a slash pair the byte order is taken from the document:
   a per-address table numbering its bits 15-8, or the summary table's `(MSB/LSB)` header.
 - `maxim` reads the source PDF with PyMuPDF (two-column pages defeat a text-layer parser). Headings
@@ -129,7 +133,7 @@ class Template:
 ACCESS = {"R/W": "rw", "RW": "rw", "R": "ro", "RO": "ro", "W": "wo", "WO": "wo", "RC": "rclr", "R/WC": "woclr",
           "R/W1C": "woclr", "W1C": "woclr", "R/W1S": "w1s", "W1S": "w1s"}
 _ACC = r"R/W1C|R/W1S|R/WC|R/W|RC|W1C|W1S|RW|RO|WO|R|W"
-RESET_TOK = re.compile(r"(?<![\w.])(?:[01](?:[01 ]*[01])?b|[0-9A-Fa-f]+h|[01]+)(?![\w])")
+RESET_TOK = re.compile(r"(?<![\w.])(?:\d+b[01]+|[01](?:[01 ]*[01])?b|[0-9A-Fa-f]+h|[01]+)(?![\w])")
 PERBIT = re.compile(r"^(?P<base>.+?),\s*bit\s*(?P<k>\d+)$", re.I)
 
 
@@ -153,11 +157,18 @@ def _is_reserved(name: str) -> bool:
     return bool(re.fullmatch(r"reserved?(?:[\s_]*\d+(?:[\s_:-]+\d+)?)?", name.strip(), re.I))
 
 
+WIDTH_BIN = re.compile(r"(\d+)b([01]+)")
+
+
 def _bits_value(tok: str, width: int | None = None) -> tuple[int | None, int | None]:
     """A TI reset token -> (value, printed width). `0101b` binary, `E4h` hex, `x`/`-` undefined."""
     t = tok.replace(" ", "")
     if not t or set(t.lower()) <= {"x", "-"}:
         return None, None
+    w = WIDTH_BIN.fullmatch(t)
+    if w:                                       # `2b10`: the width, `b`, exactly that many digits
+        n, digits = int(w.group(1)), w.group(2)
+        return (int(digits, 2), n) if len(digits) == n else (None, None)
     if t.lower().endswith("b") and set(t[:-1]) <= {"0", "1"} and t[:-1]:
         return int(t[:-1], 2), len(t[:-1])
     if t.lower().endswith("h"):
@@ -170,10 +181,22 @@ def _bits_value(tok: str, width: int | None = None) -> tuple[int | None, int | N
     return None, None
 
 
+def _width_mismatches(text: str) -> list[tuple[str, int, int]]:
+    """Width-prefixed binaries in a reset cell whose digit count is not their width: (token, width, digits)."""
+    out = []
+    for m in RESET_TOK.finditer(_ws(text)):
+        w = WIDTH_BIN.fullmatch(m.group(0))
+        if w and len(w.group(2)) != int(w.group(1)):
+            out.append((m.group(0), int(w.group(1)), len(w.group(2))))
+    return out
+
+
 def _heading_reset(tok: str, nbytes: int) -> tuple[int | None, str | None]:
     """(value, note). `11100100h` is binary with an h suffix when it is 8 digits of 0/1 per byte."""
     t = tok.strip()
     low = t.lower()
+    if re.fullmatch(r"0x[0-9a-f]+", low):
+        return int(low, 16), None
     body = t[:-1] if low.endswith(("h", "b")) else t
     if body and set(body) <= {"0", "1"} and (len(body) == 8 * nbytes or low.endswith("b")):
         return int(body, 2), ("binary printed with an h suffix" if low.endswith("h") else None)
@@ -192,6 +215,8 @@ def _reset_spec(text: str | None) -> dict:
     if not m:
         return {"kind": "text", "text": t}
     body = m.group(1).strip()
+    if body and set(body.lower()) <= {"x", "-"}:
+        return {"kind": "text", "text": f"reset unknown ({body})"}
     var = re.findall(r"([0-9A-Fa-f]+)h?\s*\(([^)]*)\)", body)
     if len(var) >= 2:
         return {"kind": "variants", "values": [(v + "h", c) for v, c in var], "text": body}
@@ -203,7 +228,7 @@ def _reset_spec(text: str | None) -> dict:
         toks = [x.strip() for x in body.split("/") if x.strip()]
         if len(toks) >= 2 and all(re.fullmatch(r"[0-9A-Fa-f]+h?", x) for x in toks):
             return {"kind": "variants", "values": [(x, "") for x in toks], "text": body}
-    if re.fullmatch(r"[0-9A-Fa-f]+[hb]?", body):
+    if re.fullmatch(r"[0-9A-Fa-f]+[hb]?|0[xX][0-9A-Fa-f]+", body):
         return {"kind": "value", "value": body, "text": body}
     return {"kind": "text", "text": "reset = " + body}
 
@@ -274,7 +299,7 @@ class TI(Template):
                       r"\(\s*(?:(?:I2C|I3C|SPI|SMBus|PMBus)\s+)?(?:Address|Offset)\s*=\s*(?P<addr>[^)]*)\)"
                       r"\s*(?:\[(?P<rb>[^\]]*)\]?)?", re.I)
     BITS = re.compile(r"^\s*(\d{1,2})(?:\s*[-:]\s*(\d{1,2}))?(?=\s)")
-    FIGTOK = re.compile(rf"(?<![\w/])({_ACC})-([01xX]+b|[0-9A-Fa-f]+h)(?![\w])")
+    FIGTOK = re.compile(rf"(?<![\w/])({_ACC})-(\d+b[01]+|[01xX]+b|[0-9A-Fa-f]+h|[xX]+)(?![\w])")
     FIGHDR = re.compile(r"^\s*\d{1,2}(?:\s+\d{1,2}){1,15}\s*$")
     TABLE_HDR = re.compile(r"^\s*Bits?\s+Field\s+Type\s+Reset\s+(?:\w+\s+)*?Description", re.I)
     SUM_TI8 = re.compile(rf"^\s*([0-9A-Fa-f]{{1,4}})h\s+([A-Za-z_][A-Za-z0-9_]*)\s+({_ACC})\s+([01]{{8,}}|[0-9A-Fa-f]+h)\s*$")
@@ -527,6 +552,11 @@ class TI(Template):
             for f in rr.fields:
                 f.name = re.sub(r"\s*_\s*", "_", _ws(f.name))
                 f.reset, f.reset_width, vnote = _field_reset(f.reset_text)
+                for tok, n, digits in _width_mismatches(f.reset_text):
+                    issues.append(Issue(f"{_reg_slug(rr.name)}.{_field_slug(f.name)}.reset_width", rr, f,
+                                        [f"field table p{f.p}"],
+                                        f"{rr.name} {f.name}: reset {tok} prints a width of {n} bits and {digits} "
+                                        f"digits; no reset read", f.p, f.q if isinstance(f.q, str) else None))
                 if vnote:
                     f.note = "; ".join(x for x in (f.note, vnote) if x)
         own = {id(rr): self._own_order(rr) for rr in regs if rr.form == "pair" and len(rr.addrs) == 2}
