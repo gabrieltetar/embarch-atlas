@@ -244,66 +244,90 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
         live = live_mod.available(atlas_dir) is None
     if live:
         @server.tool(annotations=READ_ONLY)
-        def reg_read(target: str, allow_clear: bool = False, role: str | None = None) -> str:
+        def reg_read(target: str, allow_clear: bool = False, role: str | None = None,
+                     lease_token: str | None = None) -> str:
             """Live: an MCU register (`PERIPH.REG`, e.g. RCC.APBENR1) or a whole peripheral (`UCPD1`) read on
             the running board through embarch-core and decoded field by field against the SVD; or an external
             part's register (`<DT label>.<REG>`, e.g. vbus_sense.VBUS, or `<part>.<REG>` when it has one
             instance) read with the board shell's `i2c read`, decoded against its datasheet. `*` marks a
             field not at its reset value. A running core is halted for the read (about 20 ms over a J-Link) and let run
             again. A register whose read clears something (a FIFO data register, a read-to-clear flag) is
-            refused, or left out of a peripheral read; `reg_read_clear` reads those."""
+            refused, or left out of a peripheral read; `reg_read_clear` reads those.
+            `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
+            CLI's environment for this call only and is never logged or echoed."""
             if allow_clear:
                 return ("src: none\n\nRefused: allow_clear=true can clear a latched flag or pop a FIFO, so it is "
                         "not a read-only call. Use `reg_read_clear`.\n")
-            return live_mod.reg_read(atlas_dir, target, False, role)
+            with live_mod.lease(lease_token):
+                return live_mod.reg_read(atlas_dir, target, False, role)
 
         @server.tool(annotations=WRITE)
-        def reg_read_clear(target: str, role: str | None = None) -> str:
+        def reg_read_clear(target: str, role: str | None = None, lease_token: str | None = None) -> str:
             """Live: `reg_read` with allow_clear=true. Reads registers whose read clears a flag or pops a FIFO,
-            and says what the read cleared. Not read-only: a host asks before it runs."""
-            return live_mod.reg_read(atlas_dir, target, True, role)
+            and says what the read cleared. Not read-only: a host asks before it runs.
+            `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
+            CLI's environment for this call only and is never logged or echoed."""
+            with live_mod.lease(lease_token):
+                return live_mod.reg_read(atlas_dir, target, True, role)
 
         @server.tool(annotations=WRITE)
-        def reg_read_bank(target: str, role: str | None = None) -> str:
+        def reg_read_bank(target: str, role: str | None = None, lease_token: str | None = None) -> str:
             """Live: `reg_read` of a banked register (`<label>.<REG>@<bank>`) on a paged external part, with
             allow_bank_select=true: writes the part's page-select register to the bank, reads, then writes the
-            previous page back (even when the read fails). Not read-only: a host asks before it runs."""
-            return live_mod.reg_read(atlas_dir, target, False, role, True)
+            previous page back (even when the read fails). Not read-only: a host asks before it runs.
+            `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
+            CLI's environment for this call only and is never logged or echoed."""
+            with live_mod.lease(lease_token):
+                return live_mod.reg_read(atlas_dir, target, False, role, True)
 
         @server.tool(annotations=READ_ONLY)
-        def live_stacks(build: str | None = None, role: str | None = None) -> str:
+        def live_stacks(build: str | None = None, role: str | None = None, lease_token: str | None = None) -> str:
             """Live: every thread's stack peak on the board (`kernel thread stacks` over the shell), joined to
             its stack symbol, the line that defined it and the *_STACK_SIZE option (inference) once a few flash
             words read through embarch-core show the board runs that build; `!` marks 90 % and above.
-            `build`: the build dir the board runs; default the atlas's pinned build."""
-            return live_mod.live_stacks(atlas_dir, build, role)
+            `build`: the build dir the board runs; default the atlas's pinned build.
+            `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
+            CLI's environment for this call only and is never logged or echoed."""
+            with live_mod.lease(lease_token):
+                return live_mod.live_stacks(atlas_dir, build, role)
 
         @server.tool(annotations=READ_ONLY)
         def core_state(halt: bool = False, samples: int = 8, build: str | None = None,
-                       role: str | None = None) -> str:
+                       role: str | None = None, lease_token: str | None = None) -> str:
             """Live: where the core is, as symbols. DHCSR (and with `halt` SCB_ICSR) decoded by bit name; the
             `samples` DWT_PCSR PC samples (default 8, 1 ms apart, no halt) as a histogram of functions with
             file:line, or with `halt=true` the core is stopped once (it is let run again) and PC, LR, SP and the
             registers read. Names a symbol only when words read through embarch-core show the board runs the ELF
             of `build` (default: the atlas's pinned build); otherwise addresses stay raw and the answer says why.
-            The ELF check is one halted read."""
-            return corestate.core_state(atlas_dir, build, role, halt, samples)
+            The ELF check is one halted read.
+            `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
+            CLI's environment for this call only and is never logged or echoed."""
+            with live_mod.lease(lease_token):
+                return corestate.core_state(atlas_dir, build, role, halt, samples)
 
         @server.tool(annotations=READ_ONLY)
-        def shell(command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
+        def shell(command: str, role: str | None = None, timeout_ms: int | None = None,
+                  lease_token: str | None = None) -> str:
             """Live: one read-only command on the board's shell (the console signal the role declares), through
             embarch-core; returns its output with escape codes stripped. Runs only commands matching the
             `[live] read_only` list in atlas.toml (default: device list, kernel thread stacks, kernel uptime,
             i2c read, i2c read_byte); anything else is refused, use `shell_run`.
-            timeout_ms (default 3000, max 10000) bounds the wait for the prompt."""
-            return live_mod.shell_read(atlas_dir, command, role, timeout_ms)
+            timeout_ms (default 3000, max 10000) bounds the wait for the prompt.
+            `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
+            CLI's environment for this call only and is never logged or echoed."""
+            with live_mod.lease(lease_token):
+                return live_mod.shell_read(atlas_dir, command, role, timeout_ms)
 
         @server.tool(annotations=WRITE)
-        def shell_run(command: str, role: str | None = None, timeout_ms: int | None = None) -> str:
+        def shell_run(command: str, role: str | None = None, timeout_ms: int | None = None,
+                      lease_token: str | None = None) -> str:
             """Live: any command on the board's shell, through embarch-core. It can change the board's state
             (switch a power path, drive a GPIO), so it is not read-only: a host asks before it runs.
-            timeout_ms (default 3000, max 10000) bounds the wait for the prompt."""
-            return live_mod.shell(atlas_dir, command, role, timeout_ms)
+            timeout_ms (default 3000, max 10000) bounds the wait for the prompt.
+            `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
+            CLI's environment for this call only and is never logged or echoed."""
+            with live_mod.lease(lease_token):
+                return live_mod.shell(atlas_dir, command, role, timeout_ms)
 
     return server
 

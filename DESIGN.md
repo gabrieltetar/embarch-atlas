@@ -1021,6 +1021,17 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   `written` is true in exactly the case this rule exists for. A reply of any kind, including an error
   line, or a lost port, stops there. Presence of a signal never says which
   console the image uses: a USB-UART bridge is powered by the host, not the DUT.
+  **Under the session's own lease.** A session that took the bench lease with embarch-api's `lease_take`
+  holds a token the CLI reads from `EMBARCH_LEASE_TOKEN`, and the atlas MCP server's environment was fixed
+  when it started, so that export cannot reach it. Every live tool (`shell`, `shell_run`, `reg_read`,
+  `reg_read_clear`, `reg_read_bank`, `live_stacks`, `core_state`) takes an optional `lease_token`, the
+  value `lease_take` returned; `live.lease(token)` holds it in a context variable for that call and
+  `call_api` puts it in the child's environment only (never its argv), and every CLI failure text is
+  scrubbed of it before it becomes an answer. Nothing stores or logs it. The CLI's own `live` verbs
+  need nothing: they inherit the shell's `EMBARCH_LEASE_TOKEN`. A `409` or any error naming the lease is
+  in the not-written set above, so `shell` says "the command did not run" (exit 1) and the next console
+  is not tried to no purpose: Core checks the lease before it opens a port. That wording is assumed from
+  the refusal's shape, not measured against a live Core.
   **How the atlas knows `retval` is absent.** From the pinned build's `kconfig.json`
   (`CONFIG_SHELL_CMDS_RETURN_VALUE`: set to `n`, or missing from a kconfig.json that lists every
   symbol, means no `retval`); then `retval` is not sent and the answer says the status is unknown and

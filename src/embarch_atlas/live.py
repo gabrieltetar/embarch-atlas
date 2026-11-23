@@ -20,7 +20,10 @@ Off unless Core answers: `available()` asks `embarch-api status`, and the MCP se
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -92,11 +95,38 @@ def settings(atlas_dir: Path) -> dict[str, Any]:
             "read_only": list(ro) if isinstance(ro, list) else list(DEFAULT_READ_ONLY)}
 
 
-def call_api(s: dict[str, Any], args: list[str], timeout: float) -> dict[str, Any]:
-    """Run `embarch-api --json <args>` and return its JSON; LiveError when it says it failed."""
-    cmd = [s["api"], "--config", s["api_config"], "--json", *args]
+# The bench lease token of the session that took the lease with embarch-api's `lease_take` (whose result
+# carries it once). The atlas MCP server's environment was fixed when it started, so `EMBARCH_LEASE_TOKEN`
+# cannot be exported into it; each live tool takes an optional `lease_token` argument and holds it here
+# for the length of the call. It reaches the CLI's environment only, never its argv, and never an answer.
+_LEASE_TOKEN: contextvars.ContextVar[str | None] = contextvars.ContextVar("atlas_lease_token", default=None)
+LEASE_ENV = "EMBARCH_LEASE_TOKEN"
+
+
+@contextlib.contextmanager
+def lease(token: str | None):
+    """Run the `embarch-api` calls inside the block under this lease token (None or empty: the server's own env)."""
+    tok = _LEASE_TOKEN.set(token.strip() if token and token.strip() else None)
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        yield
+    finally:
+        _LEASE_TOKEN.reset(tok)
+
+
+def _scrub(text: str) -> str:
+    """`text` with the lease token, if one is held, replaced; applied to every message the CLI's output feeds."""
+    tok = _LEASE_TOKEN.get()
+    return text.replace(tok, "<lease token>") if tok else text
+
+
+def call_api(s: dict[str, Any], args: list[str], timeout: float) -> dict[str, Any]:
+    """Run `embarch-api --json <args>` and return its JSON; LiveError when it says it failed. A lease token
+    held by `lease()` goes in as `EMBARCH_LEASE_TOKEN` in the child's environment."""
+    cmd = [s["api"], "--config", s["api_config"], "--json", *args]
+    tok = _LEASE_TOKEN.get()
+    env = {**os.environ, LEASE_ENV: tok} if tok else None
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     except FileNotFoundError:
         raise LiveError(f"{s['api']} not found; install embarch-api or set [live] api in atlas.toml")
     except subprocess.TimeoutExpired:
@@ -105,9 +135,9 @@ def call_api(s: dict[str, Any], args: list[str], timeout: float) -> dict[str, An
         out = json.loads(p.stdout)
     except ValueError:
         tail = (p.stderr or p.stdout).strip().splitlines()[-3:]
-        raise LiveError(f"embarch-api {args[0]} exited {p.returncode}: " + " | ".join(tail))
+        raise LiveError(_scrub(f"embarch-api {args[0]} exited {p.returncode}: " + " | ".join(tail)))
     if not out.get("success"):
-        raise LiveError(str(out.get("error") or f"embarch-api {args[0]} failed"))
+        raise LiveError(_scrub(str(out.get("error") or f"embarch-api {args[0]} failed")))
     return out
 
 
@@ -614,11 +644,14 @@ def clean(text: str, command: str, prompt: str) -> str:
 
 # What Core's and embarch-api's own error texts say when nothing reached the wire: the signal is unknown or
 # not writable, the port is not enumerable (`signal-mismatch`, a port wait that ran out), the open failed
-# or the write failed with zero bytes (embarch-core decision 85), or embarch-api itself is not installed.
+# or the write failed with zero bytes (embarch-core decision 85), or embarch-api itself is not installed,
+# or the bench lease refused the call (a 409 naming the lease, or a lease error: Core checks it before it
+# opens a port; the wording is assumed, not measured against a live Core).
 # Anything else (a timeout of embarch-api, "after N of M bytes", a flush failure, an unparsable reply) may
 # have written.
 _NOT_WRITTEN = re.compile(r"nothing was written|signal-mismatch|no signal is declared|Core writes only|"
-                          r"; core state: |embarch-api not found|\bnot found; install", re.I)
+                          r"; core state: |embarch-api not found|\bnot found; install|"
+                          r"\b409\b|\blease\b", re.I)
 
 
 class Console:

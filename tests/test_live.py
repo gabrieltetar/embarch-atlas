@@ -1089,3 +1089,74 @@ def test_a_whole_part_read_leaves_banked_registers_out_without_the_opt_in(tmp_pa
     out = live.reg_read(ad, "sense_vbus")
     assert "allow_bank_select=true reads them" in out and "- PAGED@1" in out
     assert not any("write_byte" in c for c in shell_log(ad))
+
+
+# --------------------------------------------------------------------------- the session's own lease
+
+TOKEN = "tok-SECRET-0123456789"
+
+ENV_API = """#!{python}
+import json, os, sys
+from pathlib import Path
+here = Path(__file__).parent
+(here / "seen.json").write_text(json.dumps({{"env": os.environ.get("EMBARCH_LEASE_TOKEN"), "argv": sys.argv[1:]}}))
+if (here / "leak").exists():
+    print("bad token " + os.environ.get("EMBARCH_LEASE_TOKEN", ""), file=sys.stderr); sys.exit(1)
+print(json.dumps({{"success": True, "status": "ok"}}))
+"""
+
+
+def _env_api(tmp_path):
+    api = tmp_path / "fake-api"
+    api.write_text(ENV_API.format(python=sys.executable))
+    api.chmod(api.stat().st_mode | stat.S_IEXEC)
+    return {"api": str(api), "api_config": "c.toml"}, tmp_path / "seen.json"
+
+
+def test_a_lease_token_reaches_the_cli_environment_only(tmp_path, monkeypatch):
+    monkeypatch.delenv("EMBARCH_LEASE_TOKEN", raising=False)
+    s, seen = _env_api(tmp_path)
+    live.call_api(s, ["status"], 10)
+    assert json.loads(seen.read_text())["env"] is None             # no token held: none passed
+    with live.lease(TOKEN):
+        live.call_api(s, ["status"], 10)
+    got = json.loads(seen.read_text())
+    assert got["env"] == TOKEN and TOKEN not in " ".join(got["argv"])
+    live.call_api(s, ["status"], 10)
+    assert json.loads(seen.read_text())["env"] is None             # released with the block
+    with live.lease("  "):
+        live.call_api(s, ["status"], 10)
+    assert json.loads(seen.read_text())["env"] is None
+
+
+def test_the_token_is_scrubbed_from_a_failure_the_cli_prints(tmp_path):
+    s, _ = _env_api(tmp_path)
+    (tmp_path / "leak").write_text("")
+    with live.lease(TOKEN):
+        try:
+            live.call_api(s, ["status"], 10)
+        except live.LiveError as e:
+            msg = str(e)
+    assert TOKEN not in msg and "<lease token>" in msg
+
+
+def test_the_shell_tool_passes_the_token_and_prints_none_of_it(tmp_path, monkeypatch):
+    ad = make_scripted(tmp_path, {"device list": echoed("device list", "uart@0\r\n")})
+    seen = []
+    real = live.call_api
+
+    def spy(s, args, timeout):
+        seen.append(live._LEASE_TOKEN.get())
+        return real(s, args, timeout)
+    monkeypatch.setattr(live, "call_api", spy)
+    with live.lease(TOKEN):
+        out = live.shell_read(ad, "device list")
+    assert "uart@0" in out and TOKEN not in out and seen and set(seen) == {TOKEN}
+
+
+def test_a_409_naming_the_lease_is_reported_as_did_not_run(tmp_path):
+    for i, why in enumerate(("signal-exchange failed: 409 Conflict: the bench lease is held by another session",
+                             "409: lease held; pass the token")):
+        ad = make_scripted(tmp_path / str(i), {"device list": {"error": why}}, consoles=("dut-a", "dut-b"))
+        out, code = live.shell_status(ad, "device list")
+        assert code == 1 and "did not run" in out and "may have run" not in out, why
