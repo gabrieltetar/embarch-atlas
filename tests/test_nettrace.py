@@ -167,3 +167,78 @@ def test_parts_md_rows_carry_a_known_tolerance():
     bom = [{"ref": "R1", "tolerance": "1%"}, {"ref": "R2", "tolerance": None}]
     md = smartpdf.render_parts_md(nl, bom)
     assert "A:R1 - 10K tol=1% p1" in md and "A:R2 - 10K p1" in md
+
+
+# ---------------------------------------------------------------- a part whose datasheet has two package pinouts
+
+def _two_pkg_atlas(tmp_path: Path, u1_pins: dict, u1_extra: dict | None = None, bindings: dict | None = None) -> Path:
+    """XLDO-18 distils a 5-pin SOT-23-5 pinout (1 GND, 2 VIN, 3 EN, 4 NC, 5 VOUT) and a 6-pin WSON6 pinout
+    (1 VOUT, 2 NC, 3 GND, 4 EN, 5 NC, 6 VIN): pin 1 is ground in one and the output in the other."""
+    a = tmp_path / "atlas"
+    d = a / "docs" / "xldo18@1"
+    write_json(d / "doc.json", {"doc_id": "xldo18@1", "part": "XLDO-18", "kind": "datasheet"})
+    pk = {"SOT-23-5": [("GND", "ground"), ("VIN", "supply"), ("EN", None), ("NC", None), ("VOUT", "supply")],
+          "WSON6": [("VOUT", "supply"), ("NC", None), ("GND", "ground"), ("EN", None), ("NC", None), ("VIN", "supply")]}
+    recs = []
+    for pkg, pins in pk.items():
+        for i, (name, typ) in enumerate(pins, 1):
+            r = {"id": f"xldo18.pin.{pkg}.{i}", "kind": "pin", "doc": "xldo18@1", "p": 2, "src": "table",
+                 "prov": "llm-verified", "pin": i, "name": name, "package": pkg,
+                 "dir": "power" if typ else "in"}
+            if name == "GND":
+                r["type"] = "ground"
+            if name == "VOUT":
+                r["flow"] = "source"
+            if name == "VIN":
+                r["flow"] = "sink"
+            recs.append(r)
+    write_jsonl(d / "records" / "pin.jsonl", recs)
+    comps = {"U1": dict({"mpn": "XLDO-18", "pins": u1_pins}, **(u1_extra or {})),
+             "C1": {"mpn": "CAP", "value": "1uF", "pins": _pins(**{"1": (None, "V1P8"), "2": (None, "GND")})},
+             "J1": {"mpn": "BARREL", "pins": _pins(**{"1": (None, "VIN_RAW"), "2": (None, "GND")})}}
+    nets: dict = {}
+    for ref, c in comps.items():
+        for num, p in c["pins"].items():
+            nets.setdefault(p["net"], {"pins": []})["pins"].append(f"{ref}-{num}")
+    write_json(a / "boards" / "A" / "netlist.json", {"board": "A", "components": comps, "nets": nets})
+    if bindings:
+        write_json(a / "boards" / "bindings.json", bindings)
+    at = a / "atlases" / "core@000000000003"
+    write_json(at / "atlas.json", {"id": "core@000000000003", "commit": "0" * 40, "schematic_boards": ["A"]})
+    write_json(at / "dt.json", {"uses": [], "nodes": {}})
+    write_json(a / "current.json", {"matches": [{"atlas": "core@000000000003"}]})
+    return a
+
+
+WSON_FITTED = _pins(**{"1": ("VOUT", "V1P8"), "2": ("NC", "NC2"), "3": ("GND", "GND"), "4": ("EN", "VIN_RAW"),
+                       "5": ("NC", "NC5"), "6": ("VIN", "VIN_RAW")})
+
+
+def test_net_trace_names_the_pins_of_the_fitted_package(tmp_path):
+    out = query.net_trace(query.Atlas(_two_pkg_atlas(tmp_path, WSON_FITTED)), "A:V1P8")
+    assert "A:U1-1 VOUT XLDO-18 dir=power flow=source (xldo18@1 p2)" in out
+    assert "GND" not in out.split("## Upstream", 1)[0].split("A:U1-1", 1)[1].splitlines()[0]
+    assert "fed by A:U1-1 XLDO-18 VOUT flow=source" in out.split("## Upstream", 1)[1]
+    assert "package not resolved" not in out
+
+
+def test_net_trace_unresolved_package_shows_the_schematic_name_and_says_so(tmp_path):
+    blank = {num: dict(p, name=None) for num, p in WSON_FITTED.items() if num in "1236"}   # 4 pins, no symbol names
+    out = query.net_trace(query.Atlas(_two_pkg_atlas(tmp_path, blank)), "A:V1P8")
+    assert "A:U1-1 XLDO-18 (schematic pin name; package not resolved: " in out
+    assert "package not resolved, so its pin roles are not read" in out
+    assert "fed by" not in out and "GND" not in out.split("A:U1-1", 1)[1].splitlines()[0]
+
+
+def test_net_trace_declared_package_wins_and_footprint_names_it(tmp_path):
+    names = {n: dict(p, name=None) for n, p in WSON_FITTED.items()}
+    out = query.net_trace(query.Atlas(_two_pkg_atlas(tmp_path / "a", names, bindings={"packages": {"U1": "wson6"}})), "A:V1P8")
+    assert "A:U1-1 VOUT XLDO-18 dir=power flow=source" in out
+    out = query.net_trace(query.Atlas(_two_pkg_atlas(tmp_path / "b", names, {"footprint": "WSON6_2x2mm"})), "A:V1P8")
+    assert "A:U1-1 VOUT XLDO-18 dir=power flow=source" in out
+
+
+def test_net_trace_resolves_the_package_by_pin_count(tmp_path):
+    names = {n: dict(p, name=None) for n, p in WSON_FITTED.items()}
+    out = query.net_trace(query.Atlas(_two_pkg_atlas(tmp_path, names)), "A:V1P8")
+    assert "A:U1-1 VOUT XLDO-18 dir=power flow=source" in out

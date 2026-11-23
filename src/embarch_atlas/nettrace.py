@@ -141,6 +141,7 @@ def members(J: Join, board: str, net: str) -> list[dict]:
         else:
             name, rec, doc = _role(J, board, p)
             it.update(kind="part", pin_name=name, rec=rec, doc=doc,
+                      unresolved=None if rec else J.pin_unresolved(board, p),
                       documented=bool(J.part_docs.get((board, ref))), generic=(board, ref) in J.generic,
                       supplied=J.part_supplied.get((board, ref)))
         out.append(it)
@@ -193,6 +194,9 @@ def _member_lines(items: list[dict]) -> list[str]:
             if rec:
                 role = " ".join(f"{f}={rec[f]}" for f in ("dir", "type", "flow") if rec.get(f))
                 lines.append(f"  {pk}{name} {it.get('mpn') or ''}{dni} {role} ({_cite(rec, doc)})")
+            elif it.get("unresolved"):
+                lines.append(f"  {pk}{name} {it.get('mpn') or ''}{dni} (schematic pin name; package not resolved: "
+                             f"{it['unresolved']})")
             elif it.get("documented"):
                 lines.append(f"  {pk}{name} {it.get('mpn') or ''}{dni} (no pin record for this pin)")
             else:
@@ -353,6 +357,9 @@ def upstream(J: Join, nets: list[tuple[str, str]], hop: int = 0, seen=None, asks
         lines.append(f"{pad}  no part on this net has a pin record with flow source or bidir")
     if unflowed:
         lines.append(f"{pad}  documented, but no pin record for: " + ", ".join(_part_key(it) for it in unflowed))
+        for it in unflowed:
+            if it.get("unresolved"):
+                lines.append(f"{pad}  {_part_key(it)}: package not resolved, so its pin roles are not read: {it['unresolved']}")
     for it in items:
         if it["kind"] == "connector":
             lines.append(f"{pad}  input connector {it['board']}:{it['key']} {it.get('mpn') or ''}".rstrip())
@@ -392,7 +399,9 @@ def answer(J: Join, query: str, board: str | None = None) -> tuple[str, str]:
         for key in B.pins(ref):
             name, rec, doc = _role(J, b, key)
             role = " ".join(f"{f}={rec[f]}" for f in ("dir", "type", "flow") if rec and rec.get(f))
-            lines.append(f"  {b}:{key} {name} -> {b}:{B.net(key)}" + (f" {role} ({_cite(rec, doc)})" if rec else ""))
+            why = None if rec else J.pin_unresolved(b, key)
+            lines.append(f"  {b}:{key} {name} -> {b}:{B.net(key)}" + (f" {role} ({_cite(rec, doc)})" if rec else "")
+                         + (f" (schematic pin name; package not resolved: {why})" if why else ""))
         lines += ["", f"Trace one with net_trace {b}:<net> or {b}:{ref}-<pin>."]
         return src, "\n".join(lines)
     if r["kind"] == "pin":

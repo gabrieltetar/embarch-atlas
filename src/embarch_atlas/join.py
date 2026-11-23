@@ -370,6 +370,7 @@ class Join:
                 self.mate[(ba, f"{ra}-{pa}")] = (bb, f"{rb}-{pb}")
                 self.mate[(bb, f"{rb}-{pb}")] = (ba, f"{ra}-{pa}")
         self.mcu = self._find_mcu(mcu_part, mcu_ref)
+        self._fitted: dict[tuple[str, str], tuple[str | None, str]] = {}
         self.pin_records: dict[tuple[str, str], dict] = {}   # (board, ref) -> {pin number/ball: record}
         self.answers_error: str | None = None
         try:
@@ -435,11 +436,59 @@ class Join:
         return (best[1], best[2]) if best else None
 
     def part_package(self, board: str, ref: str) -> str | None:
-        """The package the engineer declared for a board part (`boards/bindings.json` `packages`, keyed
-        `<board>:<ref>` or `<ref>`), or None when none is declared."""
+        """The package of a board part: the one the engineer declared (`boards/bindings.json` `packages`,
+        keyed `<board>:<ref>` or `<ref>`), else the one the board itself fits (`part_package_fitted`), else
+        None."""
         decl = self.bindings.get("packages") or {}
         pkg = decl.get(f"{board}:{ref}", decl.get(ref))
-        return str(pkg) if pkg else None
+        return str(pkg) if pkg else self.part_package_fitted(board, ref)[0]
+
+    def part_package_fitted(self, board: str, ref: str) -> tuple[str | None, str]:
+        """(package, how) a part's own board fits when none is declared, from the datasheet's per-package
+        pin records. In order: the component's `footprint` or `package` text names exactly one of the
+        datasheet's packages; exactly one package has no pin number the schematic names differently and at
+        least one it names alike; exactly one package has as many pin numbers as the component has pins.
+        Never the first package: None and a reason when none of these singles one out."""
+        k = (board, ref)
+        if k in self._fitted:
+            return self._fitted[k]
+        out: tuple[str | None, str] = (None, "no package pinout in the datasheet")
+        by_pkg: dict[str, dict[str, set[str]]] = {}        # package -> pin number -> names; "" = every package
+        for d in self.part_docs.get(k, []):
+            for r in self.docs.records(d, "pin"):
+                pk = str(r.get("package") or "")
+                for n in r.get("pin") if isinstance(r.get("pin"), list) else [r.get("pin")]:
+                    by_pkg.setdefault(pk, {}).setdefault(str(n), set()).add(pin_norm(r.get("name")))
+        named = {pk: pins for pk, pins in by_pkg.items() if pk}
+        if len(named) > 1:
+            shared = by_pkg.get("", {})
+            view = {pk: {n: names | shared.get(n, set()) for n, names in {**shared, **pins}.items()} for pk, pins in named.items()}
+            c = self.boards[board].comps.get(ref, {})
+            pins = c.get("pins") or {}
+            text = pkg_norm(c.get("footprint") or c.get("package"))
+            hit = [pk for pk in named if text and pkg_norm(pk) in text]
+            if len(hit) == 1:
+                out = (hit[0], "the component's footprint")
+            else:
+                agree = {pk: [0, 0] for pk in named}       # [pin names alike, pin names different]
+                for num, p in pins.items():
+                    sym = pin_norm(p.get("name"))
+                    if not sym:
+                        continue
+                    for pk, v in view.items():
+                        if str(num) in v:
+                            agree[pk][0 if sym in v[str(num)] else 1] += 1
+                ok = [pk for pk, (a, b) in agree.items() if a and not b]
+                same = [pk for pk, v in view.items() if len(v) == len(pins)]
+                if len(ok) == 1:
+                    out = (ok[0], "the schematic's pin names agreeing with it alone")
+                elif len(same) == 1:
+                    out = (same[0], "its pin count")
+                else:
+                    out = (None, f"the footprint, the schematic's pin names and the pin count do not single out one of "
+                                 f"{', '.join(sorted(named))}")
+        self._fitted[k] = out
+        return out
 
     def pin_lookup(self, board: str, ref: str, num: Any) -> tuple[list[tuple[str, dict]], bool]:
         """(the part's pin records for this pin number or ball, ambiguous). With a declared package the
@@ -476,6 +525,14 @@ class Join:
                                 "names": {str(r.get("package") or "any package"): r.get("name") for r in recs},
                                 "records": [r.get("id") for r in recs]})
         return out
+
+    def pin_unresolved(self, board: str, key: str) -> str | None:
+        """Why a part pin has no datasheet record for want of its package (the datasheet names the pin per
+        package and the fitted one is neither declared nor inferable), else None."""
+        ref, num = split_key(key)
+        if not self.pin_lookup(board, ref, num)[1]:
+            return None
+        return self.part_package_fitted(board, ref)[1]
 
     def part_pin_name(self, board: str, key: str) -> str | None:
         """A part pin's name: the datasheet's pin record (by number/ball, for the part's package) first, else the
