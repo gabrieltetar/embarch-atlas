@@ -348,6 +348,15 @@ These settle cases the rules above leave open. They were each hit on a real data
   (`boards/bindings.json` `packages`); without it the join calls such a pin ambiguous.
 - An MCU pin's I/O structure (`FT`, `FT_fa`, `TT_a`, `RST, FT`) goes in `io`, exactly as printed;
   `type` stays for od/pp/analog/supply/ground. The join reads `io` for 5 V tolerance.
+- A module's pad table (a module datasheet whose pads map to the SoC's GPIO: `Pad 7 | IO7 | P1.05`):
+  one `pin` record per pad, `pin` the pad number, `name` the pad's own name as printed (`IO7`), and
+  `port` the SoC port the table gives for it, normalised as the join reads it: `PA4` (a letter after
+  `P`, one or two digits) or `P1.05` (port, dot, pin, zero-padded to two digits: `P0.4` is `P0.04`),
+  nothing else (no `GPIO`, no trailing function, no `/`). Write `port` only when the table prints it
+  for that pad, and leave it off a pad that has none (supply, ground, a pad the table does not tie to a
+  port); never infer a port from the pad's name or number. A value outside that form fails the record
+  schema (`port` pattern), so `embarch-atlas check` rejects it. Where the pad table is per package,
+  one record per package with `package`.
 
 **Straps**
 - An address strap's `value` starts with the 7-bit address in hex (`0x44`), the 8-bit or binary

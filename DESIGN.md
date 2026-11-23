@@ -898,8 +898,9 @@ table's `port` (`port_source` `module pad table`, `pins.md` `P1.03 (from module 
 as a port-shaped name, a net named after the port. The symbol wins over a pad table that disagrees (it is what the board
 is drawn to, and a wrong `port` on a record is the likelier slip); `pins.json` then carries `port_conflict` and `pins.md`
 prints `(pad table says P0.09)`. The record is keyed to the module by the document that covers its MPN, and by `package`
-as any pin record. Whether a real module datasheet's pad table can be translated into these records by the existing
-`atlas-translate-docs` pin-table pass is not exercised: only synthetic records are tested. A non-rail pad with none of
+as any pin record. The `atlas-translate-docs` datasheet procedure tells the translator to write `port` for each pad of a module's pad
+table, normalised as above (`reference/datasheet-procedure.md`, the pin records); the record schema's `port` pattern rejects a malformed one. Not
+exercised on a real module datasheet: only synthetic records are tested. A non-rail pad with none of
 the four shows `(no port: <why>)` in `pins.md` (`port_why` in `pins.json`) naming the remedy, a `pin_names.json` entry or
 a `port` on the module's pad-table record, instead of a blank cell. `mismatch.run` lists each one as a `pad-without-name` candidate naming the part, pad and net, and counts them in
 the check `MCU pads with a net have a pin name`; a pad named from the text layer or an overlay is named, so it is not
