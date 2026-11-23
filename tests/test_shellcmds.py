@@ -44,9 +44,26 @@ class Img:
             self.strs[s] = self.put(".rodata", s.encode() + b"\0")
         return self.strs[s]
 
+    def help_ptr(self, help_) -> int:
+        """A plain string, or `SHELL_HELP(description, usage)` of Zephyr 4.4: a `struct shell_cmd_help`."""
+        if not help_:
+            return 0
+        if isinstance(help_, str):
+            return self.string(help_)
+        desc, usage = help_
+        return self.put(".rodata", struct.pack("<III", 0x86D20BC4, self.string(desc), self.string(usage) if usage else 0))
+
     def entry_bytes(self, syntax, help_="", sub=0, handler=0, mand=0, opt=0) -> bytes:
-        return struct.pack("<IIIIBBxx", self.string(syntax) if syntax else 0, self.string(help_) if help_ else 0,
+        return struct.pack("<IIIIBBxx", self.string(syntax) if syntax else 0, self.help_ptr(help_),
                            sub, handler, mand, opt)
+
+    def section_set(self, entries: list[dict]) -> int:
+        """`SHELL_SUBCMD_SET_CREATE` plus `SHELL_SUBCMD_ADD`: a zero placeholder, then the entries, in `shell_subcmds`
+        itself, ended by the next set's zero placeholder. Returns the placeholder, which is what the parent points at."""
+        blobs = [b"\0" * ENTRY] + [self.entry_bytes(**e) for e in entries] + [b"\0" * ENTRY]
+        start = self.put("shell_subcmds_area", b"".join(blobs))
+        self.syms.append(("kernel_cmds", start, ENTRY, 1, "shell_subcmds_area"))
+        return start
 
     def static_set(self, name, entries: list[dict]) -> int:
         """`SHELL_STATIC_SUBCMD_SET_CREATE`: the array, ended by a zero entry, and the union that points at it."""
@@ -239,3 +256,46 @@ def test_shell_commands_is_a_read_only_mcp_tool_and_a_q_verb(atlas_dir):
     tools = {t.name: t for t in asyncio.run(build_server(atlas_dir, live=False).list_tools())}
     assert tools["shell_commands"].annotations.read_only_hint
     assert query.TOOLS["shell_commands"] is query.shell_commands
+
+
+def test_zephyr_4_4_structured_help_decodes_to_plain_text_and_a_usage(tmp_path):
+    elf = tmp_path / "zephyr.elf"
+    im = Img()
+    sec = im.section_set([dict(syntax="reboot", help_=("Reboot the system", "<cold|warm>"), mand=1, opt=0),
+                          dict(syntax="uptime", help_=("Show uptime", None), mand=1, opt=0)])
+    im.root("kernel", ("Kernel commands", None), sec)
+    im.write(elf)
+    rec = shellcmds.inventory(elf, None, {"SHELL": "y"})
+    k = rec["commands"]["kernel"]
+    assert k["help"] == "Kernel commands" and k["usage"] == ""
+    subs = {s["name"]: s for s in k["subcommands"]}
+    assert subs["reboot"]["help"] == "Reboot the system" and subs["reboot"]["usage"] == "<cold|warm>"
+    assert subs["uptime"]["help"] == "Show uptime"
+    body = shellcmds.answer(rec, "kernel")[1]
+    assert "Reboot the system (usage: <cold|warm>)" in body and "\ufffd" not in body
+
+
+def test_kernel_lists_the_subcommands_added_into_the_shell_subcmds_section(tmp_path):
+    elf = tmp_path / "zephyr.elf"
+    im = Img()
+    thread = im.section_set([dict(syntax="stacks", help_="Thread stacks", mand=1, opt=0)])
+    sec = im.section_set([dict(syntax="reboot", help_="Reboot", mand=1, opt=0),
+                          dict(syntax="thread", help_="Thread tools", sub=thread, mand=1, opt=0)])
+    im.root("kernel", "Kernel commands", sec)
+    im.write(elf)
+    rec = shellcmds.inventory(elf, None, {"SHELL": "y"})
+    subs = {s["name"]: s for s in rec["commands"]["kernel"]["subcommands"]}
+    assert set(subs) == {"reboot", "thread"}
+    assert [s["name"] for s in subs["thread"]["subcommands"]] == ["stacks"]
+    assert "`kernel reboot`" in shellcmds.answer(rec, "kernel")[1]
+
+
+def test_a_help_pointer_that_is_not_printable_text_gives_empty_help(tmp_path):
+    elf = tmp_path / "zephyr.elf"
+    im = Img()
+    junk = im.put(".rodata", bytes([0xC4, 0x0B, 0xD2, 0x01, 0x18, 0x08, 0]))      # not the magic, not text
+    im.root("echo", "Echo")
+    im.write(elf)
+    t = shellcmds._Image(Elf(elf))
+    assert t.help(junk) == ("", "")
+    assert t.help(None) == ("", "")

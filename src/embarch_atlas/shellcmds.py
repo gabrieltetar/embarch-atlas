@@ -35,7 +35,9 @@ from typing import Any
 
 from .dt import Elf
 
-SCHEMA = 1
+SCHEMA = 2
+HELP_MAGIC = 0x86D20BC4         # SHELL_STRUCTURED_HELP_MAGIC: `SHELL_HELP(description, usage)` points at a `struct shell_cmd_help`
+SUBCMDS_SECTION = "shell_subcmds"
 MAX_DEPTH = 6
 MAX_STR = 1024
 MAX_ENTRIES = 4096
@@ -81,6 +83,24 @@ class _Image:
                 return self.elf.data[o:z if z >= 0 else end].decode("utf-8", "replace")
         return None
 
+    def text(self, addr: int | None) -> str:
+        """The string at `addr` when it is printable text, else "": a pointer that lands on anything else (a struct, another
+        section's data, a base this reader got wrong) must print nothing rather than bytes."""
+        t = self.cstr(addr)
+        if t is None or not all(c in "\n\t\r" or 32 <= ord(c) < 127 for c in t):
+            return ""
+        return t
+
+    def help(self, addr: int | None) -> tuple[str, str]:
+        """(description, usage) of a help pointer: a plain string, or the `struct shell_cmd_help` (a 32-bit magic, then a
+        description and a usage pointer, each pointer-aligned) that `SHELL_HELP` makes in Zephyr 4.4."""
+        if not addr:
+            return "", ""
+        raw = self.read(addr, 4)
+        if raw is not None and struct.unpack(self.e + "I", raw)[0] == HELP_MAGIC:
+            return self.text(self.ptr(addr + self.p)), self.text(self.ptr(addr + 2 * self.p))
+        return self.text(addr), ""
+
     @property
     def entry_size(self) -> int:
         """sizeof(struct shell_static_entry): four pointers, two count bytes, `Z_SHELL_STATIC_ENTRY_PADDING`, then
@@ -106,12 +126,23 @@ def _where(lines: dict[int, tuple[str, int]], addr: int | None) -> str | None:
     return f"{hit[0]}:{hit[1]}" if hit and hit[0] else None
 
 
+def _table(im: _Image, cmd_entry: int) -> int | None:
+    """Where the entries of the subcommand set at `cmd_entry` start. A union is one pointer to its array; but a set made by
+    `SHELL_SUBCMD_SET_CREATE` and filled by `SHELL_SUBCMD_ADD` (the `kernel` and `kernel thread` sets) is not a union at
+    all: it is a zero entry in `shell_subcmds` with the added entries laid after it, which Zephyr's `z_shell_cmd_get` reads
+    as the array starting at that address, skipping the first (null) element, and ending at the first null syntax."""
+    target = im.ptr(cmd_entry)
+    if not target and im.section_name(cmd_entry).startswith(SUBCMDS_SECTION):
+        return cmd_entry + im.entry_size
+    return target
+
+
 def _walk(im: _Image, funcs: dict[int, str], lines: dict[int, tuple[str, int]], devices: list[str],
           cmd_entry: int | None, depth: int, seen: set[int]) -> tuple[list[dict] | None, dict | None]:
     """A `union shell_cmd_entry` at `cmd_entry` -> (static subcommands, or None) and (dynamic info, or None)."""
     if not cmd_entry:
         return None, None
-    target = im.ptr(cmd_entry)
+    target = _table(im, cmd_entry)
     if not target:
         return None, None
     if im.section_name(cmd_entry).startswith(DYNAMIC_SECTION):
@@ -148,12 +179,13 @@ def _entry(im: _Image, funcs: dict[int, str], lines: dict[int, tuple[str, int]],
     sub, handler = im.ptr(addr + 2 * p), im.ptr(addr + 3 * p)
     counts = im.read(addr + 4 * p, 2)
     mand, opt = (counts[0], counts[1]) if counts else (0, 0)
-    out: dict[str, Any] = {"name": name, "help": im.cstr(im.ptr(addr + p)) or "", "mandatory": mand, "optional": opt,
+    desc, usage = im.help(im.ptr(addr + p))
+    out: dict[str, Any] = {"name": name, "help": desc, "usage": usage, "mandatory": mand, "optional": opt,
                            "handler": funcs.get(handler & ~1) or (f"0x{handler:x}" if handler else None)}
     subs, dyn = _walk(im, funcs, lines, devices, sub, depth + 1, seen)
     if subs is not None:
         out["subcommands"] = subs
-        out["at"] = _where(lines, im.ptr(sub))
+        out["at"] = _where(lines, im.ptr(sub) or sub)
     if dyn is not None:
         out["dynamic"] = dyn
         out["at"] = dyn["at"]
@@ -247,6 +279,7 @@ def _rows(e: dict, path: str, out: list[str]) -> None:
     full = f"{path} {e['name']}".strip()
     at = f" [{e['at']}]" if e.get("at") else ""
     h = f" - {e['help']}" if e.get("help") else ""
+    h += f" (usage: {e['usage']})" if e.get("usage") else ""
     out.append(f"- `{full}` ({_args(e)}){h}{at}")
     dyn = e.get("dynamic")
     if dyn:
