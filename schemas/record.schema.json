@@ -704,6 +704,11 @@
           "type": "string",
           "minLength": 1
         },
+        "port": {
+          "type": "string",
+          "pattern": "^(P[A-Z]\\d{1,2}|P\\d\\.\\d{1,2})$",
+          "description": "a module datasheet's pad table: the SoC GPIO port this pad connects to (PA4, P1.05), for a pad whose own `name` is the module's and not the SoC's. The join gives a pad the symbol leaves unnamed this port, ahead of the datasheet-pin-number and net-name inferences; a symbol name that disagrees wins and `pins.md` shows the pad table's port beside it"
+        },
         "flow": {
           "enum": [
             "source",
@@ -739,7 +744,8 @@
           "desc",
           "io",
           "flow",
-          "package"
+          "package",
+          "port"
         ]
       }
     },

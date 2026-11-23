@@ -774,6 +774,10 @@ def build_pin_map(J: Join) -> list[dict]:
         name = B.pin_name.get(key)
         port = J.port_of_key(key)
         port_source = "symbol pin name" if port else None
+        pad = mcu_port(str(ds_by_num[str(num)][1].get("port") or "")) if str(num) in ds_by_num else None
+        port_conflict = pad if port and pad and pad != port else None   # the symbol wins; the pad table's answer is shown
+        if not port and pad:                       # a module's pad table: pad number -> the SoC port behind it
+            port, port_source = pad, "module pad table"
         if not port and str(num) in ds_by_num:     # the symbol says NRST, the datasheet's pinout says PF2-NRST
             port = mcu_port(str(ds_by_num[str(num)][1].get("name") or ""))
             port_source = "datasheet pin number" if port else None
@@ -787,9 +791,10 @@ def build_pin_map(J: Join) -> list[dict]:
         reach = any(f["kind"] in ("part-pin", "connector", "board-to-board") for f in far)
         rows.append({
             "num": num, "key": f"{mb}:{key}", "port": port, "port_source": port_source,
+            "port_conflict": port_conflict,
             "port_why": None if port or rail or not net or name else
-            f"pad {num} has no pin name on the symbol, no datasheet pad row and no port in its net name; "
-            f"name it in boards/{mb}/pin_names.json (or translate the module's pad table) and the port and DT use follow",
+            f"pad {num} has no pin name on the symbol, no port in the module's pad table and no port in its net name; "
+            f"name it in boards/{mb}/pin_names.json (or add a `port` to the module's pad-table pin record) and the port and DT use follow",
             "name": name, "name_source": B.pin_name_source.get(key),
             "ds_name": ds[1].get("name") if ds else None, "io": (ds[1].get("type") or ds[1].get("io")) if ds else None,
             "ds_cite": cite(ds[1], ds[0]) if ds else None,
@@ -1179,8 +1184,10 @@ def render_pins_md(stamp: dict, mcu: tuple[str, str] | None, mpn: str | None, ro
         label = r['port'] or r['name'] or ''
         if label and r.get("name_source") == "text-layer":     # a name paired from the drawing's text, not a printed pin name
             label += " (text-layer)"
-        if r["port"] and r.get("port_source") in ("net name", "datasheet pin number"):
+        if r["port"] and r.get("port_source") in ("net name", "datasheet pin number", "module pad table"):
             label += f" (from {r['port_source']})"
+        if r.get("port_conflict"):
+            label += f" (pad table says {r['port_conflict']})"
         if not label and r.get("port_why"):
             label = f"(no port: {r['port_why']})"
         L.append(f"| {r['num']} | {label} | {r['io'] or ''} | {r['net'] or '(unconnected)'} | "

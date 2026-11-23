@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from test_join import _comp, _netlist, _use, make_project, run_join  # noqa: E402
+from test_join import _comp, _netlist, _use, make_project, run_join, write_jsonl  # noqa: E402
 
 from embarch_atlas import join  # noqa: E402
 from embarch_atlas.common import read_json, write_json  # noqa: E402
@@ -116,3 +116,43 @@ def test_a_module_pad_the_symbol_does_not_name_takes_its_port_from_the_net_or_sa
     assert "| 2 | P1.02 (from net name) |" in md
     assert "| 3 | (no port: pad 3 has no pin name on the symbol" in md
     assert join.net_port("P1.052V") is None and join.net_port("VP1.05") is None and join.net_port("P0.5-IO") == "P0.05"
+
+
+def test_an_unnamed_pad_on_a_function_named_net_takes_its_port_from_the_modules_pad_table(tmp_path):
+    """The module datasheet's pad records carry the SoC port behind each pad. A pad the symbol leaves unnamed and whose
+    net names no port resolves through it, with the DT use; the symbol's own name wins over a disagreeing row; a pad
+    with no row still falls back to the net name, then to a reason."""
+    ad, atlas = make_project(tmp_path, with_docs=False)
+    mod = {"U1": _comp("MCU0-MOD", pins={
+               1: ("P0.04", "LED_STATUS"), 2: (None, "P1.02/UART_TX"), 3: (None, "UART_RX"), 4: (None, "GND"),
+               5: (None, "SPARE_IO"), 6: ("VDD", "3V3")}),
+           "D1": _comp("LED-RED-0603", pins={1: ("A", "3V3"), 2: ("K", "LED_STATUS")}),
+           "J1": _comp("CONN-4", pins={1: (None, "P1.02/UART_TX"), 2: (None, "UART_RX"), 3: (None, "GND"), 4: (None, "3V3")})}
+    write_json(ad / "boards" / "M" / "netlist.json", _netlist("M", mod))
+    d = ad / "docs" / "mod0@a"
+    write_json(d / "doc.json", {"doc_id": "mod0@a", "kind": "datasheet", "part": "MCU0-MOD", "file": "mod0.pdf",
+                                "path": "../src/mod0.pdf", "sha256": "2" * 64, "pages": 10})
+    rows = [("1", "MOD_IO1", "P0.09"), ("3", "MOD_IO3", "P1.3"), ("2", "MOD_IO2", "P1.02")]
+    write_jsonl(d / "records" / "pin.jsonl", [
+        {"id": f"mod0.pin.{n}", "kind": "pin", "doc": "mod0@a", "p": 4, "q": f"{pad} {n} {port}", "src": "table",
+         "prov": "llm-verified", "pin": pad, "name": n, "port": port} for pad, n, port in rows])
+    (d / "pages").mkdir(parents=True, exist_ok=True)
+    (d / "pages" / "p004.txt").write_text("\n".join(f"{p} {n} {q}" for p, n, q in rows) + "\n", encoding="utf-8")
+    stamp = read_json(atlas / "atlas.json")
+    stamp["schematic_boards"] = ["M"]
+    write_json(atlas / "atlas.json", stamp)
+    dt = nordic_dt()
+    dt["atlas"] = stamp["id"]
+    write_json(atlas / "dt.json", dt)
+    write_json(atlas / "in_use.json", {"peripherals": {}})
+    run_join(ad, atlas)
+
+    rows = {r["num"]: r for r in read_json(atlas / "pins.json")["pins"]}
+    assert (rows["3"]["port"], rows["3"]["port_source"]) == ("P1.03", "module pad table")
+    assert rows["3"]["dt"] and rows["3"]["dt"][0]["compat"] == "nordic,nrf-uarte" and rows["3"]["port_why"] is None
+    assert (rows["2"]["port"], rows["2"]["port_source"]) == ("P1.02", "module pad table")     # the table is ahead of the net name
+    assert (rows["1"]["port"], rows["1"]["port_source"], rows["1"]["port_conflict"]) == ("P0.04", "symbol pin name", "P0.09")
+    assert rows["5"]["port"] is None and "no port in the module's pad table" in rows["5"]["port_why"]
+    md = (atlas / "pins.md").read_text()
+    assert "| 3 | P1.03 (from module pad table) |" in md
+    assert "| 1 | P0.04 (pad table says P0.09) |" in md

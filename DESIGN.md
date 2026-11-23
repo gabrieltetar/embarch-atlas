@@ -323,7 +323,7 @@ Kinds and their own fields:
 |---|---|
 | `limit` | `group` (abs, esd, thermal, recommended, ec, i2c, register, application, other), `sym`, `param`, `cond`, `min`, `nom`, `typ`, `max`, `unit`, `fn` (footnote ids), `guar` (production-tested / design / characterization). `±X` is `min: -X, max: X` |
 | `timing` | as `limit`, plus `edge` |
-| `pin` | `pin` (number/ball, or [number, ball]), `package` (the package this record's pin is for, as the datasheet names it, when one part's pinout changes with its package; absent: every package; the join reads the records for the board part's `bindings.json` `packages` entry plus those with none, and, with none declared, infers the fitted package (the component's `footprint` or `package` text naming exactly one; else exactly one package whose pin names the schematic's symbol agrees with and none it contradicts; else exactly one with as many pin numbers as the part has pins), and reports a pin ambiguous (`pin-package-ambiguous`) when none of these singles one out and the records for its number differ by package, never taking the first), `name`, `dir`, `type` (od, pp, analog, supply, ...), `io` (an MCU pin's I/O structure as printed: FT, FT_fa, TT_a...), `active`, `pull`, `desc`, `flow` (power and supply pins: source, sink, bidir, sense, local, as the pin table states it) |
+| `pin` | `pin` (number/ball, or [number, ball]), `package` (the package this record's pin is for, as the datasheet names it, when one part's pinout changes with its package; absent: every package; the join reads the records for the board part's `bindings.json` `packages` entry plus those with none, and, with none declared, infers the fitted package (the component's `footprint` or `package` text naming exactly one; else exactly one package whose pin names the schematic's symbol agrees with and none it contradicts; else exactly one with as many pin numbers as the part has pins), and reports a pin ambiguous (`pin-package-ambiguous`) when none of these singles one out and the records for its number differ by package, never taking the first), `name`, `dir`, `type` (od, pp, analog, supply, ...), `io` (an MCU pin's I/O structure as printed: FT, FT_fa, TT_a...), `active`, `pull`, `desc`, `flow` (power and supply pins: source, sink, bidir, sense, local, as the pin table states it), `port` (a module datasheet's pad table: the SoC GPIO port behind the pad, `PA4` or `P1.05`; the join gives an unnamed pad this port, see `boards/<label>/netlist.json`) |
 | `rule` | `text`, `cond`, `recover`, `steps` (behaviour rule, "OK goes low on fault, latches until EN toggles") |
 | `register` | `name`, `addr` (int or `0x..`), `bank` (the page or bank on a part with paged register maps; absent for the main map; check G, codecheck and the live module key a register on `(bank, addr)`), `width`, `reset` (`0b…`/`0x…`), `access`, `summary` |
 | `field` | `reg` (the register's record id; a field has no `bank` of its own, it takes its register's), `name`, `bits` ([hi, lo]), `reset`, `access` (SystemRDL vocabulary: rw, ro, wo, rclr, woclr, w1s, rsvd), `enum` |
@@ -891,9 +891,17 @@ pairing is by geometry only, so a reader treats it like an overlay name: a drawi
 **What `checks.md` says about a pad left unnamed.** A pad the netlist gives a net and no pin name is skipped by every
 check that joins through the name (the DT column, the datasheet pin, the far end). Two fallbacks give such a pad a
 port anyway: a net named after the port (`P1.05/RX`, a whole segment; `pins.md` prints `P1.05 (from net name)`, `pins.json`
-`port_source`), and the datasheet's pin number. A non-rail pad with neither shows `(no port: <why>)` in `pins.md`
-(`port_why` in `pins.json`) naming the remedy, a `pin_names.json` entry or the module's translated pad table, instead of a
-blank cell. `mismatch.run` lists each one as a `pad-without-name` candidate naming the part, pad and net, and counts them in
+`port_source`), and the datasheet's pin number. A module's own pad table is the first of them: the module datasheet's
+`pin` records carry a `port` field (`PA4`, `P1.05`), the SoC port behind that pad number, for a pad whose `name` is the
+module's (`IO7`) and not the SoC's. `build_pin_map` takes a pad's port in this order: the symbol's pin name, the pad
+table's `port` (`port_source` `module pad table`, `pins.md` `P1.03 (from module pad table)`), the datasheet's pin number
+as a port-shaped name, a net named after the port. The symbol wins over a pad table that disagrees (it is what the board
+is drawn to, and a wrong `port` on a record is the likelier slip); `pins.json` then carries `port_conflict` and `pins.md`
+prints `(pad table says P0.09)`. The record is keyed to the module by the document that covers its MPN, and by `package`
+as any pin record. Whether a real module datasheet's pad table can be translated into these records by the existing
+`atlas-translate-docs` pin-table pass is not exercised: only synthetic records are tested. A non-rail pad with none of
+the four shows `(no port: <why>)` in `pins.md` (`port_why` in `pins.json`) naming the remedy, a `pin_names.json` entry or
+a `port` on the module's pad-table record, instead of a blank cell. `mismatch.run` lists each one as a `pad-without-name` candidate naming the part, pad and net, and counts them in
 the check `MCU pads with a net have a pin name`; a pad named from the text layer or an overlay is named, so it is not
 one. A DT pin (a `uses_by_pin` key) that no row's port matches is a `dt-pin-unresolved`
 candidate naming each DT node and property, counted in `DT pins resolve to a schematic pad` (a build is needed, so it is
