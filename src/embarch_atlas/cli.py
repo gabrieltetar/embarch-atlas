@@ -22,6 +22,7 @@ MODULES = [
     "pdftext",
     "pdfpages",
     "fetchtext",
+    "priorart",
     "strain",
     "check",
     "render",
