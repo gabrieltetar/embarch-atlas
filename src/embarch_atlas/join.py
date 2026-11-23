@@ -737,6 +737,15 @@ def mcu_port(name: str | None) -> str | None:
     return f"P{m[1]}.{int(m[2]):02d}" if m else None
 
 
+def net_port(net: str | None) -> str | None:
+    """A GPIO port a net is named after: `P1.05/RX` or `P1.05_TX` -> `P1.05`. Whole-segment names only, so a
+    net such as `P1.052V` or `VP1.05` names none."""
+    for seg in re.split(r"[/_\s-]", net or ""):
+        if re.fullmatch(r"P\d\.\d{1,2}|P[A-Z]\d{1,2}", seg):
+            return mcu_port(seg)
+    return None
+
+
 def pkg_norm(pkg: Any) -> str:
     """A package name compared as the datasheet and the engineer may space or case it differently."""
     return " ".join(str(pkg or "").split()).casefold()
@@ -764,15 +773,24 @@ def build_pin_map(J: Join) -> list[dict]:
         net = B.net(key)
         name = B.pin_name.get(key)
         port = J.port_of_key(key)
+        port_source = "symbol pin name" if port else None
         if not port and str(num) in ds_by_num:     # the symbol says NRST, the datasheet's pinout says PF2-NRST
             port = mcu_port(str(ds_by_num[str(num)][1].get("name") or ""))
+            port_source = "datasheet pin number" if port else None
         rail = bool(net) and J.is_rail(mb, net)
+        if not port and net and not rail:          # a net the engineer named after the port: P1.05/RX
+            port = net_port(net)
+            port_source = "net name" if port else None
         far = [] if (net is None or rail) else J.trace(mb, net, (mb, key))
         ds = ds_by_num.get(str(num)) or ds_by_name.get(port or (name or "").split("-")[0])
         uses = [J.dt_use(u) for u in J.uses_by_pin.get(port, [])] if port else []
         reach = any(f["kind"] in ("part-pin", "connector", "board-to-board") for f in far)
         rows.append({
-            "num": num, "key": f"{mb}:{key}", "port": port, "name": name, "name_source": B.pin_name_source.get(key),
+            "num": num, "key": f"{mb}:{key}", "port": port, "port_source": port_source,
+            "port_why": None if port or rail or not net or name else
+            f"pad {num} has no pin name on the symbol, no datasheet pad row and no port in its net name; "
+            f"name it in boards/{mb}/pin_names.json (or translate the module's pad table) and the port and DT use follow",
+            "name": name, "name_source": B.pin_name_source.get(key),
             "ds_name": ds[1].get("name") if ds else None, "io": (ds[1].get("type") or ds[1].get("io")) if ds else None,
             "ds_cite": cite(ds[1], ds[0]) if ds else None,
             "net": net, "rail": rail, "far": far, "dt": uses,
@@ -1161,6 +1179,10 @@ def render_pins_md(stamp: dict, mcu: tuple[str, str] | None, mpn: str | None, ro
         label = r['port'] or r['name'] or ''
         if label and r.get("name_source") == "text-layer":     # a name paired from the drawing's text, not a printed pin name
             label += " (text-layer)"
+        if r["port"] and r.get("port_source") in ("net name", "datasheet pin number"):
+            label += f" (from {r['port_source']})"
+        if not label and r.get("port_why"):
+            label = f"(no port: {r['port_why']})"
         L.append(f"| {r['num']} | {label} | {r['io'] or ''} | {r['net'] or '(unconnected)'} | "
                  f"{far.replace('|', '/')} | {dt_str(r['dt']).replace('|', '/')} |")
     L += ["", "## I2C devices: part by address strap, signals by net", "",

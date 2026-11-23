@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from test_join import _comp, _netlist, _use, make_project, run_join  # noqa: E402
 
+from embarch_atlas import join  # noqa: E402
 from embarch_atlas.common import read_json, write_json  # noqa: E402
 
 GPIO0, GPIO1 = "/soc/peripheral@50000000/gpio@842500", "/soc/peripheral@50000000/gpio@842800"
@@ -85,3 +86,33 @@ def test_join_on_a_nordic_project_fills_the_dt_column_and_runs_the_pin_checks(tm
     chk = {c["check"]: c for c in rep["checks"]}
     assert chk["DT pin reaches the board"]["ran"] >= 4
     assert chk["connected pin has a DT use"]["ran"] > 0
+
+
+def test_a_module_pad_the_symbol_does_not_name_takes_its_port_from_the_net_or_says_why(tmp_path):
+    """A module whose symbol prints a name for some pads only: the unnamed ones with a port-named net get the port
+    (and so the DT use), the others say in pins.md why they have none."""
+    ad, atlas = make_project(tmp_path, with_docs=False)
+    mod = {"U1": _comp("MCU0-MOD", pins={
+               1: ("P0.04", "LED_STATUS"), 2: (None, "P1.02/UART_TX"), 3: (None, "UART_RX"), 4: (None, "GND"),
+               5: (None, None), 6: ("VDD", "3V3")}),
+           "D1": _comp("LED-RED-0603", pins={1: ("A", "3V3"), 2: ("K", "LED_STATUS")}),
+           "J1": _comp("CONN-4", pins={1: (None, "P1.02/UART_TX"), 2: (None, "UART_RX"), 3: (None, "GND"), 4: (None, "3V3")})}
+    write_json(ad / "boards" / "M" / "netlist.json", _netlist("M", mod))
+    stamp = read_json(atlas / "atlas.json")
+    stamp["schematic_boards"] = ["M"]
+    write_json(atlas / "atlas.json", stamp)
+    dt = nordic_dt()
+    dt["atlas"] = stamp["id"]
+    write_json(atlas / "dt.json", dt)
+    write_json(atlas / "in_use.json", {"peripherals": {}})
+    run_join(ad, atlas)
+
+    rows = {r["num"]: r for r in read_json(atlas / "pins.json")["pins"]}
+    assert (rows["2"]["port"], rows["2"]["port_source"]) == ("P1.02", "net name")
+    assert rows["2"]["dt"] and rows["2"]["dt"][0]["compat"] == "nordic,nrf-uarte"
+    assert rows["3"]["port"] is None and "no pin name" in rows["3"]["port_why"]
+    assert rows["4"]["port_why"] is None and rows["5"]["port_why"] is None      # a rail and an unconnected pad say nothing
+    md = (atlas / "pins.md").read_text()
+    assert "| 2 | P1.02 (from net name) |" in md
+    assert "| 3 | (no port: pad 3 has no pin name on the symbol" in md
+    assert join.net_port("P1.052V") is None and join.net_port("VP1.05") is None and join.net_port("P0.5-IO") == "P0.05"

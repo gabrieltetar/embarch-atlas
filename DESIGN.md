@@ -889,8 +889,11 @@ none or several leave the pad blank and put `<sheet>: pad <ref>-<pin> has no nam
 `pins.md` prints a recovered name as `NAME (text-layer)`, and `pin_trace` carries `pin_name_source`. The
 pairing is by geometry only, so a reader treats it like an overlay name: a drawing's text, not a printed pin name.
 **What `checks.md` says about a pad left unnamed.** A pad the netlist gives a net and no pin name is skipped by every
-check that joins through the name (the DT column, the datasheet pin, the far end), and `pins.md` shows it with an empty
-port. `mismatch.run` lists each one as a `pad-without-name` candidate naming the part, pad and net, and counts them in
+check that joins through the name (the DT column, the datasheet pin, the far end). Two fallbacks give such a pad a
+port anyway: a net named after the port (`P1.05/RX`, a whole segment; `pins.md` prints `P1.05 (from net name)`, `pins.json`
+`port_source`), and the datasheet's pin number. A non-rail pad with neither shows `(no port: <why>)` in `pins.md`
+(`port_why` in `pins.json`) naming the remedy, a `pin_names.json` entry or the module's translated pad table, instead of a
+blank cell. `mismatch.run` lists each one as a `pad-without-name` candidate naming the part, pad and net, and counts them in
 the check `MCU pads with a net have a pin name`; a pad named from the text layer or an overlay is named, so it is not
 one. A DT pin (a `uses_by_pin` key) that no row's port matches is a `dt-pin-unresolved`
 candidate naming each DT node and property, counted in `DT pins resolve to a schematic pad` (a build is needed, so it is
