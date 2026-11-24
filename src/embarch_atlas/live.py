@@ -29,6 +29,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
+from . import livelog
 from .common import read_jsonl
 
 # Core's caps (embarch-core decision 81): words per request over all ranges, ranges per request.
@@ -104,12 +105,15 @@ LEASE_ENV = "EMBARCH_LEASE_TOKEN"
 
 
 @contextlib.contextmanager
-def lease(token: str | None):
-    """Run the `embarch-api` calls inside the block under this lease token (None or empty: the server's own env)."""
+def lease(token: str | None, tool: str | None = None, via: str = "cli"):
+    """Run the `embarch-api` calls inside the block under this lease token (None or empty: the server's own env).
+    `tool` and `via` ("mcp" or "cli") name the caller on the decoded line the atlas appends to the live log."""
     tok = _LEASE_TOKEN.set(token.strip() if token and token.strip() else None)
+    ctx = livelog.set_context(tool, via)
     try:
         yield
     finally:
+        livelog.reset_context(ctx)
         _LEASE_TOKEN.reset(tok)
 
 
@@ -128,14 +132,18 @@ def call_api(s: dict[str, Any], args: list[str], timeout: float) -> dict[str, An
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
     except FileNotFoundError:
+        livelog.note(args, None)
         raise LiveError(f"{s['api']} not found; install embarch-api or set [live] api in atlas.toml")
     except subprocess.TimeoutExpired:
+        livelog.note(args, None)
         raise LiveError(f"embarch-api {args[0]} gave no answer in {timeout:.0f} s")
     try:
         out = json.loads(p.stdout)
     except ValueError:
+        livelog.note(args, None)
         tail = (p.stderr or p.stdout).strip().splitlines()[-3:]
         raise LiveError(_scrub(f"embarch-api {args[0]} exited {p.returncode}: " + " | ".join(tail)))
+    livelog.note(args, out)           # the live log cites Core's call-log entries, a refusal's included
     if not out.get("success"):
         raise LiveError(_scrub(str(out.get("error") or f"embarch-api {args[0]} failed")))
     return out
@@ -480,9 +488,30 @@ def clock_gate(svd: "Svd", periph: str) -> tuple[str, dict] | str | None:
 
 # --------------------------------------------------------------------------- the tool
 
+def ok_of(out: str) -> bool:
+    """Whether a `reg_read`, `live_stacks` or `core_state` answer is one (the CLI's exit 0), not a refusal or a failed read."""
+    return not (out.startswith("src: none") or re.search(
+        r"^The read of .* failed: |^The image on the board has no I2C", out, re.M))
+
+
+def describe_read(out: str) -> livelog.Described:
+    """The live-log fields for an answer that is a text: ok, and `answered`, `refused` or `did-not-run`."""
+    ok = ok_of(out)
+    return out, ok, "answered" if ok else "refused" if re.search(r"^Refused", out, re.M) else "did-not-run"
+
+
 def reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None,
              allow_bank_select: bool = False) -> str:
-    """`PERIPH.REG` or a whole `PERIPH` read on the running board, decoded field by field."""
+    """`PERIPH.REG` or a whole `PERIPH` read on the running board, decoded field by field; one decoded
+    line goes to the live log when the call reached Core (`livelog`)."""
+    tool = "reg_read_clear" if allow_clear else "reg_read_bank" if allow_bank_select else "reg_read"
+    args = {"target": target, "role": role}
+    return livelog.logged(atlas_dir, tool, args, lambda: _reg_read(atlas_dir, target, allow_clear, role, allow_bank_select),
+                          describe_read, role, ("target",))
+
+
+def _reg_read(atlas_dir: Path, target: str, allow_clear: bool = False, role: str | None = None,
+              allow_bank_select: bool = False) -> str:
     svds = _docs_of_kind(atlas_dir, "svd")
     head = target.partition(".")[0]
     svd = Svd(svds[0]) if svds else None
@@ -781,11 +810,26 @@ def _retval(atlas_dir: Path, con: Console, command: str) -> str:
             f"The command printed nothing; `retval` answered `{out}`.\n")
 
 
+# The shell's exit status, as the word the live log's `outcome` carries.
+SHELL_OUTCOME = {0: "answered", 1: "did-not-run", 2: "no-reply", 3: "may-have-run"}
+
+
+def describe_shell(res: tuple[str, int]) -> livelog.Described:
+    return res[0], res[1] == 0, SHELL_OUTCOME.get(res[1], "answered")
+
+
 def shell_status(atlas_dir: Path, command: str, role: str | None = None,
                  timeout_ms: int | None = None) -> tuple[str, int]:
     """`shell` with its exit status: 0 an answer (the output, or an empty success with its return value),
     1 the command did not run, 2 nothing came back, 3 the command was sent and the port went away or an
-    error left it unknown whether it ran."""
+    error left it unknown whether it ran. One decoded line goes to the live log (`livelog`)."""
+    args = {"command": command, "role": role, "timeout_ms": timeout_ms}
+    return livelog.logged(atlas_dir, "shell", args, lambda: _shell_status(atlas_dir, command, role, timeout_ms),
+                          describe_shell, role, ("command",))
+
+
+def _shell_status(atlas_dir: Path, command: str, role: str | None = None,
+                  timeout_ms: int | None = None) -> tuple[str, int]:
     try:
         con = Console(atlas_dir, role)
         ex = con.exchange(command, min(int(timeout_ms or EXCHANGE_TIMEOUT_MS), 10_000))
@@ -1355,7 +1399,13 @@ def join_stacks(live: list[dict], img: dict, rows: list[dict]) -> list[dict]:
 
 def live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = None) -> str:
     """Every thread's stack peak on the board (`kernel thread stacks`), joined to the stack symbol,
-    its defining line and the *_STACK_SIZE option, once the board is shown to run that build."""
+    its defining line and the *_STACK_SIZE option, once the board is shown to run that build. One
+    decoded line goes to the live log (`livelog`)."""
+    return livelog.logged(atlas_dir, "live_stacks", {"build": build, "role": role},
+                          lambda: _live_stacks(atlas_dir, build, role), describe_read, role)
+
+
+def _live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = None) -> str:
     from . import buildq, footprint as F
     from .query import Atlas
     try:
@@ -1413,30 +1463,33 @@ def live_stacks(atlas_dir: Path, build: str | None = None, role: str | None = No
 
 def _cmd_reg_read(args) -> int:
     from . import common
-    out = reg_read(common.atlas_dir(args.atlas_dir), args.target, args.allow_clear, args.role,
-                   getattr(args, "allow_bank_select", False))
+    with lease(None, "reg-read", "cli"):
+        out = reg_read(common.atlas_dir(args.atlas_dir), args.target, args.allow_clear, args.role,
+                       getattr(args, "allow_bank_select", False))
     print(out, end="")
-    return 1 if out.startswith("src: none") or re.search(r"^The read of .* failed: |^The image on the board has no I2C",
-                                                         out, re.M) else 0
+    return 0 if ok_of(out) else 1
 
 
 def _cmd_shell(args) -> int:
     from . import common
-    out, code = shell_status(common.atlas_dir(args.atlas_dir), " ".join(args.command), args.role, args.timeout_ms)
+    with lease(None, "shell", "cli"):
+        out, code = shell_status(common.atlas_dir(args.atlas_dir), " ".join(args.command), args.role, args.timeout_ms)
     print(out, end="")
     return code
 
 
 def _cmd_stacks(a) -> int:
     from . import common
-    out = live_stacks(common.atlas_dir(a.atlas_dir), a.build, a.role)
+    with lease(None, "stacks", "cli"):
+        out = live_stacks(common.atlas_dir(a.atlas_dir), a.build, a.role)
     print(out, end="")
     return 1 if out.startswith("src: none") else 0
 
 
 def _cmd_core_state(a) -> int:
     from . import common, corestate
-    out = corestate.core_state(common.atlas_dir(a.atlas_dir), a.build, a.role, a.halt, a.samples)
+    with lease(None, "core-state", "cli"):
+        out = corestate.core_state(common.atlas_dir(a.atlas_dir), a.build, a.role, a.halt, a.samples)
     print(out, end="")
     return 1 if out.startswith("src: none") else 0
 

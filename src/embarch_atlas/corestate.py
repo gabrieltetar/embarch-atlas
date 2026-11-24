@@ -196,7 +196,12 @@ def core_state(atlas_dir: Path, build: str | None = None, role: str | None = Non
     """Where the core is, from Core's `core-state`, as symbols. `halt` stops the core once for the
     registers and `SCB_ICSR`; the default never halts for the read itself. Resolving needs the ELF
     the board runs, and the check that it does is one halted `mem-read` (decision 81), after the
-    state was taken."""
+    state was taken. One decoded line goes to the live log (`livelog`)."""
+    return live.livelog.logged(atlas_dir, "core_state", {"halt": halt, "samples": samples, "build": build, "role": role},
+                               lambda: _core_state(atlas_dir, build, role, halt, samples), live.describe_read, role)
+
+
+def _core_state(atlas_dir: Path, build: str | None, role: str | None, halt: bool, samples: int) -> str:
     from . import buildq
     from .query import Atlas
     s = live.settings(atlas_dir)

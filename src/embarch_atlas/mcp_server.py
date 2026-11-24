@@ -258,7 +258,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             if allow_clear:
                 return ("src: none\n\nRefused: allow_clear=true can clear a latched flag or pop a FIFO, so it is "
                         "not a read-only call. Use `reg_read_clear`.\n")
-            with live_mod.lease(lease_token):
+            with live_mod.lease(lease_token, "reg_read", "mcp"):
                 return live_mod.reg_read(atlas_dir, target, False, role)
 
         @server.tool(annotations=WRITE)
@@ -267,7 +267,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             and says what the read cleared. Not read-only: a host asks before it runs.
             `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
             CLI's environment for this call only and is never logged or echoed."""
-            with live_mod.lease(lease_token):
+            with live_mod.lease(lease_token, "reg_read_clear", "mcp"):
                 return live_mod.reg_read(atlas_dir, target, True, role)
 
         @server.tool(annotations=WRITE)
@@ -277,7 +277,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             previous page back (even when the read fails). Not read-only: a host asks before it runs.
             `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
             CLI's environment for this call only and is never logged or echoed."""
-            with live_mod.lease(lease_token):
+            with live_mod.lease(lease_token, "reg_read_bank", "mcp"):
                 return live_mod.reg_read(atlas_dir, target, False, role, True)
 
         @server.tool(annotations=READ_ONLY)
@@ -288,7 +288,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             `build`: the build dir the board runs; default the atlas's pinned build.
             `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
             CLI's environment for this call only and is never logged or echoed."""
-            with live_mod.lease(lease_token):
+            with live_mod.lease(lease_token, "live_stacks", "mcp"):
                 return live_mod.live_stacks(atlas_dir, build, role)
 
         @server.tool(annotations=READ_ONLY)
@@ -302,7 +302,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             The ELF check is one halted read.
             `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
             CLI's environment for this call only and is never logged or echoed."""
-            with live_mod.lease(lease_token):
+            with live_mod.lease(lease_token, "core_state", "mcp"):
                 return corestate.core_state(atlas_dir, build, role, halt, samples)
 
         @server.tool(annotations=READ_ONLY)
@@ -315,7 +315,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             timeout_ms (default 3000, max 10000) bounds the wait for the prompt.
             `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
             CLI's environment for this call only and is never logged or echoed."""
-            with live_mod.lease(lease_token):
+            with live_mod.lease(lease_token, "shell", "mcp"):
                 return live_mod.shell_read(atlas_dir, command, role, timeout_ms)
 
         @server.tool(annotations=WRITE)
@@ -326,7 +326,7 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             timeout_ms (default 3000, max 10000) bounds the wait for the prompt.
             `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
             CLI's environment for this call only and is never logged or echoed."""
-            with live_mod.lease(lease_token):
+            with live_mod.lease(lease_token, "shell_run", "mcp"):
                 return live_mod.shell(atlas_dir, command, role, timeout_ms)
 
     return server

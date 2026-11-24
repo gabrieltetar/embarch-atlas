@@ -1033,6 +1033,30 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   in the not-written set above, so `shell` says "the command did not run" (exit 1) and the next console
   is not tried to no purpose: Core checks the lease before it opens a port. That wording is assumed from
   the refusal's shape, not measured against a live Core.
+  **The live log.** Every live call that reached a lease-gated route appends one decoded line to the file
+  `embarch-api` chose for the session, `<repo>/embarch/live/<date>-<session>.jsonl` (embarch-doc
+  `embarch-api/interfaces/live-log.md`, schema `embarch-live/1`; `livelog.py`), after the raw lines it
+  decodes: `writer` `"embarch-atlas"`, `via` and `tool` (the MCP tool, or the CLI subcommand), `sent`
+  (the tool's arguments as an object over MCP, the subcommand as a string on the CLI; never the lease
+  token), `board`, `ok`, `answer` (the decoded text as the caller got it, cut past 4096 bytes with the full
+  length and SHA-256 kept) and `core`: every Core call-log entry the call made, taken from the `core_calls`
+  that `embarch-api --json` adds and `call_api` collects, in order. A `shell` that sends `retval`, or an
+  external register read of several exchanges, cites every one. A refusal at the write (a `409`, a signal that
+  would not open) is a line too, with `ok` false and the `outcome` `did-not-run`. The atlas adds one field,
+  `outcome`: `answered`, `did-not-run`, `refused` (the atlas declined to decode what Core read) or, for the
+  shell, `no-reply` and `may-have-run` (its exit statuses 2 and 3); `embarch-api` readers ignore it.
+  **Where.** The repo is found as `embarch-api` finds it, the nearest directory from the working directory up
+  to its git root holding `embarch/`, else the firmware checkout `atlas.toml` names. The file name comes
+  from `embarch-api lease-show`: the lease's start date, its holder with every non-ASCII-alphanumeric
+  character turned into `-`, its start time `HHMMSS`; `<today>-no-lease` with none. One `write` in append
+  mode (`O_APPEND`) of the whole line. A call that reached no gated route (a refusal by the `read_only` list,
+  an unknown register, the clearing-read guard) writes nothing, as in `embarch-api`. The whole serialised line
+  goes through `_scrub` before it is written. A line that cannot be written is said on stderr (CLI) or as a
+  last line of the text (MCP) and never changes the call's answer or exit status.
+  **Assumed, not settled by `live-log.md`:** the file's date and time are read off the lease's RFC 3339
+  `started_at` as UTC; `lease-show --json` carries `lease.holder` and `lease.started_at`; `image_sha256` is
+  always `"unknown"` (the atlas does not read Core's `last_images`); `outcome` is the atlas's own field. Not
+  verified on a bench.
   **How the atlas knows `retval` is absent.** From the pinned build's `kconfig.json`
   (`CONFIG_SHELL_CMDS_RETURN_VALUE`: set to `n`, or missing from a kconfig.json that lists every
   symbol, means no `retval`); then `retval` is not sent and the answer says the status is unknown and
