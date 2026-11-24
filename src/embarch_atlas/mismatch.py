@@ -30,7 +30,7 @@ from embarch_atlas.dt import pin_decoder
 # rank order: most actionable first
 ORDER = [
     "cross-board-net-name", "device-signal-mismatch", "i2c-address-strap", "i2c-bus-membership",
-    "dt-limit-over-abs-max", "config-vs-standard", "dt-value-vs-bom", "dt-comment-vs-net", "driver-vs-datasheet", "dt-limit-outside-recommended",
+    "dt-limit-over-abs-max", "config-vs-standard", "dt-value-vs-bom", "dt-comment-vs-net", "driver-vs-datasheet", "measured-vs-datasheet", "dt-limit-outside-recommended",
     "dt-limit-declared-unknown", "reg-field-in-other-register", "reg-address-vs-name",
     "reg-mask-vs-field", "reg-reset-vs-datasheet", "reg-address-unknown", "document-reading-conflict",
     "pinctrl-func-vs-net-name", "polarity-vs-net-name", "open-drain-no-pull", "pull-conflict",
@@ -48,6 +48,7 @@ SETTLE = {
     fwcheck.CLS: fwcheck.SETTLE,
     "dt-comment-vs-net": "fix the comment or the pin: the netlist is the schematic's own compile",
     "driver-vs-datasheet": "re-read the cited datasheet page against the driver line; one of them is wrong",
+    "measured-vs-datasheet": "repeat the read on the pinned build and re-read the cited datasheet page; a `via: live` value is development evidence, so the datasheet stands until the engineer settles which one is wrong",
     "document-reading-conflict": "a third read of the cited page, or the engineer",
     "pinctrl-func-vs-net-name": "the far-end pin's function (the net name may just be generic)",
     "polarity-vs-net-name": "the far-end pin's active level from its datasheet (an inverting stage is legitimate)",
@@ -603,6 +604,15 @@ def run(J, stamp: dict, pins: dict, netlist_only: bool = False, no_build: bool =
             R.check("driver claims vs datasheet", "", 1, 0)
             R.cand("driver-vs-datasheet", rec.get("id") or d, rec.get("text") or "driver and datasheet disagree",
                    [f"{s}" for s in srcs] + [_cite(rec, d)], "driver claims vs datasheet")
+    # ---- the measured plane: a live finding against the claim it bears on (measured.jsonl, `via: live`)
+    from embarch_atlas import measuredview
+    R.check(measuredview.CHECK, "measured.jsonl, fact records")
+    mv = measuredview.run_join(J)
+    R.check(measuredview.CHECK, "", mv["ran"], mv["passed"])
+    for f in mv["findings"]:
+        R.cand(f["class"], f["key"], f["summary"], f["evidence"], f["check"], f["severity"], f["settle"])
+    for k, v in mv["folded"].items():
+        R.folded[k] += v
     if dt_known:
         # ---- register constants in the driver sources vs the datasheet register map
         from embarch_atlas import codecheck

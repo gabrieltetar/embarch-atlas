@@ -245,6 +245,8 @@ def part_card(a: Atlas, part: str, board: str | None = None, offset: int = 0) ->
     if a.atlas is None:
         extra = f"{extra} {NO_ATLAS_NOTE}".strip()
     out = _header(f"{d.name} card", extra=extra) + body
+    held = _measured_section(a, [d])
+    out += "\n".join(held) + "\n" if held else ""
     if board is not None:
         # "all" (and "" from the CLI) is every board; anything else is a board label
         every = board.strip().lower() in ("", "all")
@@ -252,6 +254,16 @@ def part_card(a: Atlas, part: str, board: str | None = None, offset: int = 0) ->
     res = _cap(out, "part_card", offset)
     _log_card(a, d.name, res.split("\n## On the boards")[0])
     return res
+
+
+def _measured_section(a: Atlas, docs: list[Path]) -> list[str]:
+    """The measurements (`via: live`, development evidence) that bear on a record of these documents, beside the
+    claim each bears on; [] when `measured.jsonl` holds none for them."""
+    from . import measuredview
+    by = measuredview.load(a.dir)
+    if not by:
+        return []
+    return measuredview.section(by, [r for d in docs for r in _records(d) if r.get("id") in by])
 
 
 def _pdf_extra(a: Atlas, d: Path) -> str:
@@ -737,6 +749,21 @@ def _query_part(a: Atlas, terms: list[str]) -> tuple[Path | None, set[str]]:
     return a.find_doc(next(iter(named))), used
 
 
+def _with_measured(a: Atlas, hits: list[str]) -> list[str]:
+    """The hit lines, each followed by the measurements of the fact it is (`<id> ...`), as development evidence."""
+    from . import measuredview
+    by = measuredview.load(a.dir)
+    if not by:
+        return hits
+    claims = {r.get("id"): r for d in a.docs for r in _records(d) if r.get("id") in by}
+    out = []
+    for ln in hits:
+        fid = ln.split(" ", 1)[0]
+        out.append(ln)
+        out += ["  " + x for x in measuredview.lines_for(by, fid, claims.get(fid))]
+    return out
+
+
 @_stamped
 def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = None,
               limit: int | None = None, offset: int = 0) -> str:
@@ -794,7 +821,7 @@ def find_fact(a: Atlas, query: str, part: str | None = None, kind: str | None = 
     head = _header(f"facts.txt + prose ({len(docs)} docs)" if kind != "prose" else f"prose ({len(docs)} docs)",
                    extra=f"query={query!r}{narrowed} hits={len(scored)} shown={len(hits)}"
                    + (f" unmatched={','.join(unmatched)}" if unmatched else ""))
-    body = "\n".join(hits) if hits else "(no fact matches; try a symbol, or doc_toc + doc_section)"
+    body = "\n".join(_with_measured(a, hits)) if hits else "(no fact matches; try a symbol, or doc_toc + doc_section)"
     if limit is None and len(hits) < len(scored):
         body += (f"\n({len(scored) - len(hits)} more hits, each under {FIND_FACT_FLOOR:g} of the top score or past "
                  f"the first {FIND_FACT_LIMIT}; pass `limit` to list them)")
@@ -852,6 +879,13 @@ def _field_line(f: dict) -> str:
             + f" cite={_cite(f)}" + (f" prov={f.get('prov')}" if f.get("prov") else ""))
 
 
+def _reg_measured(a: Atlas, recs: list[dict]) -> list[str]:
+    """The measurements that bear on the register or one of its fields, beside the datasheet's claim."""
+    from . import measuredview
+    by = measuredview.load(a.dir)
+    return measuredview.section(by, recs) if by else []
+
+
 def _reg_tail(a: Atlas, related: list[tuple[str, dict]], rids: list[str]) -> list[str]:
     out = []
     if related:
@@ -902,7 +936,7 @@ def _register_pair(a: Atlas, reg: str, msb: tuple[Path, dict], lsb: tuple[Path, 
     out += [_field_line(f) for f in fields]
     _log_facts(a, "register", [(d.name, i) for i in ids] + [(d.name, f.get("id")) for f in fields]
                + [(dn, r.get("id")) for dn, r in related])
-    return _cap("\n".join(out + _reg_tail(a, related, ids)) + "\n", "register", offset)
+    return _cap("\n".join(out + _reg_measured(a, [m, l] + fields) + _reg_tail(a, related, ids)) + "\n", "register", offset)
 
 
 @_stamped
@@ -935,6 +969,7 @@ def register_lookup(a: Atlas, target: str, field: str | None = None, offset: int
            f"{reg_rec.get('name')} addr={reg_rec.get('addr')} width={reg_rec.get('width')} "
            f"reset={reg_rec.get('reset')} access={reg_rec.get('access')} cite={_cite(reg_rec)}", ""]
     out += [_field_line(f) for f in fields]
+    out += _reg_measured(a, [reg_rec] + fields)
     out += _reg_tail(a, related, [rid])
     if len(cands) > 1:
         out += ["", "Also named " + reg + " in: " + ", ".join(sorted({c[0].name for c in cands[1:]}))]

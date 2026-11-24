@@ -1091,9 +1091,23 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   `measured`, then `fact` or `entity`, `value`, `unit`, `via`, `flag`, `receipt`, `note`; id
   `measured.<slug>.s<seqs>` with `.2`, `.3` for a repeat. It is appended in one `write` (`O_APPEND`) to
   `<atlas dir>/measured.jsonl`, scrubbed of the lease token, and no line is ever rewritten. A `via: live` fact is
-  development evidence: the atlas cannot cite it. **Not built here:** showing a measured value beside the claim it
-  bears on, and the check finding for a disagreement with the datasheet (EMB-268); where the plane lives once planes
-  are shared. Verified against a fake `embarch-api` only: the shape of `call_log.entries` (`{entry, hash}` lines of
+  development evidence: the atlas cannot cite it. **Reading it back (`measuredview.py`, EMB-268).** `register`,
+  `find_fact` and `part_card` (CLI and MCP, one function each) show the measurements whose `fact` is a record they
+  return, beside it: value and unit, `via`, the receipt's time, image (source and SHA-256) and Core's entry numbers,
+  the `flag` when the finding is on another build, "development evidence, not citable", and whether the value agrees
+  with the claim. `register` shows them for the register and its fields in a `## Measured (development evidence)`
+  block; `find_fact` indents them under the hit; `part_card` lists those of the part's document's records. A
+  measurement of an `entity` bears on no record, so no lookup shows it. **The check "measured values vs the
+  datasheet"** (`mismatch.run`, every report that has a document set) raises class `measured-vs-datasheet`, severity
+  `check`, for a disagreement: ranked after `driver-vs-datasheet`, summary naming the value, `via` and the claim,
+  and "measured on a different build" when flagged (a different build is still a finding: it is a question, not a
+  verdict). A value that agrees raises none and counts as passed. Compared: a `register` or `field` `reset` against
+  the value, numerically (`0x`, `0b`, decimal); a record with `min` and/or `max` (limit, timing), the range being
+  agreement and an open side being open. **Shown and not compared** (folded, with why): a claim with only `typ` or
+  `nom`, a value or reset that is no number, two units that differ; a `fact` no document holds now is folded too. The
+  class and severity are this unit's choice, not the open recommendation `design-vs-hardware` of the interactions
+  notes (that one is a different check). **Not built here:** where the plane lives once planes are shared;
+  `via: study` / `via: test` records. The write-back is verified against a fake `embarch-api` only: the shape of `call_log.entries` (`{entry, hash}` lines of
   `call-log.jsonl`, `entry.route`, `entry.at_utc_ms`, `entry.board`) is read from `embarch-core`'s source, not
   measured against a live Core.
   **Assumed, not settled by `live-log.md`:** the file's date and time are read off the lease's RFC 3339
