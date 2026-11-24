@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from . import common
 
 KINDS = ("limit", "timing", "pin", "rule", "register", "field", "quirk", "figure", "strap",
-         "passthrough", "requirement", "conflict", "check", "bus", "variant",
+         "passthrough", "requirement", "conflict", "check", "bus", "variant", "measurement",
          "applicability", "state", "transition", "frame", "transfer")
 PROV = ("deterministic", "deterministic+crosschecked", "llm-verified", "llm-unverified",
         "engineer-declared", "engineer-confirmed", "measured")

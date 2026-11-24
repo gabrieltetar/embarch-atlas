@@ -55,7 +55,14 @@ GOOD = [
      "q": "Output = (count - Output_min) x (Pmax - Pmin) / (Output_max - Output_min) + Pmin", "frame": "Read data",
      "form": "linear", "variant": "A", "when": {"prop": "transfer-function", "value": "A"},
      "equation": "Output = (count - Output_min) x (Pmax - Pmin) / (Output_max - Output_min) + Pmin",
-     "params": {"out_min": 1677722, "out_max": "dt:output-max", "phys_min": "dt:pressure-min", "phys_max": 6, "unit": "dt:unit"}}
+     "params": {"out_min": 1677722, "out_max": "dt:output-max", "phys_min": "dt:pressure-min", "phys_max": 6, "unit": "dt:unit"}},
+    {"id": "measured.u1.s4", "kind": "measurement", "doc": "measured", "p": None, "src": "live", "prov": "measured",
+     "entity": "U1", "value": 3.3, "unit": "V", "via": "live",
+     "receipt": {"calls": [{"seq": 4, "hash": "h4", "method": "POST", "route": "/live/mem-read", "status": 200,
+                            "at_utc_ms": 1, "at": "2026-11-23T21:00:00Z"}],
+                 "board": {"role": "dut", "probe_serial": "P1", "chip": "DEMO1"}, "time": "2026-11-23T21:00:00Z",
+                 "image": {"sha256": "unknown", "at_call": "unknown", "source": "unknown", "build": "unknown",
+                           "check": ""}, "live_log": None}},
 ]
 
 

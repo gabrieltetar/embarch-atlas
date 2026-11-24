@@ -38,7 +38,8 @@
         "state",
         "transition",
         "frame",
-        "transfer"
+        "transfer",
+        "measurement"
       ]
     },
     "doc": {
@@ -93,7 +94,8 @@
         "figure",
         "equation",
         "svd",
-        "header"
+        "header",
+        "live"
       ]
     },
     "prov": {
@@ -450,6 +452,21 @@
       },
       "then": {
         "$ref": "#/$defs/transfer"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "measurement"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "$ref": "#/$defs/measurement"
       }
     }
   ],
@@ -1867,6 +1884,156 @@
           "variant",
           "when",
           "params"
+        ]
+      }
+    },
+    "measurement": {
+      "description": "a live finding written back as a measured fact (`embarch-atlas live write-back`, DESIGN.md \"Live\"). Bears on one fact (`fact`, a record id of some document) or one entity (`entity`, free text such as a net or a pin); `doc` is the fact's document, or \"measured\" for an entity. `src` is `live`, `prov` `measured`, `via` `live` (study and test wait for the attested phase). `receipt` is read from Core's call-log entries, never from the caller. Appended to `<atlas dir>/measured.jsonl`, never rewritten.",
+      "properties": {
+        "fact": {
+          "description": "the id of the fact the finding bears on",
+          "type": "string",
+          "minLength": 1
+        },
+        "entity": {
+          "description": "the entity the finding bears on, when it is no fact",
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "description": "the value read: a number when it parses as one, else the text",
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "via": {
+          "description": "how it was measured; only `live` is written",
+          "const": "live"
+        },
+        "flag": {
+          "description": "\"measured on a different build\" when the board did not run the atlas's pinned build",
+          "const": "measured on a different build"
+        },
+        "receipt": {
+          "description": "Core's entries and what they name",
+          "type": "object",
+          "required": [
+            "calls",
+            "board",
+            "time",
+            "image",
+            "live_log"
+          ],
+          "properties": {
+            "calls": {
+              "description": "one per Core call-log entry cited: seq, hash, method, route, status and the entry's time",
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "seq",
+                  "hash",
+                  "method",
+                  "route",
+                  "status",
+                  "at_utc_ms",
+                  "at"
+                ]
+              }
+            },
+            "board": {
+              "description": "role, probe_serial and chip the entries name (null where none does)",
+              "type": "object",
+              "required": [
+                "role",
+                "probe_serial",
+                "chip"
+              ]
+            },
+            "time": {
+              "description": "RFC 3339 UTC time of the first entry",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "image": {
+              "description": "`sha256` (Core's last_images for the board, or \"unknown\"), `at_call` (the hash Core stamped on the call), `source` (\"read back\", \"as last flashed by Core\" or \"unknown\"), `build` (pinned, different, unknown), `check` (image_check's words)",
+              "type": "object",
+              "required": [
+                "sha256",
+                "at_call",
+                "source",
+                "build",
+                "check"
+              ],
+              "properties": {
+                "source": {
+                  "enum": [
+                    "read back",
+                    "as last flashed by Core",
+                    "unknown"
+                  ]
+                },
+                "build": {
+                  "enum": [
+                    "pinned",
+                    "different",
+                    "unknown"
+                  ]
+                }
+              }
+            },
+            "live_log": {
+              "description": "the live-log line citing the entries (file, line, writer, tool, t, answer_sha256, disagrees: the board fields on which it differs from Core's entry, which wins), or null",
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          }
+        }
+      },
+      "required": [
+        "value",
+        "via",
+        "receipt"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "fact"
+          ]
+        },
+        {
+          "required": [
+            "entity"
+          ]
+        }
+      ],
+      "propertyNames": {
+        "enum": [
+          "id",
+          "kind",
+          "doc",
+          "p",
+          "q",
+          "src",
+          "prov",
+          "note",
+          "fact",
+          "entity",
+          "value",
+          "unit",
+          "via",
+          "flag",
+          "receipt"
         ]
       }
     }

@@ -161,6 +161,8 @@ atlases/<target>@<commit12>/
   MAP.md                        tier 0, <= 5K tokens, byte-stable: the MCU, boards, parts with their
                                 documents, and the documents tied to no part (standards, the PRD)
 current.json                    which atlas matches the checkout (target, commit)
+measured.jsonl                  the measured plane: one `measurement` record per live finding written back, append-only,
+                                above the per-commit atlases so no rebuild touches it ("Live", "Writing a finding back")
 MAP.md                          copy of the current atlas's MAP.md: the one stable path the session imports
 usage.jsonl                     what lookups returned (find_text pages and doc_section tier=text pages, each with its
                                 section; find_fact and register record ids; the pages a part_card cited): write-only,
@@ -343,7 +345,9 @@ Kinds and their own fields:
 | `transfer` | `frame` (a frame record's `name`), `form` (`linear`: `(count - out_min) * (phys_max - phys_min) / (out_max - out_min) + phys_min`), `equation` (as printed), `params` (`out_min`, `out_max`, `phys_min`, `phys_max`, `unit`: a number, or `dt:<property>` for what the board's devicetree node sets: a range or unit the board chooses), `variant` and `when` (`{prop, value}`: the node property that selects this variant, when the datasheet gives several). One per variant; `src: equation` |
 
 `prov` classes: `deterministic`, `deterministic+crosschecked`, `llm-verified`,
-`llm-unverified`, `engineer-declared`, `engineer-confirmed`, `measured`.
+`llm-unverified`, `engineer-declared`, `engineer-confirmed`, `measured`. Only `live write-back` writes
+`measured` (kind `measurement`, `src` `live`; "Writing a finding back" under "Live"), into `measured.jsonl`, not a
+document's `records/`.
 
 **An LLM-written `conflict` stays `llm-unverified` until the second look confirms it** (owner decision,
 2026-11-17). Its checks prove only that both quotes exist, not that they disagree, so `doc check` holds a
@@ -1060,6 +1064,38 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   an unknown register, the clearing-read guard) writes nothing, as in `embarch-api`. The whole serialised line
   goes through `_scrub` before it is written. A line that cannot be written is said on stderr (CLI) or as a
   last line of the text (MCP) and never changes the call's answer or exit status.
+  **Writing a finding back (`measured.py`; MCP `write_back`, CLI `live write-back`).** A live answer that settles
+  something the datasheet or schematic left open becomes a `measured` fact with its receipt (`notes/hil/05-live.md`,
+  "Writing a finding back"; `notes/atlas/08-measured.md`). One verb and one tool, named by this unit (the HIL notes
+  left the name to the atlas): the caller names the Core call-log entries (`--seq`, repeatable; the `core` array of a
+  live-log line), the fact (`--fact`, an id some document holds: a typo is refused, not taken for an entity) or the
+  entity (`--entity`, free text) it bears on, and the value read (`--value`, a number when it parses as one, `--unit`).
+  **The receipt comes from Core, never the caller.** Each entry is read with `embarch-api call-log --seq N --json`
+  (not lease-gated, so it writes no live-log line); the receipt holds, per entry, `seq`, `hash`, method, route, status
+  and Core's time, the `board` the entries name (the first role, probe serial and chip any gives) and `time` (the
+  first entry's, RFC 3339 UTC). **Refused, nothing written:** an entry Core does not hold, a chain that does not
+  verify, Core down, a `fold` entry (not a call), a call Core answered 4xx or 5xx (a refused call settled nothing), a
+  `--fact` no document holds, neither or both of fact and entity, no value. The live-log line citing one of the
+  entries (by seq and hash, searched in `<repo>/embarch/live/`) is attached as `live_log` (file, line, writer, tool,
+  time, answer SHA-256) with `disagrees`, the board fields on which it differs from Core's entry; **Core's entry
+  wins**, the line only reports the difference. **The image** is named as the HIL notes say: `source` "read back"
+  when `image_check` (one halted read, as `live stacks` makes) found the flash holding the pinned build's ELF (or
+  `--build`'s), else "as last flashed by Core" when `last_images` (`livelog.image_sha256`, the lookup the live log
+  uses) names the board, else "unknown"; `sha256` is Core's `last_images` hash and `at_call` the hash Core stamped on
+  the call. `build` is `pinned` (read back and matched), `different` (the read-back found another build, or Core's
+  hash now differs from the one on the call: the board was reflashed since) or `unknown` (the read-back could not be
+  made: no ELF, no lease, Core down). **A finding on another build is written, never refused**, with `flag` "measured
+  on a different build". `via` is `live` only: `study` and `test` wait for the attested phase, whose fingerprint file
+  their check needs, and there is no option to choose it. **The record** (`$defs/measurement`): common fields with
+  `kind` `measurement`, `doc` the fact's document (or `measured` for an entity), `p` null, `src` `live`, `prov`
+  `measured`, then `fact` or `entity`, `value`, `unit`, `via`, `flag`, `receipt`, `note`; id
+  `measured.<slug>.s<seqs>` with `.2`, `.3` for a repeat. It is appended in one `write` (`O_APPEND`) to
+  `<atlas dir>/measured.jsonl`, scrubbed of the lease token, and no line is ever rewritten. A `via: live` fact is
+  development evidence: the atlas cannot cite it. **Not built here:** showing a measured value beside the claim it
+  bears on, and the check finding for a disagreement with the datasheet (EMB-268); where the plane lives once planes
+  are shared. Verified against a fake `embarch-api` only: the shape of `call_log.entries` (`{entry, hash}` lines of
+  `call-log.jsonl`, `entry.route`, `entry.at_utc_ms`, `entry.board`) is read from `embarch-core`'s source, not
+  measured against a live Core.
   **Assumed, not settled by `live-log.md`:** the file's date and time are read off the lease's RFC 3339
   `started_at` as UTC; `lease-show --json` carries `lease.holder` and `lease.started_at`; `outcome` is the atlas's own field. Not
   verified on a bench.
@@ -1223,6 +1259,7 @@ An atlas id is `<target>@<commit12>`.
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
+| `live write-back --seq N [--seq M ...] (--fact ID \| --entity TEXT) --value V [--unit U] [--note T] [--build DIR]` | `live` | write a live finding as a `measured` fact (`via: live`): the receipt is read from Core's call-log entries, the image named read back / as last flashed by Core / unknown; exit 1 when refused |
 | `live stacks [--build DIR] [--role R]` | `live` | every thread's stack peak on the board, joined to its stack symbol and option once the flash matches the ELF |
 | `mcp` | `mcp_server` | the twenty-three lookups as an MCP server over stdio, and `reg_read` when Core answers |
 

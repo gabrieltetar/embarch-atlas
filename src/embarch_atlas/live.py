@@ -1494,6 +1494,15 @@ def _cmd_core_state(a) -> int:
     return 1 if out.startswith("src: none") else 0
 
 
+def _cmd_write_back(a) -> int:
+    from . import common, measured
+    with lease(None, "write-back", "cli"):
+        out = measured.write_back(common.atlas_dir(a.atlas_dir), a.seq, a.fact, a.entity, a.value, a.unit,
+                                  a.note, a.build)
+    print(out, end="")
+    return 1 if out.startswith("Refused:") else 0
+
+
 def register(sub, groups) -> None:
     from . import common
     g = common.verb_group(sub, groups, "live", "read the running board through embarch-core (live module)")
@@ -1522,3 +1531,14 @@ def register(sub, groups) -> None:
     p.add_argument("--role", help="the enrolled role (default [live] role, else dut)")
     p.add_argument("--timeout-ms", type=int)
     p.set_defaults(func=_cmd_shell)
+    p = g.add_parser("write-back", help="write a live finding as a measured fact: the receipt (calls, board, time, "
+                                        "image) is read from Core's call-log entries, never from the caller")
+    p.add_argument("--seq", type=int, action="append", required=True,
+                   help="a Core call-log entry the finding rests on (repeat for several); one Core does not hold is refused")
+    p.add_argument("--fact", help="the id of the fact the finding bears on (it must exist in a document)")
+    p.add_argument("--entity", help="the entity it bears on when it is no fact (a net, a pin, a part)")
+    p.add_argument("--value", required=True, help="the value read")
+    p.add_argument("--unit")
+    p.add_argument("--note")
+    p.add_argument("--build", help="the build dir the board should run (default: the atlas's pinned build)")
+    p.set_defaults(func=_cmd_write_back)

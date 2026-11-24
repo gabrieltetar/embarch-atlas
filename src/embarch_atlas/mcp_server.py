@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import common, corestate, live as live_mod, query
+from . import common, corestate, live as live_mod, measured, query
 
 INSTRUCTIONS = (
     "Hardware atlas of this firmware project: schematics, datasheets, the MCU reference "
@@ -279,6 +279,23 @@ def build_server(atlas_dir: Path, atlas: str | None = None, live: bool | None = 
             CLI's environment for this call only and is never logged or echoed."""
             with live_mod.lease(lease_token, "reg_read_bank", "mcp"):
                 return live_mod.reg_read(atlas_dir, target, False, role, True)
+
+        @server.tool(annotations=WRITE)
+        def write_back(seq: list[int], value: str, fact: str | None = None, entity: str | None = None,
+                       unit: str | None = None, note: str | None = None, build: str | None = None,
+                       lease_token: str | None = None) -> str:
+            """Live: write a finding back as a `measured` fact (`via: live`) with its receipt. `seq`: the Core
+            call-log entries the finding rests on (the `core` array of a live-log line, or `call_log`); the receipt
+            (the calls, the board, the time, the image) is read from Core's entries, never from you, and an entry
+            Core does not hold is refused. `fact`: the id of the fact it bears on, or `entity`: what it bears on
+            when it is no fact; `value` (and `unit`): what was read. The image is named "read back" (the board's
+            flash matches the pinned build, one halted read), else "as last flashed by Core", else "unknown"; a
+            finding on another build is written and marked "measured on a different build". Appends to
+            measured.jsonl and never rewrites it. A `via: live` fact is development evidence, not citable.
+            `lease_token`: the token `lease_take` returned when this session holds the bench lease; it goes to the
+            CLI's environment for this call only and is never logged or echoed."""
+            with live_mod.lease(lease_token, "write_back", "mcp"):
+                return measured.write_back(atlas_dir, seq, fact, entity, value, unit, note, build)
 
         @server.tool(annotations=READ_ONLY)
         def live_stacks(build: str | None = None, role: str | None = None, lease_token: str | None = None) -> str:
