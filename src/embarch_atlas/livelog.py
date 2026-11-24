@@ -30,12 +30,14 @@ UNGATED = frozenset({"status", "list-signals", "lease-show", "list-projects", "c
 
 
 class Trace:
-    """What one live call did through `embarch-api`: the Core entries it cited and what Core said of the board."""
+    """What one live call did through `embarch-api`: the Core entries it cited, the board its requests named
+    (`sent`) and the board Core's answers named (`answered`)."""
 
     def __init__(self) -> None:
         self.gated = False
         self.core: list[dict[str, Any]] = []
-        self.board: dict[str, Any] = {"role": None, "probe_serial": None, "chip": None}
+        self.sent: dict[str, Any] = {"role": None, "probe_serial": None, "chip": None}
+        self.answered: dict[str, Any] = {"role": None, "probe_serial": None, "chip": None}
 
 
 _TRACE: contextvars.ContextVar[Trace | None] = contextvars.ContextVar("atlas_live_trace", default=None)
@@ -53,23 +55,40 @@ def reset_context(tokens: tuple) -> None:
     _VIA.reset(tokens[1])
 
 
+def _is_study_route(path: Any) -> bool:
+    return path == "/study" or path == "/host-studies" or str(path).startswith("/study/")
+
+
+def _request_board(args: list[str]) -> dict[str, str]:
+    """The board a request named: `--role`, `--probe-serial` and `--chip` among the arguments it was run with."""
+    found: dict[str, str] = {}
+    for i, a in enumerate(args[:-1]):
+        key = {"--role": "role", "--probe-serial": "probe_serial", "--chip": "chip"}.get(a)
+        if key and args[i + 1] and key not in found:
+            found[key] = args[i + 1]
+    return found
+
+
 def note(args: list[str], out: dict[str, Any] | None) -> None:
-    """Called by `call_api` with the arguments and the parsed `--json` answer (None when it was not JSON):
-    marks the call gated and keeps the Core entries and the board Core named."""
+    """Called by `call_api` with the arguments and the parsed `--json` answer (None when it was not JSON).
+    As in `embarch-api`, a call is Live only when Core's answer cites an entry on a lease-gated route: Core
+    unreachable, or an answer that is not JSON, cites none and writes no line. Keeps those entries, the board
+    the request named and the board the answer named."""
     tr = _TRACE.get()
-    if tr is None or not args:
+    if tr is None or not args or args[0] in UNGATED or not isinstance(out, dict):
         return
-    if args[0] not in UNGATED:
-        tr.gated = True
-    if not isinstance(out, dict):
+    live = [c for c in out.get("core_calls") or [] if isinstance(c, dict) and not _is_study_route(c.get("path"))]
+    if not live:
         return
-    tr.core += [c for c in out.get("core_calls") or [] if isinstance(c, dict)]
-    for key in ("read", "state"):
-        d = out.get(key)
-        if isinstance(d, dict):
-            for f in tr.board:
-                if tr.board[f] is None and d.get(f) is not None:
-                    tr.board[f] = d[f]
+    tr.gated = True
+    tr.core += live
+    for k, v in _request_board(args).items():
+        if tr.sent[k] is None:
+            tr.sent[k] = v
+    nested = [o for o in out.values() if isinstance(o, dict)]
+    for f in tr.answered:
+        if tr.answered[f] is None:
+            tr.answered[f] = next((str(d[f]) for d in [out, *nested] if d.get(f)), None)
 
 
 # --------------------------------------------------------------------------- where
@@ -116,6 +135,15 @@ def session_of(s: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
+def _status(s: dict[str, Any]) -> dict[str, Any] | None:
+    """`embarch-api status --json`, best effort: None when Core does not answer."""
+    from . import live
+    try:
+        return live.call_api(s, ["status"], live.STATUS_TIMEOUT_S)
+    except live.LiveError:
+        return None
+
+
 def file_name(session: dict[str, str] | None, now: datetime) -> str:
     """`<date>-<session>.jsonl`: the lease's start date, its holder (every character that is not an ASCII letter
     or digit turned into `-`) and its start time as `HHMMSS`; `<today>-no-lease` with none. The date and time are
@@ -136,13 +164,27 @@ def answer_block(text: str) -> dict[str, Any]:
             "truncated": len(raw) > ANSWER_CAP_BYTES}
 
 
+def image_sha256(status: dict[str, Any] | None, chip: str | None, probe: str | None) -> str:
+    """The sha256 Core's `last_images` (from `embarch-api status --json`) holds for the board, as `embarch-api`
+    picks it: the entry for the probe serial and chip, else the probe's, else the chip's; `"unknown"` when Core
+    says nothing (which is not "nothing flashed")."""
+    images = [i for i in (status or {}).get("last_images") or [] if isinstance(i, dict)]
+    by_chip = lambda i: bool(chip) and str(i.get("chip", "")).lower() == chip.lower()
+    by_probe = lambda i: bool(probe) and i.get("probe_serial") == probe
+    hit = (next((i for i in images if by_chip(i) and by_probe(i)), None)
+           or next((i for i in images if by_probe(i)), None) or next((i for i in images if by_chip(i)), None))
+    return (hit or {}).get("sha256") or "unknown"
+
+
+def board_of(tr: Trace, tool_role: str | None) -> dict[str, Any]:
+    """`embarch-api`'s order: what the requests named, then the tool's own arguments, then the answers'."""
+    return {f: tr.sent[f] or (tool_role if f == "role" else None) or tr.answered[f] for f in tr.sent}
+
+
 def build_line(tr: Trace, tool: str, via: str, sent: Any, role: str | None, text: str, ok: bool, outcome: str,
-               session: dict[str, str] | None, now: datetime) -> dict[str, Any]:
-    board = dict(tr.board)
-    if board["role"] is None:
-        board["role"] = role
+               session: dict[str, str] | None, now: datetime, image: str = "unknown") -> dict[str, Any]:
     return {"schema": SCHEMA, "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "writer": WRITER, "via": via, "tool": tool,
-            "sent": sent, "board": board, "image_sha256": "unknown", "ok": ok, "outcome": outcome,
+            "sent": sent, "board": board_of(tr, role), "image_sha256": image, "ok": ok, "outcome": outcome,
             "answer": answer_block(text), "core": tr.core, "session": session}
 
 
@@ -196,7 +238,9 @@ def logged(atlas_dir: Path, default_tool: str, args: dict[str, Any], fn: Callabl
         session = session_of(s)
         now = datetime.now(timezone.utc)
         sent: Any = dict(args) if via == "mcp" else sent_cli(tool, args, positional)
-        line = build_line(tr, tool, via, sent, role or s["role"], text, ok, outcome, session, now)
+        board = board_of(tr, role)
+        line = build_line(tr, tool, via, sent, role, text, ok, outcome, session, now,
+                          image_sha256(_status(s), board["chip"], board["probe_serial"]))
         append(log_repo(atlas_dir) / "embarch" / "live" / file_name(session, now), line)
     except OSError as e:
         problem = f"live log: no line written ({e})"

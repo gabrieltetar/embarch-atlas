@@ -1042,7 +1042,14 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   length and SHA-256 kept) and `core`: every Core call-log entry the call made, taken from the `core_calls`
   that `embarch-api --json` adds and `call_api` collects, in order. A `shell` that sends `retval`, or an
   external register read of several exchanges, cites every one. A refusal at the write (a `409`, a signal that
-  would not open) is a line too, with `ok` false and the `outcome` `did-not-run`. The atlas adds one field,
+  would not open) is a line too, with `ok` false and the `outcome` `did-not-run`. A call is Live only when
+  Core's answer cites an entry on a lease-gated route (`core_calls` non-empty, a study's routes aside): a Core
+  that is down, or an answer that is not JSON, cites none and writes no line, as in `embarch-api`.
+  `board` is taken in `embarch-api`'s order: what the requests named (`--role`, `--probe-serial`, `--chip` of
+  the `embarch-api` calls; the atlas names only the role), then the tool's `role` argument, then the answers'
+  (a top-level or nested `role`, `probe_serial`, `chip`). `image_sha256` is read the way `embarch-api` does,
+  best effort, from `embarch-api status --json`'s `last_images`: the entry for the board's probe serial and
+  chip, else the probe's, else the chip's, else `"unknown"`. The atlas adds one field,
   `outcome`: `answered`, `did-not-run`, `refused` (the atlas declined to decode what Core read) or, for the
   shell, `no-reply` and `may-have-run` (its exit statuses 2 and 3); `embarch-api` readers ignore it.
   **Where.** The repo is found as `embarch-api` finds it, the nearest directory from the working directory up
@@ -1054,8 +1061,7 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   goes through `_scrub` before it is written. A line that cannot be written is said on stderr (CLI) or as a
   last line of the text (MCP) and never changes the call's answer or exit status.
   **Assumed, not settled by `live-log.md`:** the file's date and time are read off the lease's RFC 3339
-  `started_at` as UTC; `lease-show --json` carries `lease.holder` and `lease.started_at`; `image_sha256` is
-  always `"unknown"` (the atlas does not read Core's `last_images`); `outcome` is the atlas's own field. Not
+  `started_at` as UTC; `lease-show --json` carries `lease.holder` and `lease.started_at`; `outcome` is the atlas's own field. Not
   verified on a bench.
   **How the atlas knows `retval` is absent.** From the pinned build's `kconfig.json`
   (`CONFIG_SHELL_CMDS_RETURN_VALUE`: set to `n`, or missing from a kconfig.json that lists every

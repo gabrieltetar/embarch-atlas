@@ -34,7 +34,10 @@ def entry(method, path, status=200):
 def out(o, code=0):
     print(json.dumps(o)); sys.exit(code)
 if verb == "status":
-    out({{"success": True, "status": "ok", "probes": []}})
+    if (here / "core-down").exists():
+        print("connection refused", file=sys.stderr); sys.exit(1)
+    imgs = here / "images.json"
+    out({{"success": True, "status": "ok", "probes": [], "last_images": json.loads(imgs.read_text()) if imgs.exists() else None}})
 if verb == "lease-show":
     lease = here / "lease.json"
     out({{"success": True, "lease": json.loads(lease.read_text()) if lease.exists() else None}})
@@ -45,7 +48,10 @@ if verb == "mem-read":
     ranges = [a.split(":") for i, a in enumerate(args) if i and args[i - 1] == "--range"]
     mem = {{int(k, 16): v for k, v in json.loads((here / "memory.json").read_text()).items()}}
     rs = [{{"address": int(a, 16), "words": [mem.get(int(a, 16) + 4 * i, 0) for i in range(int(n))]}} for a, n in ranges]
-    out({{"success": True, "read": {{"role": "dut", "chip": "DEMO1", "probe_serial": "P1", "ranges": rs, "halted": True,
+    if (here / "core-down").exists():
+        print("core unreachable", file=sys.stderr); sys.exit(1)
+    rl = (here / "answer-role").read_text() if (here / "answer-role").exists() else "dut"
+    out({{"success": True, "read": {{"role": rl, "chip": "DEMO1", "probe_serial": "P1", "ranges": rs, "halted": True,
          "halted_us": 850}}, "core_calls": [entry("POST", "/live/mem-read")]}})
 cmd = args[args.index("--write") + 1]
 ex = json.loads((here / "exchange.json").read_text()) if (here / "exchange.json").exists() else {{}}
@@ -92,7 +98,7 @@ def test_a_reg_read_appends_one_decoded_line_naming_the_core_entries(tmp_path):
     assert [c["seq"] for c in line["core"]] == [1] and line["core"][0]["path"] == "/live/mem-read"
     assert line["board"] == {"role": "dut", "probe_serial": "P1", "chip": "DEMO1"}
     assert line["session"] == {"holder": "claude gabriel", "started_at": "2026-11-23T21:00:00Z"}
-    assert line["image_sha256"] == "unknown"
+    assert line["image_sha256"] == "unknown"             # Core's status carries no last_images here
     assert "0x00001234" in line["answer"]["text"] and line["answer"]["bytes"] == len(out.encode())
     assert line["sent"] == "reg_read UART1.BRR"        # a library call has no MCP arguments: the CLI's string form
 
@@ -228,3 +234,38 @@ def test_the_repo_is_the_nearest_embarch_folder_up_from_the_working_directory(tm
     sub.mkdir(parents=True)
     assert livelog.log_repo(ad, sub) == other
     assert livelog.log_repo(ad, tmp_path / "fw") == tmp_path / "fw"       # no .git, but its own embarch/ folder
+
+
+def test_the_image_hash_is_the_one_core_last_put_on_the_board(tmp_path):
+    ad = fake(make(tmp_path, {}))
+    (ad / "images.json").write_text(json.dumps([
+        {"chip": "OTHER", "probe_serial": "P9", "path": "a.hex", "sha256": "aa" * 32, "flashed_at": "t"},
+        {"chip": "demo1", "probe_serial": None, "path": "b.hex", "sha256": "bb" * 32, "flashed_at": "t"},
+        {"chip": "DEMO1", "probe_serial": "P1", "path": "c.hex", "sha256": "cc" * 32, "flashed_at": "t"}]))
+    live.reg_read(ad, "UART1.BRR")
+    assert lines(ad)[0]["image_sha256"] == "cc" * 32
+    (ad / "images.json").write_text(json.dumps([{"chip": "demo1", "path": "b.hex", "sha256": "bb" * 32, "flashed_at": "t"}]))
+    live.reg_read(ad, "UART1.BRR")                          # no probe match: the chip's entry
+    assert lines(ad)[1]["image_sha256"] == "bb" * 32
+    (ad / "images.json").write_text("[]")
+    live.reg_read(ad, "UART1.BRR")
+    assert lines(ad)[2]["image_sha256"] == "unknown"
+
+
+def test_a_core_that_is_down_writes_no_decoded_line(tmp_path):
+    ad = fake(make(tmp_path, {}))
+    (ad / "core-down").write_text("")
+    out = live.reg_read(ad, "UART1.BRR")
+    assert "did not" in out.lower() or "refus" in out.lower() or "embarch-api" in out
+    assert not (tmp_path / "fw" / "embarch" / "live").exists()
+
+
+def test_the_board_is_the_requests_role_not_the_answers(tmp_path):
+    ad = fake(make(tmp_path, {}))
+    (ad / "answer-role").write_text("bench-b")
+    live.reg_read(ad, "UART1.BRR", role="dut")
+    assert lines(ad)[0]["board"]["role"] == "dut"
+    assert lines(ad)[0]["board"]["probe_serial"] == "P1"      # nothing named it but the answer
+    tr = livelog.Trace()
+    tr.sent["probe_serial"], tr.answered["probe_serial"] = "REQ", "ANS"
+    assert livelog.board_of(tr, None)["probe_serial"] == "REQ"
