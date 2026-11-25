@@ -269,3 +269,97 @@ def test_the_board_is_the_requests_role_not_the_answers(tmp_path):
     tr = livelog.Trace()
     tr.sent["probe_serial"], tr.answered["probe_serial"] = "REQ", "ANS"
     assert livelog.board_of(tr, None)["probe_serial"] == "REQ"
+
+
+def test_a_lease_free_verb_writes_no_line_whatever_its_name():
+    """No verb list: an answer with no `core_calls` (or only study routes) is not Live, so `note` marks nothing."""
+    for verb in ["status", "list-signals", "lease-show", "list-projects", "call-log", "some-future-verb"]:
+        for out in ({"success": True}, {"success": True, "core_calls": []}, {"success": True, "core_calls": None},
+                    {"success": True, "core_calls": [{"method": "POST", "path": "/study", "status": 200}]}):
+            tr = livelog.Trace()
+            token = livelog._TRACE.set(tr)
+            try:
+                livelog.note([verb], out)
+            finally:
+                livelog._TRACE.reset(token)
+            assert not tr.gated and not tr.core
+    assert not hasattr(livelog, "UNGATED")
+
+
+# ------------------------------------------------------------ the api's shared fixture
+# `embarch-api/tests/fixtures/live-log/*.json` (embarch-doc `embarch-api/interfaces/live-log.md`, "The shared
+# fixture"). Compared: the path, and the line minus `t`, `writer`, `via`, `sent` (differ by writer or clock) and
+# the atlas's own `outcome`. The atlas has one firmware checkout, not a project list, so where the walk finds no
+# `embarch/` folder the case's project fallback is not the atlas's; there only "the walk finds none" is compared.
+import pytest
+from datetime import datetime, timezone
+
+FIXTURE_DIR = Path(__file__).resolve().parents[2] / "embarch-api" / "tests" / "fixtures" / "live-log"
+CASES = sorted(FIXTURE_DIR.glob("*.json"))
+BOARD_FLAGS = {"role": "--role", "probe_serial": "--probe-serial", "chip": "--chip"}
+
+
+def _flags(d: object) -> list[str]:
+    return [x for k, f in BOARD_FLAGS.items() if isinstance(d, dict) and d.get(k) for x in (f, str(d[k]))]
+
+
+def _noted(call: dict) -> livelog.Trace:
+    """Replay a case's call through `note` as `call_api` would: the answer as the parsed `--json`, the gated
+    entries (without the body Core was sent, which the atlas never sees) as `core_calls`. A body's board is
+    given as flags ahead of the tool's own, since `note` keeps the first one named for each field."""
+    try:
+        out = json.loads(call["answer"])
+    except ValueError:
+        out = call["structured"]
+    out = dict(out) if isinstance(out, dict) else {}
+    out["core_calls"] = [{k: v for k, v in e.items() if k != "sent"} for e in call["entries"]]
+    args = ["mem-read"]
+    for e in call["entries"]:
+        args += _flags(e["sent"])
+    args += _flags(call["sent"])
+    tr = livelog.Trace()
+    token = livelog._TRACE.set(tr)
+    try:
+        livelog.note(args, out)
+    finally:
+        livelog._TRACE.reset(token)
+    return tr
+
+
+def test_the_api_fixture_is_there_or_the_test_says_why_it_skips():
+    if not CASES:
+        pytest.skip(f"no embarch-api checkout beside this repo ({FIXTURE_DIR}): the shared live-log fixture is "
+                    "not readable, so the atlas's writer is not compared with the api's")
+    assert len(CASES) >= 19
+
+
+@pytest.mark.parametrize("case_file", CASES, ids=[c.stem for c in CASES])
+def test_the_writer_agrees_with_the_api_fixture(case_file, tmp_path):
+    case = json.loads(case_file.read_text(encoding="utf-8"))
+    for d in case["layout"]["dirs"]:
+        (tmp_path / d).mkdir(parents=True, exist_ok=True)
+    for f in case["layout"]["files"]:
+        (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f).touch()
+    call, expect = case["call"], case["expect"]
+    now = datetime.strptime(case["now"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    repo = livelog.repo_above((tmp_path / case["cwd"]).resolve())
+
+    tr = _noted(call)
+    if expect["path"] is None:
+        assert repo is None and expect["line"] is None
+        return
+    session = case["lease"]
+    if repo is None:                              # the api's project fallback, which the atlas has no list for
+        assert case["projects"], "the walk found nothing and the case names no fallback"
+        return
+    got_path = repo / "embarch" / "live" / livelog.file_name(session, now)
+    assert got_path.relative_to(tmp_path.resolve()).as_posix() == expect["path"]
+    assert tr.gated
+    board = livelog.board_of(tr, None)
+    image = livelog.image_sha256(case["status"], board["chip"], board["probe_serial"])
+    line = livelog.build_line(tr, call["tool"], "mcp", call["sent"], None, call["answer"], call["ok"], "ran",
+                              session, now, image)
+    assert line["t"] == case["now"]
+    got = {k: v for k, v in line.items() if k not in ("t", "writer", "via", "sent", "outcome")}
+    assert got == expect["line"]

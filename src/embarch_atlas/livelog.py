@@ -6,8 +6,9 @@ the engineer reads: the decoded answer, with every Core call-log entry the call 
 `--json` output carries as `core_calls`. Same file, one `write` of the whole line in append mode, so the
 decoded line follows the raw lines it decodes and a reader never sees half of one.
 
-A call that reached no lease-gated route writes nothing, as in `embarch-api` (a refusal by the
-read-only list, an unknown register name, a guard on a clearing read). The lease token never reaches a
+A call that reached no lease-gated route writes nothing, as in `embarch-api`: its `--json` answer then carries no
+`core_calls`, and that, not a list of verbs, is how the atlas tells (a refusal by the read-only list, an unknown
+register name, a guard on a clearing read). The lease token never reaches a
 line: the whole serialised line goes through `live._scrub` before it is written.
 """
 from __future__ import annotations
@@ -25,8 +26,6 @@ from typing import Any, Callable
 SCHEMA = "embarch-live/1"
 WRITER = "embarch-atlas"
 ANSWER_CAP_BYTES = 4096           # embarch-api's cap (chosen, not measured); the atlas matches it
-# `embarch-api` verbs that reach no lease-gated route: a call that made only these writes no line.
-UNGATED = frozenset({"status", "list-signals", "lease-show", "list-projects", "call-log"})
 
 
 class Trace:
@@ -75,7 +74,7 @@ def note(args: list[str], out: dict[str, Any] | None) -> None:
     unreachable, or an answer that is not JSON, cites none and writes no line. Keeps those entries, the board
     the request named and the board the answer named."""
     tr = _TRACE.get()
-    if tr is None or not args or args[0] in UNGATED or not isinstance(out, dict):
+    if tr is None or not args or not isinstance(out, dict):
         return
     live = [c for c in out.get("core_calls") or [] if isinstance(c, dict) and not _is_study_route(c.get("path"))]
     if not live:
@@ -100,17 +99,25 @@ def _git_top(start: Path) -> Path | None:
     return None
 
 
-def log_repo(atlas_dir: Path, cwd: Path | None = None) -> Path:
-    """`embarch-api`'s rule: the nearest directory from the working directory up to its git root that holds an
-    `embarch/` folder; failing that the firmware checkout `atlas.toml` names."""
-    from .project import fw_dir, load_config
-    here = (cwd or Path.cwd()).resolve()
+def repo_above(here: Path) -> Path | None:
+    """The pure half of the path rule: the nearest directory from `here` up to its git root that holds an
+    `embarch/` folder, None when there is none."""
     top = _git_top(here)
     for d in [here, *here.parents]:
         if (d / "embarch").is_dir():
             return d
         if d == top:
             break
+    return None
+
+
+def log_repo(atlas_dir: Path, cwd: Path | None = None) -> Path:
+    """`embarch-api`'s rule: the nearest directory from the working directory up to its git root that holds an
+    `embarch/` folder; failing that the firmware checkout `atlas.toml` names."""
+    from .project import fw_dir, load_config
+    found = repo_above((cwd or Path.cwd()).resolve())
+    if found:
+        return found
     try:
         cfg = load_config(atlas_dir)
     except FileNotFoundError:

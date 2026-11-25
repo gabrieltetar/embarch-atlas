@@ -1113,6 +1113,10 @@ reads halt because some MCUs sleeping without a DMA clock answer every running d
   **Assumed, not settled by `live-log.md`:** the file's date and time are read off the lease's RFC 3339
   `started_at` as UTC; `lease-show --json` carries `lease.holder` and `lease.started_at`; `outcome` is the atlas's own field. Not
   verified on a bench.
+  **No verb list; one shared fixture.** A call is Live only when its `--json` answer cites a gated entry in `core_calls`;
+  the atlas keeps no list of lease-free verbs. `tests/test_livelog.py` runs `../embarch-api/tests/fixtures/live-log/*.json`
+  through `livelog.py` (`repo_above`, `file_name`, `note`, `board_of`, `build_line`) and skips, saying why, without the sibling.
+  The api's project fallback has no atlas counterpart (one checkout), so there only the walk's "found none" is compared.
   **How the atlas knows `retval` is absent.** From the pinned build's `kconfig.json`
   (`CONFIG_SHELL_CMDS_RETURN_VALUE`: set to `n`, or missing from a kconfig.json that lists every
   symbol, means no `retval`); then `retval` is not sent and the answer says the status is unknown and
