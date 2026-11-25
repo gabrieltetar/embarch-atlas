@@ -42,6 +42,7 @@ MODULES = [
     "bump",
     "live",
     "query",
+    "refs",
     "mcp_server",
 ]
 

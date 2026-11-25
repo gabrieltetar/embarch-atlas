@@ -711,6 +711,20 @@ than the build (its `zephyr.elf`, else the stamp's `created`) is marked changed 
 answer then shows the file as it is now. Measured on an upstream Zephyr v4.4.0 USB-C sink sample build
 (140 units, 593 files): the first index takes 1.5 s, a cached lookup well under 0.1 s in the server.
 
+### `refs`: the lists in one read (`refs.py`)
+
+`embarch-atlas refs [--json] [--atlas-dir D] [--atlas <id>]` prints what the lookups answer one at a time (`doc_toc`, `config`, `dt_node`) as three lists, so a tool that wants all of them re-implements neither four file shapes nor the rule for which atlas is current. It is read-only and quiet: no model, no network, no `usage.jsonl` row (that log records lookups an agent made; this is a list), nothing written. CLI only, not an MCP tool, so the lookup count stays twenty-three. Without `--json`, a header line and one count line per list.
+
+`--json` prints one object: `{"atlas_refs": 1, "atlas_dir", "atlas", "commit", "stale", "sections", "symbols", "nodes"}`.
+
+- **Sections** come from every translated document under `docs/`, which exist without a built atlas, through the same `query._toc_rows` as `doc_toc` (a datasheet's `toc.json` `sections[]` and a reference manual's `outline.json` `entries[]`): `{doc, kind, part, id, title, level, page}`, `page` the first physical page, `kind` and `part` from the document's `doc.json`. A row with no id is skipped.
+- **Symbols** and **nodes** come from the current atlas only: `{name, prompt, type}` from `kconfig.json` (`name` without `CONFIG_`, `prompt` null when the symbol has none), and `{path, labels, compats, status, aliases}` from `dt.json` (`aliases` the `aliases` names that point at the node). Both are sorted. An atlas built before `kconfig.json` existed, or with no build, gives an empty list.
+- **Which atlas**: `common.atlas_dir`, so a linked worktree reads the main clone's atlas, and `query.current_atlas`, the one `current.json` says matches HEAD, else the newest. `commit` is that atlas's own, not HEAD's.
+- **A stale atlas still answers**; `stale` holds the reasons `stale.reasons` gives the lookups' `src:` line (empty when fresh).
+- **No atlas folder** (or not in a git repo with no `--atlas-dir`): `atlas_dir`, `atlas` and `commit` null, empty lists, exit 0, so a caller reads "no atlas" without parsing an error. A folder with documents but no atlas: `atlas_dir` set, `atlas` null, sections only.
+
+Time, measured on the synthetic test fixture (three sections, two symbols, ten nodes) on 2026-11-25: 2 ms in process once warm, about 0.55 s for the CLI, nearly all interpreter and import start. Not measured on a real atlas: none was on this machine.
+
 ## The whole-atlas graph (`graph.json`)
 
 The query surface answers one question at a time; a map needs everything at once.
@@ -1274,6 +1288,7 @@ An atlas id is `<target>@<commit12>`.
 | `update <target> [commit]` | `update` | bump, one at a time (the bump lock; a second is refused, exit 3), its outcome and reason in `bump/state.json`: stop while a translation is behind its source or the west workspace is not at the manifest's revisions (below), build, join, RM worklist, a second-look queue whose batches hold only the diff (new or changed facts, told by `(id, key)`; only the previous atlas's unchanged backlog is counted), the diff written into the new atlas |
 | `hook install <target>... [--debounce S]` / `hook uninstall` / `hook run <target>...` | `bump` | opt-in bump on HEAD moves (below): write or remove the `post-commit`, `post-checkout`, `post-merge` and `post-rewrite` hooks; `run` is what a hook starts, detached |
 | `q <lookup>` | `query` | the twenty-three lookups (same answers as the MCP tools) |
+| `refs [--json] [--atlas-dir D] [--atlas <id>]` | `refs` | every section (each translated document's `toc.json` or `outline.json` entries, with its `kind`, `part` and first physical page), Kconfig symbol (`kconfig.json`: name, prompt, type) and devicetree node (`dt.json`: path, labels, compatibles, status, aliases) the atlas holds, in one read for another tool (the chat linker); the `atlas_refs: 1` document is the shape `embarch-promptu` `docs/contract.md` §15.3 fixes (below) |
 | `live reg-read <PERIPH[.REG] or LABEL[.REG]> [--allow-clear] [--role R]` | `live` | an MCU register or peripheral (SWD), or an external part's register (`i2c read` on the shell), read on the board through embarch-core and decoded |
 | `live core-state [--halt] [--samples N] [--build DIR] [--role R]` | `live` | where the core is: DHCSR and ICSR by field name, PC samples (or with `--halt` PC, LR and the registers) as functions and lines once the flash matches the ELF, else raw with the refusal named |
 | `live shell <command> [--role R] [--timeout-ms N]` | `live` | one command on the board's shell through embarch-core |
